@@ -24,7 +24,7 @@
 
 **Lane**: One unit of a Road's capacity in one direction. A stronger connection has more Lanes, and a Road can have more Lanes one way than the other when the dependency mostly runs one way.
 
-**External Dependency**: A third-party package the repo uses from outside the repo. It is never a Module.
+**External Dependency**: A package from outside the repo that a Module's manifest declares as a direct dependency. It is never a Module. Packages that are only pulled in transitively, or imported without being declared, are not External Dependencies.
 
 **External City**: An External Dependency, or a group of them sharing a name prefix (for example everything under `react`), drawn on the horizon outside the city limits.
 
@@ -40,14 +40,12 @@
 
 **Pseudonym**: A replacement name the user chooses explicitly for a specific file, Module or concept.
 
-**Generated name**: A name GitCity derives automatically from a Module's role or Real name.
+**Generated name**: A name GitCity makes up automatically, for example for a Module from its role or Real name, or a plausible city name for a hidden External City. Unlike a Pseudonym, the user doesn't choose it.
 
 **Label**: The fallback display for something with no Pseudonym, Generated name or revealed Real name. It is the thing's type plus its birth-order number, for example "TypeScript file 412". It identifies nothing outside the City.
 
 **Reveal**: The user's explicit opt-in to show Real names, either globally or for specific things. Nothing is revealed by default.
 
-**Well-known package**: An External Dependency on GitCity's offline list of popular public packages. Its Real name is shown without a Reveal.
-
 **Concept**: A word that can appear inside many names (for example a company or product name). A Pseudonym for a Concept replaces it everywhere it appears.
 
-_Displayed names follow this precedence:_ Pseudonym, then Real name (only when revealed or a Well-known package), then Generated name, then Label. When a Module's Real name is shown, its Generated name can still appear as a subtitle.
+_Displayed names follow this precedence:_ Pseudonym, then Real name (only when revealed), then Generated name, then Label. When a Module's Real name is shown, its Generated name can still appear as a subtitle.
