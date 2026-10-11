@@ -18,7 +18,7 @@
 
 **District**: A Module drawn as a colour-coded area that contains its Buildings.
 
-**Neighbourhood**: A subdirectory of a Module, drawn as an area inside its District. There is only one level: anything deeper belongs to its nearest Neighbourhood.
+**Neighbourhood**: A subdirectory of a Module, drawn as an area inside its District and named like a street ("Mill Lane"). There is only one level: anything deeper belongs to its nearest Neighbourhood.
 
 **Road**: A connection between code inside the City, made when one file in the repo references another. A Road between Districts bundles every file-to-file connection crossing between them.
 
@@ -40,7 +40,11 @@
 
 **Pseudonym**: A replacement name the user chooses explicitly for a specific file, Module or concept.
 
-**Generated name**: A name GitCity makes up automatically, for example for a Module from its role or Real name, or a plausible city name for a hidden External City. Unlike a Pseudonym, the user doesn't choose it.
+**Generated name**: A name GitCity makes up automatically from the City's Theme. Unlike a Pseudonym, the user doesn't choose it. A District's Generated name combines a proper name with its Role's noun ("Ashford Keep"); External Cities and the City itself get a proper name only.
+
+**Theme**: The naming style for a whole City, such as modern or medieval. It supplies the word pieces for place, street and person names and a noun for every Role.
+
+**Role**: What a Module is for (auth, tests, docs, API, UI, data…), detected from its path and the mix of Categories inside it. A Theme turns a Role into a noun, for example docs → "Archive".
 
 **Label**: The fallback display for something with no Pseudonym, Generated name or revealed Real name. It is the thing's type plus its birth-order number, for example "TypeScript file 412". It identifies nothing outside the City.
 
