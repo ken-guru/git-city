@@ -6,6 +6,14 @@
 
 **Building**: One file in the repo. It grows and shrinks as the file does.
 
+**Lot**: The fixed patch of ground a Building occupies for its whole life. It is sized for the largest the Building ever gets, and stays empty before the Building is built and after it is demolished. A Lot is never reused.
+
+**Category**: What kind of file a Building represents: source code, tests, docs, config, build/CI, data, assets, generated/vendored, or unknown. It is detected from the path and can be overridden by the user.
+
+**Building type**: The basic shape a Building takes because of its Category, for example an office tower for source code or a library for docs.
+
+**Floor**: One storey of a Building. Height is counted in Floors, and construction and deconstruction add or remove them one at a time.
+
 **Module**: An internal grouping of the repo's own code, never anything outside the repo. A directory with a package manifest is a Module; where there are no manifests, each top-level directory is one.
 
 **District**: A Module drawn as a colour-coded area that contains its Buildings.
