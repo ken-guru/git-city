@@ -191,3 +191,55 @@ The repo stores each ecosystem's list as a sorted text file, plus a small JSON h
 [^scarf]: Scarf docs, *Maven Central integration*: https://docs.scarf.sh/package-registry-integrations-maven-central/
 [^crates]: crates.io *Data access* page (source: https://github.com/rust-lang/crates.io/blob/main/svelte/src/routes/data-access/%2Bpage.svelte), rendered at https://crates.io/data-access
 [^nuget]: Microsoft Learn, *NuGet Search query service resource*: https://learn.microsoft.com/nuget/api/search-query-service-resource
+
+
+---
+
+## Update 2026-10-11: superseded, kept as a record of the path not chosen
+
+**Status: superseded.** GitCity does **not** ship a Well-known package allowlist. An External Dependency is now any **direct dependency declared in a Module's manifest** (`package.json`, `pyproject.toml`, `requirements*.txt`, …). Every External Dependency name is **hidden by default** and shown with a Generated name or Label until the user Reveals it (for example `reveal external:*`). The decision and its reasoning are on the map, in the ticket [External Dependencies come from manifests](https://github.com/ken-guru/git-city/issues/16).
+
+What follows is what we measured on the way, so a later popularity-based feature can start from data.
+
+### Verification run (Verifying PyPI import-name mapping once pypi.org is allowed, #15)
+
+Once `pypi.org` and `files.pythonhosted.org` were allowed, we built and ran the whole pipeline. Scripts are in [`pypi-allowlist/`](pypi-allowlist/).
+
+**Ranking** ([`pypi_rank.py`](pypi-allowlist/pypi_rank.py)):
+- **Source:** ClickPy, ClickHouse's public mirror of PyPI's download data (CC BY 4.0), at `sql-clickhouse.clickhouse.com` with user `demo`. No credentials are needed, unlike the BigQuery source this doc originally assumed.
+- **Use the monthly table:** `pypi.pypi_downloads_per_day` is **incomplete** on the demo server. `boto3`, the top project, was missing from the top 3, and the result overlapped hugovk's list on only 4,991 of 15,000 projects. `pypi.pypi_downloads_per_month` for the last complete month matches exactly: 15,000 of 15,000, the same 53,155 cut-off, and boto3 at 2,460,723,068 for 2026-09.
+
+**Mapping project names to import names** ([`pypi_import_names.py`](pypi-allowlist/pypi_import_names.py)):
+- **How it reads wheels:** it fetches the latest release's JSON, then reads the wheel's zip central directory with HTTP range requests, never downloading the whole wheel.
+  - Small wheels need a whole-file fallback, because the CDN answers a 64 KB tail range on a smaller file with **416**.
+  - Ask for `Accept-Encoding: gzip`. The project JSON is the main cost: botocore is 3.8 MB uncompressed.
+- **Namespace packages:** these must be walked down to dotted names. Otherwise `protobuf` and `google-cloud-storage` both come out as `google`, which would wrongly class every `google.*` import as Well-known.
+- **PEP 794 `Import-Name`:** 0 of 305 sampled projects publish it.
+- **Results for all 15,000:**
+  - 13,533 projects (90%) resolved from their wheel file list.
+  - 1,467 fell back to the normalised project name: 1,036 have no wheel (source distributions only), 428 have no importable names (stubs or binaries), and 3 returned 404.
+  - It took 14 minutes with 8 workers: about 29k requests and **1.4 GB** downloaded.
+- **Known mismatches all correct:** Pillow → `PIL`, PyYAML → `yaml`, beautifulsoup4 → `bs4`, scikit-learn → `sklearn`, opencv-python → `cv2`, PyJWT → `jwt`, python-dotenv → `dotenv`, pycryptodome → `Crypto`, grpcio → `grpc`.
+
+**Output size** ([`pypi-well-known.txt`](pypi-allowlist/pypi-well-known.txt), [`pypi-import-map.jsonl`](pypi-allowlist/pypi-import-map.jsonl)):
+
+| Top N projects | Import names | Raw | Gzipped | Share of top-15k downloads |
+|---|---|---|---|---|
+| 1,000 | 1,524 | 25 KB | 8 KB | 89.0% |
+| 2,000 | 3,075 | 60 KB | 16 KB | 94.7% |
+| 5,000 | 8,059 | 155 KB | 42 KB | 98.6% |
+| 15,000 | 24,479 (9,590 dotted) | 494 KB | 130 KB | 100% |
+
+**Junk names:** 1,012 import names are claimed by more than one project. The worst are generic top-level names that sloppy wheels ship, such as `tests`, `test`, `examples` and `docs.conf`. On an allowlist they would reveal private packages with those names.
+
+### Why we stopped
+
+1. **Size grows with every ecosystem**, and the 15k list came out about 130 KB gzipped for PyPI alone, worse than estimated.
+2. **The data was answering the wrong question.** The allowlist asked "which external names are public and so safe to show?" That requires modelling each ecosystem's whole package catalogue and its popularity distribution. Hiding every External Dependency by default and letting the user Reveal them (the build summary lists them all) needs no such model.
+3. **Manifests are enough.** "Not in the repo, and declared in a Module's manifest" needs only per-ecosystem knowledge of how dependencies are declared.
+
+**Alternatives we considered on the way:**
+- **A much smaller bundled list** (top 2k, 16 KB gzipped).
+- **Downloading the list on first use.**
+- **A Bloom or Golomb filter:** rejected because a false positive reveals a private name, which fails in the unsafe direction.
+- **Lockfile evidence that a package came from the public registry:** rejected because being public isn't the same as being anonymous. `@acme/...` published publicly still identifies the owner.
