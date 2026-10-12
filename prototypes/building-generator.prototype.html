@@ -1,0 +1,724 @@
+<title>Building Generator Prototype</title>
+<!--
+  PROTOTYPE, throw away. Answers: "What should a procedurally generated low-poly Building look like for
+  each Building type, and how should construction and deconstruction animate?"
+  Ticket: Building generator and construction animation (ken-guru/git-city#11).
+  Three art-direction variants, switchable with #A / #B / #C (plus -catalogue / -street / -stress for the scene),
+  because artifact pages only receive a plain #hash, never ?variant=.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: full-bleed 3D viewport; a site-office control panel docked left (top sheet on phones); a high-contrast
+   prototype switcher pill floating bottom-centre. */
+:root {
+  --bg: #e6ebe8;          /* page behind the canvas */
+  --panel: #f7f8f4;
+  --panel-edge: #c9d0c6;
+  --fg: #1f2622;
+  --muted: #5d6a62;
+  --accent: #d9822b;      /* safety-orange: construction */
+  --accent-fg: #1f2622;
+  --pill: #1f2622;
+  --pill-fg: #f7f8f4;
+  --sky: #dfe7e6;
+  --ground: #c3cdb8;
+  --street: #8d958f;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "Atkinson Hyperlegible", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141a17; --panel: #1c2420; --panel-edge: #34403a; --fg: #e4ebe6; --muted: #9aa8a0;
+    --accent: #e8954a; --accent-fg: #141a17; --pill: #e4ebe6; --pill-fg: #141a17;
+    --sky: #1d2629; --ground: #2c3a30; --street: #4b524e; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141a17; --panel: #1c2420; --panel-edge: #34403a; --fg: #e4ebe6; --muted: #9aa8a0;
+  --accent: #e8954a; --accent-fg: #141a17; --pill: #e4ebe6; --pill-fg: #141a17;
+  --sky: #1d2629; --ground: #2c3a30; --street: #4b524e; color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); overflow: hidden; }
+#stage { position: fixed; inset: 0; }
+#stage canvas { display: block; }
+.label {
+  font-family: var(--mono); font-size: 11px; line-height: 1.25; color: var(--fg);
+  background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--panel-edge);
+  padding: 2px 6px; border-radius: 3px; white-space: nowrap; pointer-events: none; text-align: center;
+}
+.label b { font-family: var(--display); font-size: 13px; letter-spacing: .04em; text-transform: uppercase; display: block; }
+
+#panel {
+  position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 16px; width: 300px; max-height: calc(100% - 110px);
+  overflow: auto; background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 6px;
+  display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 16px;
+  box-shadow: 0 6px 24px rgb(0 0 0 / .12);
+}
+#panel h1 { font-family: var(--display); font-weight: 700; font-size: 22px; letter-spacing: .03em; text-transform: uppercase; margin: 0; text-wrap: balance; }
+#panel h1 small { display: block; font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--muted); letter-spacing: 0; text-transform: none; margin-top: 2px; }
+.eyebrow { font-family: var(--display); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+.tabs { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--panel-edge); border-radius: 4px; overflow: hidden; }
+.tabs button { font: 600 12px var(--body); padding: 7px 4px; background: transparent; color: var(--fg); border: 0; cursor: pointer; }
+.tabs button + button { border-left: 1px solid var(--panel-edge); }
+.tabs button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }
+.ctl { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 8px; font-size: 13px; }
+.ctl input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+.ctl output, .mono { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.group { display: flex; flex-direction: column; gap: 10px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.btn { font: 600 13px var(--body); padding: 6px 10px; border-radius: 4px; border: 1px solid var(--panel-edge); background: transparent; color: var(--fg); cursor: pointer; }
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.btn:focus-visible, .tabs button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+select { font: 13px var(--body); padding: 4px 6px; background: var(--panel); color: var(--fg); border: 1px solid var(--panel-edge); border-radius: 4px; }
+.note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; }
+.stats { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-family: var(--mono); font-size: 12px; }
+.stats dt { color: var(--muted); } .stats dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+#log { font-family: var(--mono); font-size: 11px; color: var(--muted); display: flex; flex-direction: column; gap: 2px; min-height: 5.5em; }
+#log .now { color: var(--fg); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; background: var(--c); vertical-align: -1px; }
+
+#switcher {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  display: flex; align-items: center; gap: 6px; background: var(--pill); color: var(--pill-fg);
+  border-radius: 999px; padding: 6px 8px; box-shadow: 0 4px 18px rgb(0 0 0 / .3); font-family: var(--mono); font-size: 12px;
+  max-width: calc(100% - 32px);
+}
+#switcher button { background: transparent; color: inherit; border: 0; font: 600 16px var(--mono); width: 30px; height: 30px; border-radius: 50%; cursor: pointer; }
+#switcher button:hover { background: color-mix(in srgb, var(--pill-fg) 15%, transparent); }
+#switcher button:focus-visible { outline: 2px solid var(--accent); }
+#switcher .tag { padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#switcher .tag b { color: var(--accent); }
+#err { position: fixed; inset: auto 16px 70px; color: #b00020; font: 13px var(--mono); }
+
+@media (max-width: 640px) {
+  #panel { left: 16px; right: 16px; width: auto; max-height: 42%; }
+}
+</style>
+
+<div id="stage"></div>
+
+<aside id="panel" aria-label="Prototype controls">
+  <h1>Building generator<small>prototype · throwaway · git-city#11</small></h1>
+
+  <div>
+    <p class="eyebrow">Scene</p>
+    <div class="tabs" role="group" aria-label="Scene">
+      <button id="tab-catalogue" data-scene="catalogue">Catalogue</button>
+      <button id="tab-street" data-scene="street">Street</button>
+      <button id="tab-stress" data-scene="stress">20k test</button>
+    </div>
+  </div>
+
+  <section class="group" id="ui-catalogue">
+    <p class="note">All nine Building types from one file profile. Change the file, then replay construction.</p>
+    <label class="ctl">Lines <output id="o-lines"></output><input id="lines" type="range" min="1" max="4" step="0.01" value="2.6"></label>
+    <label class="ctl">Files importing it (fan-in) <output id="o-fanin"></output><input id="fanin" type="range" min="0" max="60" step="1" value="12"></label>
+    <label class="ctl">Changes in last 14 days <output id="o-churn"></output><input id="churn" type="range" min="0" max="20" step="1" value="2"></label>
+    <label class="ctl">Age <output id="o-age"></output><input id="age" type="range" min="0" max="1460" step="10" value="300"></label>
+    <div class="row"><button class="btn primary" id="replay">Replay construction</button><button class="btn" id="demolish">Demolish</button></div>
+  </section>
+
+  <section class="group" id="ui-street">
+    <p class="note">One street, ten Lots, 48 weeks of history. Each Lot is sized for its file's lifetime maximum and is never reused.</p>
+    <div class="row">
+      <button class="btn primary" id="play">Pause</button>
+      <button class="btn" id="dir">Reverse</button>
+      <label class="row" style="gap:6px">Speed <select id="speed"><option>0.25</option><option>0.5</option><option selected>1</option><option>2</option><option>4</option></select></label>
+    </div>
+    <label class="ctl">Timeline <output id="o-time"></output><input id="time" type="range" min="0" max="48" step="0.01" value="0"></label>
+    <div id="log" aria-live="polite"></div>
+  </section>
+
+  <section class="group" id="ui-stress">
+    <p class="note" id="stress-note"></p>
+    <label class="row" style="gap:6px">Buildings <select id="count"><option>1000</option><option>5000</option><option>10000</option><option selected>20000</option><option>40000</option></select></label>
+    <label class="row" style="gap:6px"><input type="checkbox" id="animate" checked> Animate</label>
+    <dl class="stats">
+      <dt>Frame rate</dt><dd id="s-fps">–</dd>
+      <dt>Frame time</dt><dd id="s-ms">–</dd>
+      <dt>Draw calls</dt><dd id="s-calls">–</dd>
+      <dt>Triangles</dt><dd id="s-tris">–</dd>
+      <dt>GPU</dt><dd id="s-gpu" style="white-space:normal">–</dd>
+    </dl>
+  </section>
+
+  <section class="group" id="ui-tuning">
+    <p class="eyebrow">Constants to tune</p>
+    <label class="ctl">Floor scale k (Floors = √lines ÷ k) <output id="o-k"></output><input id="k" type="range" min="1.5" max="6" step="0.1" value="3"></label>
+    <label class="ctl">Skyline cap (Floors) <output id="o-cap"></output><input id="cap" type="range" min="10" max="60" step="1" value="32"></label>
+    <label class="ctl">Fan-in width steps <output id="o-steps"></output><input id="steps" type="range" min="0" max="2" step="1" value="1"></label>
+    <label class="ctl">Scaffolding at changes per 14 days ≥ <output id="o-churnT"></output><input id="churnT" type="range" min="1" max="12" step="1" value="4"></label>
+    <div class="legend" id="legend"></div>
+  </section>
+</aside>
+
+<nav id="switcher" aria-label="Prototype variant switcher">
+  <button id="prev" aria-label="Previous variant">‹</button>
+  <span class="tag" id="vtag"></span>
+  <button id="next" aria-label="Next variant">›</button>
+</nav>
+<div id="err" role="alert"></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+
+window.addEventListener('error', e => { document.getElementById('err').textContent = 'Prototype error: ' + e.message; });
+
+// ---------- shared vocabulary from "What a Building's shape represents" ----------
+const TYPES = {
+  code:      { name: 'Office tower', cat: 'Source code',  lang: 'TypeScript' },
+  tests:     { name: 'Laboratory',   cat: 'Tests',        lang: 'Python', capFloors: 3, wide: 1.35 },
+  docs:      { name: 'Library',      cat: 'Docs',         lang: 'Markdown', capFloors: 4, wide: 1.15 },
+  config:    { name: 'Utility',      cat: 'Config',       lang: 'JSON', round: true, capFloors: 6, narrow: 0.75 },
+  build:     { name: 'Factory',      cat: 'Build / CI',   lang: 'Shell', capFloors: 4, wide: 1.3 },
+  data:      { name: 'Storage',      cat: 'Data',         lang: 'SQL', tanks: true, capFloors: 6 },
+  assets:    { name: 'Warehouse',    cat: 'Assets',       lang: 'Image', capFloors: 2, wide: 1.5 },
+  generated: { name: 'Rail yard',    cat: 'Generated',    lang: 'Lockfile', flat: true },
+  unknown:   { name: 'House',        cat: 'Unknown',      lang: 'Other', capFloors: 2, narrow: 0.8 },
+};
+const LANG = { TypeScript: '#3c7dc4', Python: '#d9b13b', Markdown: '#7b6f8f', JSON: '#2f9c8f', Shell: '#5e7d3a',
+  SQL: '#b5583a', Image: '#c4577f', Lockfile: '#6f7781', Other: '#9a8a6a', Rust: '#c2622d' };
+const FH = 0.3;     // one Floor, in world units
+const FAN_STEPS = [[3, 10, 30], [2, 6, 18], [1, 3, 8]]; // gentle / default / eager width steps
+const FOOT = [0.9, 1.2, 1.5, 1.85];
+
+const P = { k: 3, cap: 32, steps: 1, churnT: 4 };
+
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const ease = { outCubic: t => 1 - Math.pow(1 - t, 3), inOutCubic: t => t < .5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2,
+  outBack: t => { const c1 = 1.4, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); } };
+function rng(seed) { let a = seed >>> 0; return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a);
+  t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+function floorsFor(type, lines) {
+  const T = TYPES[type];
+  if (T.flat) return 1;
+  const f = Math.max(1, Math.ceil(Math.sqrt(Math.max(1, lines)) / P.k));
+  return Math.min(f, P.cap, T.capFloors ?? Infinity);
+}
+function footFor(fanIn) { const s = FAN_STEPS[P.steps]; return FOOT[fanIn >= s[2] ? 3 : fanIn >= s[1] ? 2 : fanIn >= s[0] ? 1 : 0]; }
+
+// ---------- variants ----------
+// A: every Floor is a visible slab; Floors drop in one at a time. Silhouette carries the type, minimal detail.
+// B: modular kit; seeded windows, roof props, crane. Floors extrude upward from the base.
+// C: toy diorama; pastel, inked outlines, squash-and-stretch construction.
+const VARIANTS = {
+  A: { name: 'Stacked slabs', body: '#ece7dc', bodyAlt: '#d9d3c6', trim: 0.35, gap: 0.16, outline: false, windows: false, crane: false, anim: 'drop' },
+  B: { name: 'Modular kit', body: '#c9c3b6', bodyAlt: '#a9b0ae', trim: 0.0, gap: 0.0, outline: false, windows: true, crane: true, anim: 'extrude' },
+  C: { name: 'Toy diorama', body: '#f3dcc6', bodyAlt: '#cfe3d6', trim: 0.0, gap: 0.04, outline: true, windows: false, crane: false, anim: 'squash', pastel: true },
+};
+const VKEYS = Object.keys(VARIANTS);
+
+const matCache = new Map();
+function mat(color, opts = {}) {
+  const key = color + JSON.stringify(opts);
+  if (!matCache.has(key)) matCache.set(key, new THREE.MeshStandardMaterial({ color, flatShading: true, roughness: .95, metalness: 0, ...opts }));
+  return matCache.get(key);
+}
+const outlineMat = new THREE.MeshBasicMaterial({ color: '#2a2622', side: THREE.BackSide });
+
+function tint(hex, toward, amt) { return '#' + new THREE.Color(hex).lerp(new THREE.Color(toward), amt).getHexString(); }
+
+/** Build one Building with geometry for maxFloors; returns { group, set(state), height(floorsVis) }. */
+function makeBuilding(variantKey, spec) {
+  const V = VARIANTS[variantKey], T = TYPES[spec.type];
+  const r = rng(spec.birth * 7919 + 13);
+  const group = new THREE.Group();
+  const maxFloors = spec.maxFloors;
+  let w = footFor(spec.fanIn) * (T.wide ?? 1) * (T.narrow ?? 1), d = footFor(spec.fanIn) * (T.narrow ?? 1);
+  const langC = LANG[spec.lang ?? T.lang];
+  const weather = clamp((spec.age ?? 0) / 1460, 0, 1);
+  let bodyC = (spec.type === 'tests' || spec.type === 'data') ? V.bodyAlt : V.body;
+  if (V.pastel) bodyC = tint(langC, '#ffffff', .62);
+  bodyC = tint(bodyC, '#7a6f5d', weather * .45);
+  const bodyM = mat(bodyC), langM = mat(V.pastel ? tint(langC, '#ffffff', .2) : langC), darkM = mat('#2f3a40');
+  const slabH = FH * (1 - V.gap);
+
+  // foundation pad (poured at birth)
+  const pad = new THREE.Mesh(new THREE.BoxGeometry(w + .25, .06, d + .25), mat(variantKey === 'C' ? '#d8cbb8' : '#9aa09a'));
+  pad.position.y = .03; pad.receiveShadow = true; group.add(pad);
+
+  // floors
+  const floors = [];
+  const floorRoot = new THREE.Group(); group.add(floorRoot);
+  for (let i = 0; i < maxFloors; i++) {
+    let geo;
+    if (T.flat) {
+      geo = new THREE.BoxGeometry(w * 1.6, .12, d * 1.3);
+    } else if (T.tanks) {
+      const parts = [];
+      for (let k = 0; k < 3; k++) { const g = new THREE.CylinderGeometry(w * .2, w * .2, slabH, 9); g.translate((k - 1) * w * .36, 0, (k % 2) * .12 - .06); parts.push(g); }
+      geo = mergeGeometries(parts);
+    } else if (T.round) {
+      geo = new THREE.CylinderGeometry(w * .48, w * .48, slabH, 10);
+    } else {
+      geo = new THREE.BoxGeometry(w, slabH, d);
+    }
+    geo.translate(0, (T.flat ? .12 : slabH) / 2, 0);  // pivot at floor base
+    const floorM = (V.trim && i === maxFloors - 1) ? langM : bodyM;
+    const mesh = new THREE.Mesh(geo, floorM); mesh.castShadow = true; mesh.receiveShadow = true;
+    const holder = new THREE.Group(); holder.position.y = .06 + i * FH; holder.add(mesh); floorRoot.add(holder);
+    if (V.outline) { const o = new THREE.Mesh(geo, outlineMat); o.scale.setScalar(1.06); o.scale.y = 1.02; holder.add(o); }
+    if (V.windows && !T.flat && !T.round && !T.tanks) {
+      const wins = [], n = Math.max(2, Math.round(w / .28));
+      for (let k = 0; k < n; k++) {
+        if (r() < .22) continue;                              // seeded gaps: same Building, same windows, every run
+        const x = -w / 2 + (k + .5) * (w / n);
+        const g1 = new THREE.BoxGeometry(w / n * .55, slabH * .45, .02); g1.translate(x, slabH * .5, d / 2 + .01); wins.push(g1);
+        const g2 = g1.clone(); g2.translate(0, 0, -d - .02); wins.push(g2);
+      }
+      if (wins.length) holder.add(new THREE.Mesh(mergeGeometries(wins), r() < .5 ? darkM : mat('#f0d48a')));
+    }
+    if (T.flat) {   // rail yard: parking stripes / tracks on the slab
+      const stripes = []; for (let k = 0; k < 6; k++) { const g = new THREE.BoxGeometry(.04, .01, d * 1.1); g.translate(-w * .7 + k * w * .28, .125, 0); stripes.push(g); }
+      holder.add(new THREE.Mesh(mergeGeometries(stripes), langM));
+    }
+    floors.push(holder);
+  }
+
+  // ground-floor columns for the Library
+  if (spec.type === 'docs') {
+    const cols = []; for (let k = 0; k < 4; k++) { const g = new THREE.CylinderGeometry(.05, .05, FH * .9, 6); g.translate(-w / 2 + .15 + k * (w - .3) / 3, FH * .45 + .06, d / 2 + .12); cols.push(g); }
+    const c = new THREE.Mesh(mergeGeometries(cols), bodyM); c.castShadow = true; group.add(c); group.userData.cols = c;
+  }
+
+  // roof prop per type, in the language colour
+  const roof = new THREE.Group(); group.add(roof);
+  const addRoof = (geo, m = langM, y = 0) => { geo.translate(0, y, 0); const mesh = new THREE.Mesh(geo, m); mesh.castShadow = true; roof.add(mesh);
+    if (V.outline) { const o = new THREE.Mesh(geo, outlineMat); o.scale.setScalar(1.06); roof.add(o); } return mesh; };
+  switch (spec.type) {
+    case 'code': addRoof(new THREE.BoxGeometry(w * .9, .08, d * .9), langM, .04);
+      if (variantKey === 'B') addRoof(new THREE.CylinderGeometry(.015, .015, .6, 4), darkM, .38); break;
+    case 'tests': { addRoof(new THREE.CylinderGeometry(.02, .02, .25, 5), darkM, .12);
+      const dish = new THREE.SphereGeometry(.24, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2); dish.rotateX(Math.PI * .75); addRoof(dish, langM, .3); break; }
+    case 'docs': case 'unknown': case 'assets': {
+      const prism = new THREE.CylinderGeometry(.01, (spec.type === 'assets' ? w : Math.max(w, d)) * .62, spec.type === 'assets' ? .25 : .45, 4, 1);
+      prism.rotateY(Math.PI / 4); prism.scale(1, 1, spec.type === 'assets' ? d / w : 1); addRoof(prism, langM, spec.type === 'assets' ? .125 : .225); break; }
+    case 'config': addRoof(new THREE.CylinderGeometry(w * .5, w * .5, .2, 10), langM, .1); addRoof(new THREE.ConeGeometry(w * .52, .22, 10), langM, .31); break;
+    case 'build': for (let k = 0; k < 3; k++) { const s = new THREE.CylinderGeometry(.01, .2, .22, 3); s.rotateZ(Math.PI / 2); s.rotateY(Math.PI / 2); s.scale(1, 1, d * 2.2);
+        s.translate(-w / 3 + k * w / 3, .1, 0); addRoof(s, langM); }
+      addRoof(new THREE.CylinderGeometry(.07, .09, .9, 7), darkM, .45).position.x = w * .35; break;
+    case 'data': for (let k = 0; k < 3; k++) { const g = new THREE.SphereGeometry(w * .2, 9, 4, 0, Math.PI * 2, 0, Math.PI / 2); g.translate((k - 1) * w * .36, 0, (k % 2) * .12 - .06); addRoof(g); } break;
+  }
+
+  // scaffolding (+ crane in B), shown while the file is changing often
+  const scaf = new THREE.Group(); group.add(scaf);
+  const H = maxFloors * FH + .3, poles = [];
+  for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { const g = new THREE.BoxGeometry(.03, H, .03); g.translate(x * (w / 2 + .08), H / 2, z * (d / 2 + .08)); poles.push(g); }
+  for (let y = FH; y < H; y += FH * 2) for (const z of [-1, 1]) { const g = new THREE.BoxGeometry(w + .2, .025, .025); g.translate(0, y, z * (d / 2 + .08)); poles.push(g); }
+  scaf.add(new THREE.Mesh(mergeGeometries(poles), mat('#d9822b')));
+  if (V.crane && !T.flat) {
+    const cg = [new THREE.BoxGeometry(.06, H + .8, .06).translate(w / 2 + .35, (H + .8) / 2, 0), new THREE.BoxGeometry(1.6, .05, .05).translate(w / 2 + .1, H + .8, 0)];
+    scaf.add(new THREE.Mesh(mergeGeometries(cg), mat('#e2b33c')));
+  }
+  scaf.visible = false;
+
+  // demolition dust
+  const dust = new THREE.Group(); group.add(dust);
+  for (let k = 0; k < 14; k++) { const m = new THREE.Mesh(new THREE.BoxGeometry(.12, .12, .12), mat('#b8ad9c', { transparent: true }));
+    m.userData.dir = new THREE.Vector3(r() - .5, r() * .6, r() - .5).normalize(); dust.add(m); }
+  dust.visible = false;
+
+  const flatH = .12;
+  function set(s) {
+    // s: { found 0..1, floors (float), demo 0..1, scaffold 0..1 }
+    group.visible = s.found > 0 && s.demo < 1;
+    pad.scale.set(Math.max(.001, ease.outCubic(s.found)), 1, Math.max(.001, ease.outCubic(s.found)));
+    let top = .06;
+    floors.forEach((h, i) => {
+      const p = clamp(s.floors - i, 0, 1);
+      h.visible = p > 0.001;
+      if (!h.visible) return;
+      if (V.anim === 'drop') { h.scale.set(1, 1, 1); h.position.y = .06 + i * FH + (1 - ease.outCubic(p)) * 1.4; }
+      else if (V.anim === 'extrude') { h.scale.set(1, Math.max(.001, ease.outCubic(p)), 1); h.position.y = .06 + i * FH; }
+      else { const sq = ease.outBack(p); const bulge = 1 + .18 * Math.sin(p * Math.PI); h.scale.set(bulge, Math.max(.001, sq), bulge); h.position.y = .06 + i * FH; }
+      top = .06 + (T.flat ? flatH : i * FH + FH * (V.anim === 'drop' ? (p >= 1 ? 1 : 0) : ease.outCubic(p)));
+    });
+    if (T.flat) top = .06 + flatH * clamp(s.floors, 0, 1);
+    if (group.userData.cols) group.userData.cols.visible = s.floors > .5;
+    roof.visible = !T.flat && s.floors > .2;
+    roof.position.y = top - (V.gap ? FH * V.gap : 0);
+    const rs = clamp(s.floors * 1.2, 0, 1); roof.scale.setScalar(Math.max(.001, V.anim === 'squash' ? ease.outBack(rs) : ease.outCubic(rs)));
+    scaf.visible = s.scaffold > .01 && s.demo < .05;
+    scaf.scale.set(1, Math.max(.001, ease.outCubic(s.scaffold)), 1);
+    // demolition: sink into the ground and throw up dust
+    const sink = ease.inOutCubic(s.demo);
+    floorRoot.position.y = -sink * (s.floors * FH + .2); roof.position.y -= sink * (s.floors * FH + .2);
+    if (group.userData.cols) group.userData.cols.position.y = -sink * 1.2;
+    dust.visible = s.demo > 0 && s.demo < 1;
+    dust.children.forEach((m, i) => { const t = s.demo; m.position.copy(m.userData.dir).multiplyScalar(t * (1.2 + (i % 3) * .3)); m.position.y += .1 + t * .4;
+      m.scale.setScalar(Math.max(.001, Math.sin(t * Math.PI) * (1 + i % 2))); m.material.opacity = 1 - t; });
+  }
+  return { group, set, w, d };
+}
+
+// ---------- renderer & scenes ----------
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+stage.appendChild(renderer.domElement);
+const labels = new CSS2DRenderer(); labels.domElement.style.position = 'absolute'; labels.domElement.style.inset = '0'; labels.domElement.style.pointerEvents = 'none';
+stage.appendChild(labels.domElement);
+try { const gl = renderer.getContext(); const ext = gl.getExtension('WEBGL_debug_renderer_info');
+  document.getElementById('s-gpu').textContent = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : 'not reported'; } catch { }
+
+const camera = new THREE.PerspectiveCamera(40, 1, .1, 400);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.maxPolarAngle = Math.PI * .47;
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function themeScene(scene) { scene.background = new THREE.Color(css('--sky')); scene.fog = new THREE.Fog(css('--sky'), 30, 160); }
+function lights(scene, shadows) {
+  scene.add(new THREE.HemisphereLight('#fff7ea', '#55604f', 1.4));
+  const sun = new THREE.DirectionalLight('#fff3dc', 2.2); sun.position.set(8, 14, 6);
+  if (shadows) { sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048); Object.assign(sun.shadow.camera, { left: -14, right: 14, top: 14, bottom: -14 }); sun.shadow.bias = -.0005; }
+  scene.add(sun);
+}
+function groundPlane(scene, size) { const g = new THREE.Mesh(new THREE.PlaneGeometry(size, size), new THREE.MeshStandardMaterial({ color: css('--ground'), roughness: 1 }));
+  g.rotation.x = -Math.PI / 2; g.receiveShadow = true; scene.add(g); return g; }
+function label(html) { const el = document.createElement('div'); el.className = 'label'; el.innerHTML = html; return new CSS2DObject(el); }
+
+let variant = 'A', sceneKey = 'catalogue', active = null;
+
+// ---- Catalogue
+function buildCatalogue() {
+  const scene = new THREE.Scene(); themeScene(scene); lights(scene, true); groundPlane(scene, 80);
+  const spec = readSpec(); const items = [];
+  Object.keys(TYPES).forEach((type, i) => {
+    const lines = type === 'generated' ? spec.lines * 6 : spec.lines;
+    const s = { type, lines, fanIn: spec.fanIn, age: spec.age, birth: i + 1, maxFloors: floorsFor(type, lines) };
+    const b = makeBuilding(variant, s);
+    const x = (i % 3 - 1) * 4.2, z = (Math.floor(i / 3) - 1) * 4.2;
+    const lot = new THREE.Mesh(new THREE.BoxGeometry(3.4, .02, 3.4), mat(variant === 'C' ? '#cfe0b8' : '#aebb9f')); lot.position.set(x, .01, z); lot.receiveShadow = true; scene.add(lot);
+    b.group.position.set(x, .02, z); scene.add(b.group);
+    const L = label(`<b>${TYPES[type].name}</b>${TYPES[type].cat} · ${s.maxFloors} Floor${s.maxFloors > 1 ? 's' : ''}`); L.position.set(x, -.1, z + 1.9); scene.add(L);
+    items.push({ b, s, t0: 0 });
+  });
+  camera.position.set(11, 10, 14); controls.target.set(0, 1.2, 0);
+  let t = 0, demolishAt = null;
+  return { scene, items,
+    replay() { t = 0; demolishAt = null; }, demolish() { demolishAt = t; },
+    update(dt) {
+      t += dt;
+      for (const [i, it] of items.entries()) {
+        const start = i * .12, found = clamp((t - start) / .5, 0, 1);
+        const floors = clamp((t - start - .5) / (.08 * it.s.maxFloors + .9), 0, 1) * it.s.maxFloors;
+        const demo = demolishAt == null ? 0 : clamp((t - demolishAt - i * .08) / 1.4, 0, 1);
+        it.b.set({ found, floors: demolishAt == null ? floors : it.s.maxFloors, demo, scaffold: spec.churn >= P.churnT ? clamp((t - start - .3) / .6, 0, 1) : 0 });
+      }
+    } };
+}
+function readSpec() {
+  const lines = Math.round(Math.pow(10, +document.getElementById('lines').value));
+  return { lines, fanIn: +document.getElementById('fanin').value, churn: +document.getElementById('churn').value, age: +document.getElementById('age').value };
+}
+
+// ---- Street: scripted history, state is a pure function of t, so reverse and scrub are free
+const STREET = [
+  { type: 'code', lang: 'TypeScript', fanIn: 34, ev: [[1, 120], [6, 900], [14, 2400], [30, 1600]], churn: [[12, 20]] },
+  { type: 'tests', lang: 'Python', fanIn: 0, ev: [[3, 200], [10, 600], [24, 1400]] },
+  { type: 'docs', lang: 'Markdown', fanIn: 2, ev: [[2, 80], [18, 400]] },
+  { type: 'config', lang: 'JSON', fanIn: 14, ev: [[1, 30], [20, 160]] },
+  { type: 'build', lang: 'Shell', fanIn: 0, ev: [[5, 150], [16, 260]], del: 40 },
+  { type: 'data', lang: 'SQL', fanIn: 5, ev: [[8, 300], [28, 2000]] },
+  { type: 'assets', lang: 'Image', fanIn: 3, ev: [[9, 10000]], del: 35 },
+  { type: 'generated', lang: 'Lockfile', fanIn: 0, ev: [[4, 9000], [22, 14000]] },
+  { type: 'unknown', lang: 'Other', fanIn: 0, ev: [[11, 40]] },
+  { type: 'code', lang: 'Rust', fanIn: 8, ev: [[15, 300], [26, 3000], [44, 800]], churn: [[26, 34]] },
+];
+const TL = 48, FOUND = .6, GROW = 1.5, DEMO = 1.4, SCAF = .8;
+function lotState(L, t) {
+  const tc = L.ev[0][0];
+  if (t < tc) return { found: 0, floors: 0, demo: 0, scaffold: 0 };
+  const found = clamp((t - tc) / FOUND, 0, 1);
+  let prev = 0, floors = 0;
+  for (let i = 0; i < L.ev.length; i++) {
+    const [te, lines] = L.ev[i]; const start = i === 0 ? te + FOUND : te; if (t < start) break;
+    const target = floorsFor(L.type, lines); floors = prev + (target - prev) * ease.inOutCubic(clamp((t - start) / GROW, 0, 1)); prev = target;
+  }
+  const demo = L.del != null ? clamp((t - L.del) / DEMO, 0, 1) : 0;
+  let scaffold = 0; for (const [a, b] of L.churn ?? []) scaffold = Math.max(scaffold, Math.min(clamp((t - a) / SCAF, 0, 1), clamp((b - t) / SCAF, 0, 1)));
+  return { found, floors, demo, scaffold };
+}
+function buildStreet() {
+  const scene = new THREE.Scene(); themeScene(scene); lights(scene, true); groundPlane(scene, 120);
+  const road = new THREE.Mesh(new THREE.BoxGeometry(24, .03, 1.6), mat(css('--street'))); road.position.y = .015; road.receiveShadow = true; scene.add(road);
+  const items = STREET.map((L, i) => {
+    const maxFloors = Math.max(...L.ev.map(e => floorsFor(L.type, e[1])));
+    const b = makeBuilding(variant, { type: L.type, lang: L.lang, fanIn: L.fanIn, age: 200, birth: i + 1, maxFloors });
+    const side = i % 2 ? 1 : -1, x = -9.5 + Math.floor(i / 2) * 4.6 + (i % 2) * 1.2, z = side * 2.7;
+    const lot = new THREE.Mesh(new THREE.BoxGeometry(3.2, .02, 2.6), mat(variant === 'C' ? '#cfe0b8' : '#aebb9f')); lot.position.set(x, .01, z); lot.receiveShadow = true; scene.add(lot);
+    const edge = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(3.2, .02, 2.6)), new THREE.LineBasicMaterial({ color: '#6c7a64' })); edge.position.copy(lot.position); scene.add(edge);
+    b.group.position.set(x, .02, z); scene.add(b.group);
+    const lab = label(`<b>${TYPES[L.type].name}</b>${L.lang}`); lab.position.set(x, 0, z + side * 1.55); scene.add(lab);
+    return { b, L };
+  });
+  camera.position.set(4, 11, 15); controls.target.set(0, 1, 0);
+  const events = [];
+  STREET.forEach((L, i) => { L.ev.forEach(([t, lines], k) => events.push([t, `${k ? (floorsFor(L.type, lines) < floorsFor(L.type, L.ev[k - 1][1]) ? 'shrink' : 'grow') : 'build'} ${TYPES[L.type].name.toLowerCase()} (${L.lang}) → ${lines.toLocaleString()} lines`]));
+    if (L.del != null) events.push([L.del, `demolish ${TYPES[L.type].name.toLowerCase()} (${L.lang})`]);
+    (L.churn ?? []).forEach(([a, b]) => { events.push([a, `scaffolding up: ${L.lang} file changing often`]); events.push([b, `scaffolding down: ${L.lang}`]); }); });
+  events.sort((a, b) => a[0] - b[0]);
+  return { scene, items, events, update() { for (const it of items) it.b.set(lotState(it.L, street.t)); } };
+}
+const street = { t: 0, playing: true, dir: 1, speed: 1 };
+
+// ---- Stress: one InstancedMesh, animation entirely in the vertex shader
+function buildStress(N) {
+  const scene = new THREE.Scene(); themeScene(scene); scene.fog = null; lights(scene, false); groundPlane(scene, 600);
+  const geo = new THREE.BoxGeometry(1, 1, 1); geo.translate(0, .5, 0);
+  const born = new Float32Array(N), life = new Float32Array(N), height = new Float32Array(N), foot = new Float32Array(N);
+  const r = rng(42), side = Math.ceil(Math.sqrt(N)), PERIOD = 24;
+  const mesh = new THREE.InstancedMesh(geo, null, N);
+  const m4 = new THREE.Matrix4(), col = new THREE.Color(), langs = Object.values(LANG);
+  for (let i = 0; i < N; i++) {
+    const gx = i % side, gz = Math.floor(i / side);
+    m4.makeTranslation((gx - side / 2) * 1.25 + Math.floor(gx / 8) * .9, 0, (gz - side / 2) * 1.25 + Math.floor(gz / 8) * .9); mesh.setMatrixAt(i, m4);
+    born[i] = r() * PERIOD; life[i] = 6 + r() * 14;
+    const lines = Math.pow(10, 1 + r() * 2.8); height[i] = Math.min(P.cap, Math.ceil(Math.sqrt(lines) / P.k)) * FH; foot[i] = FOOT[Math.floor(r() * r() * 4)];
+    mesh.setColorAt(i, col.set(langs[i % langs.length]).lerp(new THREE.Color('#ece7dc'), .55));
+  }
+  geo.setAttribute('aBorn', new THREE.InstancedBufferAttribute(born, 1));
+  geo.setAttribute('aLife', new THREE.InstancedBufferAttribute(life, 1));
+  geo.setAttribute('aHeight', new THREE.InstancedBufferAttribute(height, 1));
+  geo.setAttribute('aFoot', new THREE.InstancedBufferAttribute(foot, 1));
+  const material = new THREE.MeshLambertMaterial({ flatShading: true });
+  const uniforms = { uTime: { value: 0 }, uPeriod: { value: PERIOD } };
+  material.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, uniforms);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute float aBorn; attribute float aLife; attribute float aHeight; attribute float aFoot;
+        uniform float uTime; uniform float uPeriod;
+        float easeOutCubic(float t) { return 1.0 - pow(1.0 - t, 3.0); }`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        float age = mod(uTime - aBorn, uPeriod);
+        float grow = easeOutCubic(clamp(age / 1.5, 0.0, 1.0));
+        float fall = 1.0 - easeOutCubic(clamp((age - aLife) / 1.4, 0.0, 1.0));
+        transformed.y *= max(0.0001, aHeight * grow * fall);
+        transformed.xz *= aFoot * 0.8;
+        if (grow * fall < 0.001) transformed *= 0.0;`);
+  };
+  mesh.material = material; mesh.frustumCulled = false; scene.add(mesh);
+  camera.position.set(side * .55, side * .45, side * .75); controls.target.set(0, 0, 0);
+  return { scene, mesh, uniforms, update(dt) { if (document.getElementById('animate').checked) uniforms.uTime.value += dt; } };
+}
+
+// ---- Stress, art direction B: one InstancedMesh per Building type plus one for scaffolding and cranes.
+// Each type's shape is a unit-height kit (body + roof props). The shader stretches the body to the Building's height,
+// rides the roof on top, paints seeded windows per Floor procedurally, and shows scaffolding/crane while busy.
+function kitGeometry(type) {
+  const T = TYPES[type], w = (T.wide ?? 1) * (T.narrow ?? 1), d = T.narrow ?? 1, parts = [];
+  const add = (g, part, y = 0) => { g.translate(0, y, 0); g = g.index ? g.toNonIndexed() : g;
+    for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+    g.setAttribute('aPart', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(part), 1)); parts.push(g); };
+  if (T.flat) add(new THREE.BoxGeometry(w * 1.6, 1, d * 1.3), 0, .5);
+  else if (T.tanks) for (let k = 0; k < 3; k++) add(new THREE.CylinderGeometry(w * .2, w * .2, 1, 9).translate((k - 1) * w * .36, 0, (k % 2) * .12 - .06), 0, .5);
+  else if (T.round) add(new THREE.CylinderGeometry(w * .48, w * .48, 1, 10), 0, .5);
+  else add(new THREE.BoxGeometry(w, 1, d), 0, .5);
+  // roof props, positioned relative to y = 1 (the top of the body); part 1 = language colour, 2 = dark
+  switch (type) {
+    case 'code': add(new THREE.BoxGeometry(w * .9, .08, d * .9), 1, 1.04); add(new THREE.CylinderGeometry(.015, .015, .6, 4), 2, 1.38); break;
+    case 'tests': { add(new THREE.CylinderGeometry(.02, .02, .25, 5), 2, 1.12);
+      const dish = new THREE.SphereGeometry(.24, 8, 4, 0, Math.PI * 2, 0, Math.PI / 2); dish.rotateX(Math.PI * .75); add(dish, 1, 1.3); break; }
+    case 'docs': case 'unknown': case 'assets': {
+      const prism = new THREE.CylinderGeometry(.01, (type === 'assets' ? w : Math.max(w, d)) * .62, type === 'assets' ? .25 : .45, 4, 1);
+      prism.rotateY(Math.PI / 4); prism.scale(1, 1, type === 'assets' ? d / w : 1); add(prism, 1, 1 + (type === 'assets' ? .125 : .225)); break; }
+    case 'config': add(new THREE.CylinderGeometry(w * .5, w * .5, .2, 10), 1, 1.1); add(new THREE.ConeGeometry(w * .52, .22, 10), 1, 1.31); break;
+    case 'build': for (let k = 0; k < 3; k++) { const s = new THREE.CylinderGeometry(.01, .2, .22, 3); s.rotateZ(Math.PI / 2); s.rotateY(Math.PI / 2); s.scale(1, 1, d * 2.2);
+        s.translate(-w / 3 + k * w / 3, 0, 0); add(s, 1, 1.1); }
+      add(new THREE.CylinderGeometry(.07, .09, .9, 7).translate(w * .35, 0, 0), 2, 1.45); break;
+    case 'data': for (let k = 0; k < 3; k++) add(new THREE.SphereGeometry(w * .2, 9, 4, 0, Math.PI * 2, 0, Math.PI / 2).translate((k - 1) * w * .36, 0, (k % 2) * .12 - .06), 1, 1); break;
+  }
+  return mergeGeometries(parts);
+}
+function scaffoldGeometry() {
+  const parts = [], add = (g, part) => { g = g.toNonIndexed(); for (const k of Object.keys(g.attributes)) if (k !== 'position' && k !== 'normal') g.deleteAttribute(k);
+    g.setAttribute('aPart', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count).fill(part), 1)); parts.push(g); };
+  for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) add(new THREE.BoxGeometry(.04, 1, .04).translate(x * .58, .5, z * .58), 0);
+  for (let y = .2; y < 1; y += .25) for (const z of [-1, 1]) add(new THREE.BoxGeometry(1.2, .03, .03).translate(0, y, z * .58), 0);
+  add(new THREE.BoxGeometry(.06, 1.25, .06).translate(.95, .625, 0), 1);       // crane mast
+  add(new THREE.BoxGeometry(1.6, .05, .05).translate(.6, 1.25, 0), 1);         // crane jib
+  return mergeGeometries(parts);
+}
+const KIT_COMMON = `
+  attribute float aPart; attribute float aBorn; attribute float aLife; attribute float aHeight; attribute float aFoot;
+  uniform float uTime; uniform float uPeriod;
+  varying float vPart;
+  float easeOutCubic(float t) { return 1.0 - pow(1.0 - t, 3.0); }`;
+const KIT_HEIGHT = `
+  float age = mod(uTime - aBorn, uPeriod);
+  float grow = easeOutCubic(clamp(age / 1.5, 0.0, 1.0));
+  float fall = 1.0 - easeOutCubic(clamp((age - aLife) / 1.4, 0.0, 1.0));
+  float h = max(0.0001, aHeight * grow * fall);
+  bool empty = grow * fall < 0.001;   // empty Lot: collapse entirely, or the flattened shape z-fights the ground
+  vPart = aPart;`;
+function kitMaterial(uniforms, kind) {
+  const m = new THREE.MeshLambertMaterial({ flatShading: true });
+  m.onBeforeCompile = sh => {
+    Object.assign(sh.uniforms, uniforms);
+    if (kind === 'body') {
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', `#include <common>${KIT_COMMON}
+          attribute vec3 aLang; attribute float aSeed; attribute float aWin;
+          varying vec3 vLocal; varying vec3 vN; varying vec3 vLang; varying float vSeed; varying float vH; varying float vWin;`)
+        .replace('#include <begin_vertex>', `#include <begin_vertex>${KIT_HEIGHT}
+          float s = min(1.0, h / 0.3);
+          if (aPart > 0.5) { transformed.y = (transformed.y - 1.0) * s + h; transformed.xz *= s; } else transformed.y *= h;
+          transformed.xz *= aFoot * 0.8;
+          if (empty) transformed *= 0.0;
+          vLocal = transformed; vN = objectNormal; vLang = aLang; vSeed = aSeed; vH = h; vWin = aWin;`);
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', `#include <common>
+          uniform vec3 uBody; uniform vec3 uDark; uniform vec3 uLit;
+          varying float vPart; varying vec3 vLocal; varying vec3 vN; varying vec3 vLang; varying float vSeed; varying float vH; varying float vWin;
+          float h31(vec3 p) { return fract(sin(dot(p, vec3(12.9898, 78.233, 37.719))) * 43758.5453); }`)
+        .replace('#include <color_fragment>', `#include <color_fragment>
+          vec3 c = vPart < 0.5 ? uBody : (vPart < 1.5 ? vLang : uDark);
+          if (vPart < 0.5 && vWin > 0.5 && abs(vN.y) < 0.5) {
+            float fy = vLocal.y / ${FH.toFixed(2)}, fr = fract(fy), row = floor(fy);
+            float across = (abs(vN.x) > 0.5 ? vLocal.z : vLocal.x) / 0.28 + 0.5;
+            float col = floor(across), fc = fract(across), r = h31(vec3(vSeed, row, col + sign(vN.x + vN.z) * 31.0));
+            if (fr > 0.3 && fr < 0.75 && fc > 0.22 && fc < 0.78 && r > 0.22 && vLocal.y < vH - 0.05) c = r > 0.62 ? uLit : uDark;
+          }
+          diffuseColor.rgb = c;`);
+    } else {
+      sh.vertexShader = sh.vertexShader
+        .replace('#include <common>', `#include <common>${KIT_COMMON} attribute vec2 aBusy;`)
+        .replace('#include <begin_vertex>', `#include <begin_vertex>${KIT_HEIGHT}
+          bool busy = age < aLife && (age < 1.9 || (age > aBusy.x && age < aBusy.x + aBusy.y));
+          transformed.y *= aHeight + 0.3; transformed.xz *= aFoot * 0.8;
+          if (empty || !busy || aHeight < 0.2) transformed *= 0.0;`);
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <common>', `#include <common>
+          varying float vPart;`)
+        .replace('#include <color_fragment>', `#include <color_fragment>
+          diffuseColor.rgb = vPart < 0.5 ? vec3(0.85, 0.51, 0.17) : vec3(0.89, 0.70, 0.24);`);
+    }
+  };
+  return m;
+}
+function buildStressKit(N) {
+  const scene = new THREE.Scene(); themeScene(scene); scene.fog = null; lights(scene, false); groundPlane(scene, 600);
+  const r = rng(42), side = Math.ceil(Math.sqrt(N)), PERIOD = 24;
+  const MIX = [['code', .45], ['tests', .15], ['docs', .07], ['config', .08], ['build', .04], ['data', .04], ['assets', .07], ['generated', .03], ['unknown', .07]];
+  const pickType = () => { let x = r(); for (const [t, p] of MIX) { if ((x -= p) < 0) return t; } return 'code'; };
+  const all = [];
+  for (let i = 0; i < N; i++) {
+    const gx = i % side, gz = Math.floor(i / side), type = pickType(), T = TYPES[type];
+    const lines = Math.pow(10, 1 + r() * 2.8);
+    all.push({ type, x: (gx - side / 2) * 1.25 + Math.floor(gx / 8) * .9, z: (gz - side / 2) * 1.25 + Math.floor(gz / 8) * .9,
+      born: r() * PERIOD, life: 6 + r() * 14, height: T.flat ? .12 : floorsFor(type, lines) * FH, foot: FOOT[Math.floor(r() * r() * 4)],
+      lang: new THREE.Color(LANG[T.lang]), seed: i % 997, win: (T.flat || T.round || T.tanks) ? 0 : 1, busy: [2 + r() * 14, 1 + r() * 3] });
+  }
+  const uniforms = { uTime: { value: 0 }, uPeriod: { value: PERIOD },
+    uBody: { value: new THREE.Color(VARIANTS.B.body) }, uDark: { value: new THREE.Color('#2f3a40') }, uLit: { value: new THREE.Color('#f0d48a') } };
+  const bodyMat = kitMaterial(uniforms, 'body'), scafMat = kitMaterial(uniforms, 'scaffold'), m4 = new THREE.Matrix4();
+  const inst = (geo, list, extra) => {
+    const n = list.length, f = k => new Float32Array(n * k);
+    const A = { aBorn: [f(1), 1, b => [b.born]], aLife: [f(1), 1, b => [b.life]], aHeight: [f(1), 1, b => [b.height]], aFoot: [f(1), 1, b => [b.foot]], ...extra(f) };
+    list.forEach((b, i) => { for (const [arr, k, get] of Object.values(A)) arr.set(get(b), i * k); });
+    for (const [name, [arr, k]] of Object.entries(A)) geo.setAttribute(name, new THREE.InstancedBufferAttribute(arr, k));
+    return geo;
+  };
+  for (const [type] of MIX) {
+    const list = all.filter(b => b.type === type); if (!list.length) continue;
+    const geo = inst(kitGeometry(type), list, f => ({ aLang: [f(3), 3, b => [b.lang.r, b.lang.g, b.lang.b]], aSeed: [f(1), 1, b => [b.seed]], aWin: [f(1), 1, b => [b.win]] }));
+    const mesh = new THREE.InstancedMesh(geo, bodyMat, list.length);
+    list.forEach((b, i) => mesh.setMatrixAt(i, m4.makeTranslation(b.x, 0, b.z))); mesh.frustumCulled = false; scene.add(mesh);
+  }
+  const scafList = all.filter(b => !TYPES[b.type].flat);
+  const scaf = new THREE.InstancedMesh(inst(scaffoldGeometry(), scafList, f => ({ aBusy: [f(2), 2, b => b.busy] })), scafMat, scafList.length);
+  scafList.forEach((b, i) => scaf.setMatrixAt(i, m4.makeTranslation(b.x, 0, b.z))); scaf.frustumCulled = false; scene.add(scaf);
+  camera.position.set(side * .55, side * .45, side * .75); controls.target.set(0, 0, 0);
+  return { scene, uniforms, update(dt) { if (document.getElementById('animate').checked) uniforms.uTime.value += dt; } };
+}
+
+// ---------- UI wiring ----------
+const $ = id => document.getElementById(id);
+const STRESS_NOTE = { plain: 'Plain instanced boxes (art directions A and C are not built for this test). Every rise and fall is computed in the vertex shader from one time value and per-instance born/died times, as in the rendering decision.',
+  B: 'Art direction B at full detail: every Building type\'s shape and roof props, seeded windows on every Floor, and scaffolding with cranes while busy. One draw call per Building type plus one for scaffolding; all animation in the vertex shader.' };
+function fmtLines() { return readSpec().lines.toLocaleString(); }
+function syncOutputs() {
+  $('o-lines').textContent = fmtLines(); $('o-fanin').textContent = $('fanin').value; $('o-churn').textContent = $('churn').value;
+  const a = +$('age').value; $('o-age').textContent = a < 365 ? `${a} days` : `${(a / 365).toFixed(1)} years`;
+  $('o-k').textContent = P.k.toFixed(1); $('o-cap').textContent = P.cap; $('o-steps').textContent = ['gentle', 'default', 'eager'][P.steps] + ` (${FAN_STEPS[P.steps].join(' / ')})`;
+  $('o-churnT').textContent = P.churnT;
+}
+$('legend').innerHTML = Object.entries(LANG).filter(([k]) => k !== 'Rust').map(([k, c]) => `<span style="--c:${c}">${k}</span>`).join('');
+
+function rebuild() {
+  if (active?.scene) active.scene.traverse(o => { if (o.isCSS2DObject) o.element.remove(); });
+  matCache.forEach(m => m.dispose()); matCache.clear();
+  active = sceneKey === 'catalogue' ? buildCatalogue() : sceneKey === 'street' ? buildStreet() : (variant === 'B' ? buildStressKit : buildStress)(+$('count').value);
+  $('stress-note').textContent = variant === 'B' ? STRESS_NOTE.B : STRESS_NOTE.plain;
+  for (const k of ['catalogue', 'street', 'stress']) { $('ui-' + k).hidden = k !== sceneKey; $('tab-' + k).setAttribute('aria-pressed', String(k === sceneKey)); }
+  renderer.shadowMap.enabled = sceneKey !== 'stress';
+  $('vtag').innerHTML = `<b>${variant}</b> ${VARIANTS[variant].name} · ${sceneKey}`;
+  try { history.replaceState(null, '', `#${variant}-${sceneKey}`); } catch { }
+}
+function readHash() { const m = /^#([ABC])(?:-(catalogue|street|stress))?$/.exec(location.hash); if (m) { variant = m[1]; sceneKey = m[2] ?? sceneKey; } }
+function cycle(step) { variant = VKEYS[(VKEYS.indexOf(variant) + step + VKEYS.length) % VKEYS.length]; rebuild(); if (sceneKey === 'catalogue') active.replay(); }
+$('prev').onclick = () => cycle(-1); $('next').onclick = () => cycle(1);
+addEventListener('keydown', e => { if (e.target.closest('input, textarea, select, [contenteditable]')) return;
+  if (e.key === 'ArrowLeft') cycle(-1); if (e.key === 'ArrowRight') cycle(1); });
+addEventListener('hashchange', () => { readHash(); rebuild(); });
+for (const k of ['catalogue', 'street', 'stress']) $('tab-' + k).onclick = () => { sceneKey = k; rebuild(); };
+for (const id of ['lines', 'fanin', 'churn', 'age']) $(id).addEventListener('input', () => { syncOutputs(); if (sceneKey === 'catalogue') { rebuild(); active.replay(); } });
+for (const id of ['k', 'cap', 'steps', 'churnT']) $(id).addEventListener('input', () => { P[id] = +$(id).value; syncOutputs(); rebuild(); if (sceneKey === 'catalogue') active.replay(); });
+$('replay').onclick = () => active.replay?.(); $('demolish').onclick = () => active.demolish?.();
+$('play').onclick = () => { street.playing = !street.playing; $('play').textContent = street.playing ? 'Pause' : 'Play'; };
+$('dir').onclick = () => { street.dir *= -1; $('dir').textContent = street.dir > 0 ? 'Reverse' : 'Forward'; if (!street.playing) $('play').click(); };
+$('speed').onchange = () => street.speed = +$('speed').value;
+$('time').addEventListener('input', () => { street.t = +$('time').value; });
+$('count').onchange = rebuild;
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', rebuild);
+new MutationObserver(rebuild).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+
+function updateStreetUI() {
+  const t = street.t, date = new Date(Date.UTC(2024, 0, 1) + t * 7 * 864e5);
+  $('time').value = t; $('o-time').textContent = `week ${t.toFixed(1)} · ${date.toISOString().slice(0, 10)}`;
+  const past = active.events.filter(e => e[0] <= t).slice(-5);
+  $('log').innerHTML = past.map((e, i) => `<div class="${i === past.length - 1 ? 'now' : ''}">w${String(Math.floor(e[0])).padStart(2, '0')} ${e[1]}</div>`).join('') || '<div>Nothing built yet.</div>';
+}
+
+// ---------- loop ----------
+function resize() { const w = innerWidth, h = innerHeight; renderer.setSize(w, h); labels.setSize(w, h); camera.aspect = w / h; camera.updateProjectionMatrix(); }
+addEventListener('resize', resize);
+const clock = new THREE.Clock(); let frames = 0, acc = 0, lastStreetUI = 0;
+function tick() {
+  const dt = Math.min(clock.getDelta(), .1);
+  if (sceneKey === 'street') {
+    if (street.playing) { street.t = clamp(street.t + dt * street.speed * street.dir * 1.6, 0, TL); if (street.t === TL || street.t === 0) { street.playing = street.t === 0 && street.dir > 0; $('play').textContent = street.playing ? 'Pause' : 'Play'; } }
+    if ((acc - lastStreetUI) > .1 || !street.playing) { updateStreetUI(); lastStreetUI = acc; }
+  }
+  active.update(dt);
+  controls.autoRotate = sceneKey !== 'street' && !reduceMotion; controls.autoRotateSpeed = .5; controls.update();
+  renderer.render(active.scene, camera); labels.render(active.scene, camera);
+  frames++; acc += dt;
+  if (sceneKey === 'stress' && frames % 30 === 0) {
+    $('s-fps').textContent = (frames / acc).toFixed(0) + ' fps'; $('s-ms').textContent = (1000 * acc / frames).toFixed(1) + ' ms';
+    $('s-calls').textContent = renderer.info.render.calls; $('s-tris').textContent = renderer.info.render.triangles.toLocaleString(); frames = 0; acc = 0;
+  }
+  if (frames > 600) { frames = 0; acc = 0; lastStreetUI = 0; }
+  requestAnimationFrame(tick);
+}
+for (const id of ['k', 'cap', 'steps', 'churnT']) P[id] = +$(id).value;
+readHash(); syncOutputs(); resize(); rebuild(); if (sceneKey === 'catalogue') active.replay();
+requestAnimationFrame(tick);
+</script>
