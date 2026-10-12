@@ -6,7 +6,11 @@
 
 **Building**: One file in the repo. It grows and shrinks as the file does.
 
-**Lot**: The fixed patch of ground a Building occupies for its whole life. It is sized for the largest the Building ever gets, and stays empty before the Building is built and after it is demolished. A Lot is never reused.
+**Lot**: The fixed patch of ground a Building occupies for as long as its file stays in one directory. It is sized for the widest the Building gets there, with room for one more step, and stays empty before the Building is built and after it is demolished or relocated. A Lot is never reused.
+
+**Relocation**: A Building whose file moved to another directory. It is taken down on its old Lot and rebuilt on a new one, and stays the same Building, with the same look, name and age. A whole directory moving together is not a Relocation: its street is renamed in place.
+
+**Renovation**: A Building whose Building type changes. It is taken down and rebuilt as the new type on the same Lot.
 
 **Category**: What kind of file a Building represents: source code, tests, docs, config, build/CI, data, assets, generated/vendored, or unknown. It is detected from the path and can be overridden by the user.
 
@@ -14,9 +18,9 @@
 
 **Floor**: One storey of a Building. Height is counted in Floors, and construction and deconstruction add or remove them one at a time.
 
-**Module**: An internal grouping of the repo's own code, never anything outside the repo. A directory with a package manifest is a Module; where there are no manifests, each top-level directory is one.
+**Module**: An internal grouping of the repo's own code, never anything outside the repo. A directory below the root with a package manifest is a Module; any file not under one belongs to its top-level directory's Module. A manifest in the root directory never makes the whole repo one Module. A directory becomes or stops being a Module when its manifest is added or removed.
 
-**District**: A Module drawn as a colour-coded area that contains its Buildings.
+**District**: A Module drawn as a colour-coded area that contains its Buildings. When a Module appears partway through history, its District splits off from the surrounding one in place, and when it disappears the area merges back; no Building moves either way.
 
 **Neighbourhood**: A subdirectory of a Module, drawn as an area inside its District and named like a street ("Mill Lane"). There is only one level: anything deeper belongs to its nearest Neighbourhood.
 
