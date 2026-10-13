@@ -98,7 +98,9 @@ Sources: [Detecting imports](https://github.com/ken-guru/git-city/issues/3), [Ex
 - web-tree-sitter (WASM) behind a pluggable **extractor** interface turns a blob into raw specifiers with kind flags: static, dynamic, type-only, re-export, require.
 - Results are cached by blob ID.
 - **v1 extractors:** TS, TSX, JS and Python.
-- **⏭ Later:** Go, Rust, C#, Ruby, PHP, C and C++. Java and Kotlin are being costed for v1 in [Cost of supporting Java and Kotlin in v1](https://github.com/ken-guru/git-city/issues/28). Files in unsupported languages still become Buildings, just without Roads.
+- **⏭ Later:**
+  - **Java and Kotlin:** costed in [Cost of supporting Java and Kotlin in v1](https://github.com/ken-guru/git-city/issues/28) and postponed until after v1.
+  - Go, Rust, C#, Ruby, PHP, C and C++. Files in unsupported languages still become Buildings, just without Roads.
 
 ### Resolve
 - Specifiers are resolved against each commit's in-memory path set. No filesystem and no `node_modules`.
@@ -644,7 +646,8 @@ These are for slicing into build tickets, in dependency order. Each part should 
 
 Each item has a follow-up ticket labelled `after-v1`, to pick up once v1 has shipped.
 
-- [Import extractors for more languages](https://github.com/ken-guru/git-city/issues/29): Go, Rust, C#, Ruby, PHP, C and C++. Java and Kotlin depend on [Cost of supporting Java and Kotlin in v1](https://github.com/ken-guru/git-city/issues/28).
+- [Import extractors for more languages](https://github.com/ken-guru/git-city/issues/29): Go, Rust, C#, Ruby, PHP, C and C++.
+- [Java and Kotlin support](https://github.com/ken-guru/git-city/issues/37): the costing and the proposed first scope are in [Cost of supporting Java and Kotlin in v1](https://github.com/ken-guru/git-city/issues/28).
 - [Python project-name to import-name mapping](https://github.com/ken-guru/git-city/issues/30)
 - [Lockfiles and transitive dependencies](https://github.com/ken-guru/git-city/issues/31)
 - [Collapse rules: a directory as one Building](https://github.com/ken-guru/git-city/issues/32)
