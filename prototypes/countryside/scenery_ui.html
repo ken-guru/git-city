@@ -1,0 +1,48 @@
+<style>
+[hidden] { display: none !important; }
+#spanel { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 16px; width: 300px; max-height: calc(100% - 150px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 6px; padding: 14px 16px; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 12px; box-shadow: 0 6px 24px rgb(0 0 0 / .12); }
+#spanel h1 { font-family: var(--display); font-weight: 700; font-size: 22px; letter-spacing: .03em; text-transform: uppercase; margin: 0; }
+#spanel h1 small { display: block; font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--muted); letter-spacing: 0; text-transform: none; margin-top: 2px; }
+#vswitch { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(70px + env(safe-area-inset-bottom, 0px)); display: flex; align-items: center; gap: 6px;
+  background: var(--pill); color: var(--pill-fg); border-radius: 999px; padding: 6px 8px; box-shadow: 0 4px 18px rgb(0 0 0 / .3); font: 12px var(--mono); max-width: calc(100% - 32px); }
+#vswitch button { background: transparent; color: inherit; border: 0; font: 600 16px var(--mono); width: 30px; height: 30px; border-radius: 50%; cursor: pointer; }
+#vswitch button:focus-visible { outline: 2px solid var(--accent); }
+#vswitch .tag { padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#vswitch .tag b { color: var(--accent); }
+@media (max-width: 640px) { #spanel { right: 16px; width: auto; max-height: 36%; } #vswitch { bottom: calc(104px + env(safe-area-inset-bottom, 0px)); } }
+</style>
+<aside id="spanel" aria-label="Prototype controls">
+  <h1>Countryside<small>prototype · throwaway · git-city#21 · <span id="srepo"></span></small></h1>
+  <section class="group">
+    <p class="eyebrow">Show</p>
+    <label class="check"><input type="checkbox" id="sc-on" checked> Scenery (off: the plain layout prototype look)</label>
+    <label class="check"><input type="checkbox" id="sc-obst"> Where villages may not build (red: rivers, amber: hills and mountains)</label>
+    <label class="check"><input type="checkbox" id="showLabels2" checked> District names</label>
+    <label class="ctl">Rivers <output id="o-rivers"></output><input id="rivers" type="range" min="1" max="3" step="1" value="2"></label>
+  </section>
+  <section class="group">
+    <p class="eyebrow">Stability</p>
+    <dl class="stats">
+      <dt>Villages</dt><dd id="st-vil">–</dd>
+      <dt>Blocks forced onto hills/rivers</dt><dd id="st-forced">–</dd>
+      <dt>Lots moved by a re-run</dt><dd id="st-moved">–</dd>
+    </dl>
+    <p class="note">Scenery comes from a fixed seed and never moves. A field or tree fades out when a Block is claimed next to it, so every run shows the same landscape at the same commit. Scrub the timeline to watch land being cleared.</p>
+  </section>
+  <section class="group">
+    <p class="eyebrow">Cost</p>
+    <dl class="stats">
+      <dt>Decorations</dt><dd id="st-dec">–</dd>
+      <dt>Triangles</dt><dd id="st-tris">–</dd>
+      <dt>Draw calls</dt><dd id="st-calls">–</dd>
+      <dt>Frame rate</dt><dd id="st-fps">–</dd>
+    </dl>
+  </section>
+</aside>
+<nav id="vswitch" aria-label="Prototype variant switcher">
+  <button id="vprev" aria-label="Previous variant">‹</button>
+  <span class="tag" id="vtag2"></span>
+  <button id="vnext" aria-label="Next variant">›</button>
+</nav>
