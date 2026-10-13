@@ -1,0 +1,779 @@
+<title>City Layout Prototype</title>
+<!--
+  PROTOTYPE, throw away. Answers: "How does the precomputed EvoStreets layout behave as Districts and Buildings
+  appear, grow, relocate and disappear across a real repo's history? Is it stable and readable?"
+  Ticket: City layout evolving over time (ken-guru/git-city#12).
+  Data: the first-parent history of a public repo (paths, days, line deltas, renames), fetched via the GitHub API.
+  Two variants, switchable with #A / #B (artifact pages only receive a plain #hash):
+    A: classic EvoStreets, children alternate left/right along each street in birth order.
+    B: balanced EvoStreets, each child goes on whichever side of its street is currently shorter.
+  Stand-ins: no import data, so every Building uses the base footprint and every Lot one step of headroom.
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700&family=Atkinson+Hyperlegible:wght@400;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: full-bleed 3D viewport; control panel docked left (top sheet on phones); timeline bar along the bottom;
+   variant switcher pill above it. */
+:root {
+  --bg: #e6ebe8; --panel: #f7f8f4; --panel-edge: #c9d0c6; --fg: #1f2622; --muted: #5d6a62;
+  --accent: #d9822b; --accent-fg: #1f2622; --pill: #1f2622; --pill-fg: #f7f8f4;
+  --sky: #dfe7e6; --ground: #c3cdb8; --street: #7d857f; --lot: #b3bca9; --warn: #c0392b;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "Atkinson Hyperlegible", system-ui, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #141a17; --panel: #1c2420; --panel-edge: #34403a; --fg: #e4ebe6; --muted: #9aa8a0;
+    --accent: #e8954a; --accent-fg: #141a17; --pill: #e4ebe6; --pill-fg: #141a17;
+    --sky: #1d2629; --ground: #2c3a30; --street: #555d58; --lot: #38463c; --warn: #ff6b5b; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #141a17; --panel: #1c2420; --panel-edge: #34403a; --fg: #e4ebe6; --muted: #9aa8a0;
+  --accent: #e8954a; --accent-fg: #141a17; --pill: #e4ebe6; --pill-fg: #141a17;
+  --sky: #1d2629; --ground: #2c3a30; --street: #555d58; --lot: #38463c; --warn: #ff6b5b; color-scheme: dark;
+}
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font-family: var(--body); overflow: hidden; }
+#stage { position: fixed; inset: 0; }
+#stage canvas { display: block; }
+.label { font-family: var(--display); font-size: 13px; letter-spacing: .05em; text-transform: uppercase; color: var(--fg);
+  background: color-mix(in srgb, var(--panel) 85%, transparent); border-left: 4px solid var(--c, var(--accent));
+  padding: 1px 6px; border-radius: 2px; white-space: nowrap; pointer-events: none; transition: opacity .4s; }
+.label small { font-family: var(--mono); font-size: 10px; text-transform: none; letter-spacing: 0; color: var(--muted); margin-left: 4px; }
+
+#panel { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 16px; width: 310px; max-height: calc(100% - 170px);
+  overflow: auto; background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 6px;
+  display: flex; flex-direction: column; gap: 14px; padding: 14px 16px 16px; box-shadow: 0 6px 24px rgb(0 0 0 / .12); box-sizing: border-box; }
+#panel h1 { font-family: var(--display); font-weight: 700; font-size: 22px; letter-spacing: .03em; text-transform: uppercase; margin: 0; text-wrap: balance; }
+#panel h1 small { display: block; font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--muted); letter-spacing: 0; text-transform: none; margin-top: 2px; }
+.eyebrow { font-family: var(--display); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); margin: 0 0 6px; }
+.group { display: flex; flex-direction: column; gap: 8px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.ctl { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 8px; font-size: 13px; }
+.ctl input[type=range] { grid-column: 1 / -1; width: 100%; accent-color: var(--accent); }
+.ctl output, .mono { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.btn { font: 600 13px var(--body); padding: 6px 10px; border-radius: 4px; border: 1px solid var(--panel-edge); background: transparent; color: var(--fg); cursor: pointer; }
+.btn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.btn:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+select { font: 13px var(--body); padding: 4px 6px; background: var(--panel); color: var(--fg); border: 1px solid var(--panel-edge); border-radius: 4px; }
+.note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; }
+.stats { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; font-family: var(--mono); font-size: 12px; margin: 0; }
+.stats dt { color: var(--muted); } .stats dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+.stats dd.warn { color: var(--warn); font-weight: 600; }
+#log { font-family: var(--mono); font-size: 11px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; min-height: 8em; }
+#log div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#log .now { color: var(--fg); }
+#log i { font-style: normal; color: var(--accent); }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--muted); }
+.legend span::before { content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; background: var(--c); vertical-align: -1px; }
+label.check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
+label.check input { margin-top: 3px; accent-color: var(--accent); }
+
+#timeline { position: fixed; left: 16px; right: 16px; bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 6px; padding: 8px 12px; box-sizing: border-box;
+  display: grid; grid-template-columns: auto auto 1fr auto; gap: 10px; align-items: center; box-shadow: 0 6px 24px rgb(0 0 0 / .12); }
+#timeline input[type=range] { width: 100%; accent-color: var(--accent); }
+#when { font-family: var(--mono); font-size: 12px; min-width: 15ch; text-align: right; font-variant-numeric: tabular-nums; }
+#switcher { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(70px + env(safe-area-inset-bottom, 0px));
+  display: flex; align-items: center; gap: 6px; background: var(--pill); color: var(--pill-fg);
+  border-radius: 999px; padding: 6px 8px; box-shadow: 0 4px 18px rgb(0 0 0 / .3); font-family: var(--mono); font-size: 12px; max-width: calc(100% - 32px); }
+#switcher button { background: transparent; color: inherit; border: 0; font: 600 16px var(--mono); width: 30px; height: 30px; border-radius: 50%; cursor: pointer; }
+#switcher button:hover { background: color-mix(in srgb, var(--pill-fg) 15%, transparent); }
+#switcher button:focus-visible { outline: 2px solid var(--accent); }
+#switcher .tag { padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#switcher .tag b { color: var(--accent); }
+#err { position: fixed; top: 12px; right: 16px; color: #b00020; font: 13px var(--mono); max-width: 50%; }
+@media (max-width: 640px) {
+  #panel { right: 16px; width: auto; max-height: 38%; }
+  #timeline { grid-template-columns: auto auto 1fr; }
+  #when { grid-column: 1 / -1; text-align: left; }
+  #switcher { bottom: calc(104px + env(safe-area-inset-bottom, 0px)); }
+}
+</style>
+
+<div id="stage"></div>
+
+<aside id="panel" aria-label="Prototype controls">
+  <h1>City layout over time<small>prototype · throwaway · git-city#12 · <span id="repo"></span></small></h1>
+
+  <section class="group">
+    <p class="eyebrow">Now</p>
+    <dl class="stats">
+      <dt>Buildings standing</dt><dd id="s-alive">–</dd>
+      <dt>Lots (built / empty)</dt><dd id="s-lots">–</dd>
+      <dt>Districts</dt><dd id="s-districts">–</dd>
+    </dl>
+    <div id="log" aria-live="polite"></div>
+  </section>
+
+  <section class="group">
+    <p class="eyebrow">Growth</p>
+    <label class="ctl" id="slack-ctl">District cohesion <output id="o-slack"></output><input id="slack" type="range" min="0" max="8" step="0.5" value="8"></label>
+    <label class="ctl" id="spacing-ctl">Village spacing <output id="o-spacing"></output><input id="spacing" type="range" min="1" max="16" step="0.5" value="10"></label>
+    <p class="note" id="slack-note">How many blocks further from the centre a Neighbourhood will reach to stay next to its own blocks (or its District's). 0 keeps the City as round as possible and lets Districts break into pieces; higher keeps Districts whole and lets the outline get lumpier.</p>
+  </section>
+
+  <section class="group">
+    <p class="eyebrow">Re-run stability</p>
+    <p class="note" id="cut-note"></p>
+    <label class="ctl">First run ended at <output id="o-cut"></output><input id="cut" type="range" min="1" value="1"></label>
+    <dl class="stats">
+      <dt>Lots that would move</dt><dd id="s-moved">–</dd>
+      <dt>Streets that would move</dt><dd id="s-smoved">–</dd>
+      <dt>Extension streets</dt><dd id="s-ext">–</dd>
+    </dl>
+    <label class="check"><input type="checkbox" id="showMoved" checked> <span id="showMovedLabel">Highlight</span></label>
+  </section>
+
+  <section class="group">
+    <p class="eyebrow">Identity rules (whole history)</p>
+    <label class="check"><input type="checkbox" id="crossParent"> A directory moved to another parent keeps its street (renamed in place) instead of relocating every file</label>
+    <dl class="stats">
+      <dt>Relocations</dt><dd id="h-reloc">–</dd>
+      <dt>Streets renamed in place</dt><dd id="h-street">–</dd>
+      <dt>Renovations</dt><dd id="h-renov">–</dd>
+      <dt>District splits / merges</dt><dd id="h-split">–</dd>
+      <dt>Empty Lots at the end</dt><dd id="h-empty">–</dd>
+    </dl>
+  </section>
+
+  <section class="group">
+    <p class="eyebrow">Show</p>
+    <label class="check"><input type="checkbox" id="showLabels" checked> District names</label>
+    <label class="check"><input type="checkbox" id="showEmpty" checked> Empty Lots</label>
+    <div class="legend" id="legend"></div>
+  </section>
+</aside>
+
+<nav id="switcher" aria-label="Prototype variant switcher">
+  <button id="prev" aria-label="Previous variant">‹</button>
+  <span class="tag" id="vtag"></span>
+  <button id="next" aria-label="Next variant">›</button>
+</nav>
+
+<div id="timeline">
+  <button class="btn primary" id="play">Play</button>
+  <select id="speed" aria-label="Speed"><option value="5">5 commits/s</option><option value="15" selected>15 commits/s</option><option value="40">40 commits/s</option><option value="100">100 commits/s</option></select>
+  <input id="time" type="range" min="0" step="0.01" value="0" aria-label="Timeline">
+  <span id="when"></span>
+</div>
+<div id="err" role="alert"></div>
+
+<script id="data" type="application/json">/*DATA*/</script>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+
+window.addEventListener('error', e => { document.getElementById('err').textContent = 'Prototype error: ' + e.message; });
+const $ = id => document.getElementById(id);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const DATA = JSON.parse($('data').textContent);
+const PATHS = DATA.paths, COMMITS = DATA.commits, T = COMMITS.length;
+
+// ---------- vocabulary: Category from path (What a Building's shape represents) ----------
+const CAT = {
+  code: '#3c7dc4', tests: '#d9b13b', docs: '#7b6f8f', config: '#2f9c8f', build: '#5e7d3a',
+  data: '#b5583a', assets: '#c4577f', generated: '#6f7781', unknown: '#9a8a6a' };
+function category(p) {
+  const f = p.toLowerCase(), base = f.split('/').pop();
+  if (/(^|\/)(dist|build|vendor|node_modules)\//.test(f) || /(lock\.json|\.lock|lock\.yaml)$/.test(base) || base === 'changelog.md') return 'generated';
+  if (/(^|\/)(__tests__|tests?|__fixtures__|fixtures|__snapshots__)\//.test(f) || /\.(test|spec)\.[a-z]+$/.test(base)) return 'tests';
+  if (/^\.github\/|(^|\/)scripts\//.test(f) || /^(dockerfile|makefile|\.travis\.yml)$/.test(base)) return 'build';
+  if (/\.(md|mdx|txt|rst)$/.test(base) || /(^|\/)docs?\//.test(f)) return 'docs';
+  if (/\.(png|jpe?g|gif|svg|ico|webp|woff2?|ttf)$/.test(base)) return 'assets';
+  if (/\.(csv|sql|db|sqlite)$/.test(base)) return 'data';
+  if (/\.(json|ya?ml|toml|ini)$/.test(base) || /^\.|rc(\.[a-z]+)?$|config\.[a-z]+$/.test(base)) return 'config';
+  if (/\.(m?[jt]sx?|c[jt]s|py|rs|go|java|rb|css|scss|html?|vue|svelte)$/.test(base)) return 'code';
+  return 'unknown';
+}
+const FH = 0.3, K = 3, CAP = 32;
+const floorsFor = (cat, lines) => cat === 'generated' ? 0.4 : Math.min(CAP, Math.max(1, Math.ceil(Math.sqrt(Math.max(1, lines)) / K)));
+
+// ---------- replay: identity rules from "Identity of Buildings and Modules across history" ----------
+const dirname = p => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
+let dirs, dirByPath, root, buildings, lots, fileByPath, events, H, seq;
+function replay(crossParent) {
+  dirs = []; dirByPath = new Map(); buildings = []; lots = []; fileByPath = new Map(); events = []; seq = 0;
+  H = { reloc: 0, street: 0, renov: 0, split: 0, merge: 0 };
+  root = dirNode('', 0);
+  COMMITS.forEach(([day, ev], t) => {
+    // 1. whole-directory moves: renames sharing a (from-prefix -> to-prefix) covering >= 80% of the files under from-prefix
+    const groups = new Map();
+    for (const e of ev) if (e[0] === 'r' && fileByPath.has(PATHS[e[2]])) {
+      const a = PATHS[e[2]].split('/'), b = PATHS[e[1]].split('/');
+      if (a[a.length - 1] !== b[b.length - 1]) continue;       // renamed file: not part of a directory move
+      a.pop(); b.pop();
+      while (a.length > 1 && b.length > 1 && a[a.length - 1] === b[b.length - 1]) { a.pop(); b.pop(); }
+      const from = a.join('/'), to = b.join('/');
+      if (!from || from === to || to.startsWith(from + '/') || !dirByPath.has(from) || dirByPath.has(to)) continue;
+      if (!crossParent && dirname(from) !== dirname(to)) continue;
+      const k = from + '\u0000' + to; groups.set(k, (groups.get(k) ?? 0) + 1);
+    }
+    for (const [k, n] of groups) {
+      const [from, to] = k.split('\u0000');
+      let alive = 0; for (const p of fileByPath.keys()) if (p.startsWith(from + '/')) alive++;
+      if (n < 0.8 * alive) continue;
+      for (const [p, node] of [...dirByPath]) if (p === from || p.startsWith(from + '/')) {
+        const np = to + p.slice(from.length); dirByPath.delete(p); dirByPath.set(np, node); node.path = np; node.names.push([t, np]);
+      }
+      for (const [p, b] of [...fileByPath]) if (p.startsWith(from + '/')) { fileByPath.delete(p); fileByPath.set(to + p.slice(from.length), b); }
+      H.street++; events.push([t, `<i>Street renamed in place</i> ${from}/ → ${to}/`]);
+    }
+    // 2. per-file events
+    for (const [op, pi, prevI, add, del] of ev) {
+      const path = PATHS[pi];
+      if (op === 'r') {
+        const prev = PATHS[prevI], b = fileByPath.get(prev);
+        if (!b && fileByPath.has(path)) continue;              // already moved with its street
+        if (b) {
+          fileByPath.delete(prev); fileByPath.set(path, b);
+          b.lines = Math.max(1, b.lines + add - del);
+          if (isManifest(prev)) manifestOff(dirByPath.get(dirname(prev)), t);
+          if (isManifest(path)) manifestOn(dirNode(dirname(path), t), t);
+          const lot = curLot(b), cat = category(path), lastCat = lot.cats[lot.cats.length - 1][1];
+          if (dirByPath.get(dirname(path)) === lot.dir) {      // same directory: same Lot
+            if (cat !== lastCat) { lot.cats.push([t, cat]); H.renov++; events.push([t, `<i>Renovation</i> ${path.split('/').pop()} (${lastCat} → ${cat})`]); }
+            lot.keys.push([t, floorsFor(cat, b.lines)]);
+          } else {                                             // another directory: Relocation
+            lot.to = t; openLot(b, dirNode(dirname(path), t), t, cat);
+            H.reloc++; events.push([t, `<i>Relocation</i> ${prev} → ${dirname(path) || '/'}/`]);
+          }
+          continue;
+        }
+      }
+      if (op === 'a' || op === 'r') {
+        if (fileByPath.has(path)) continue;
+        const b = { id: buildings.length, lines: Math.max(1, add), lots: [] };
+        buildings.push(b); fileByPath.set(path, b);
+        openLot(b, dirNode(dirname(path), t), t, category(path));
+        if (isManifest(path)) manifestOn(dirNode(dirname(path), t), t);
+      } else if (op === 'm') {
+        const b = fileByPath.get(path); if (!b) continue;
+        b.lines = Math.max(1, b.lines + add - del);
+        const lot = curLot(b); lot.keys.push([t, floorsFor(lot.cats[lot.cats.length - 1][1], b.lines)]);
+      } else if (op === 'd') {
+        const b = fileByPath.get(path); if (!b) continue;
+        curLot(b).to = t; fileByPath.delete(path);
+        if (isManifest(path)) manifestOff(dirByPath.get(dirname(path)), t);
+      }
+    }
+  });
+  events.sort((a, b) => a[0] - b[0]);
+}
+function dirNode(path, t) {
+  let n = dirByPath.get(path);
+  if (n) return n;
+  const parent = path === '' ? null : dirNode(dirname(path), t);
+  n = { id: dirs.length, path, parent, born: t, kids: [], depth: parent ? parent.depth + 1 : 0, manifest: [], names: [[t, path]] };
+  dirs.push(n); dirByPath.set(path, n);
+  if (parent) parent.kids.push({ kind: 'dir', node: n, born: t, seq: seq++ });
+  return n;
+}
+function openLot(b, dir, t, cat) {
+  const lot = { id: lots.length, b, dir, from: t, to: Infinity, keys: [[t, floorsFor(cat, b.lines)]], cats: [[t, cat]] };
+  lots.push(lot); b.lots.push(lot); dir.kids.push({ kind: 'lot', lot, born: t, seq: seq++ });
+  return lot;
+}
+const curLot = b => b.lots[b.lots.length - 1];
+function isManifest(path) { return /(^|\/)package\.json$/.test(path) && dirname(path) !== '' && !/node_modules|__fixtures__|fixtures/.test(path); }
+function manifestOn(dir, t) { if (dir.depth < 1) return; dir.manifest.push([t, Infinity]); H.split++; events.push([t, `<i>District splits off</i> ${dir.path}/`]); }
+function manifestOff(dir, t) { const m = dir?.manifest[dir.manifest.length - 1]; if (m && m[1] === Infinity) { m[1] = t; H.merge++; events.push([t, `<i>District merges back</i> ${dir.path}/`]); } }
+
+// ---------- EvoStreets layout ----------
+const LOT = 1.25, SW = 0.7, GAP = 0.12, END = 0.4, HALF = SW / 2 + GAP + LOT + GAP;   // HALF: street centre to the back of its Lots
+let variant = 'F';
+function measure(node, cut, mode) {
+  const cur = [GAP, GAP], depth = [0, 0], place = [];
+  let i = 0;
+  for (const k of node.kids) {
+    if (k.born > cut) continue;
+    let along, perp, m = null;
+    if (k.kind === 'lot') { along = LOT; perp = LOT; }
+    else { m = measure(k.node, cut, mode); along = m.wl + m.wr + SW; perp = m.len; }
+    const side = mode === 'B' ? (cur[0] <= cur[1] ? 0 : 1) : (i++ % 2);
+    place.push({ k, side, at: cur[side], along, perp, m });
+    cur[side] += along + GAP; depth[side] = Math.max(depth[side], perp + GAP);
+  }
+  return { node, place, cur, len: Math.max(cur[0], cur[1]) + END, wl: depth[0], wr: depth[1] };
+}
+const rot = ([x, z]) => [-z, x];
+// place(): o = street start, u = street direction, left side = rot(u)
+function place(m, o, u, out, pk = null) {
+  const n = rot(u), key = 'd' + m.node.id;
+  out.streets.set(key, { key, pk, dir: m.node, o, u, len: m.len, wl: m.wl, wr: m.wr, cur: m.cur.slice(), ends: m.place.map(p => [p.k.born, p.at + p.along + END]), ext: false });
+  for (const p of m.place) {
+    const s = p.side === 0 ? 1 : -1;
+    if (p.k.kind === 'lot') {
+      const c = p.at + LOT / 2, d = SW / 2 + GAP + LOT / 2;
+      out.lots.set(p.k.lot.id, [o[0] + u[0] * c + n[0] * s * d, o[1] + u[1] * c + n[1] * s * d]);
+    } else {
+      const cu = [n[0] * s, n[1] * s];                       // child street runs away from this street
+      const centre = p.at + (s > 0 ? p.m.wl : p.m.wr) + SW / 2;
+      place(p.m, [o[0] + u[0] * centre + n[0] * s * SW / 2, o[1] + u[1] * centre + n[1] * s * SW / 2], cu, out, key);
+    }
+  }
+  return out;
+}
+const layout = (cut, mode) => place(measure(root, cut, mode), [0, 0], [1, 0], { lots: new Map(), streets: new Map(), extLots: new Set() });
+
+// Variant C: the first run's layout is frozen. Everything newer is appended where there is room; a directory that has
+// no room left continues on an extension street at the City's edge (the end of the main street). Nothing ever moves.
+function layoutFrozen(cut) {
+  const out = layout(cut, 'A');
+  // spatial index of occupied rectangles, each tagged with the street that owns it
+  const B = 4, grid = new Map();
+  const rectOf = (o, u, a0, a1, p0, p1) => {               // along u from a0..a1, along rot(u) from p0..p1
+    const n = rot(u), xs = [], zs = [];
+    for (const a of [a0, a1]) for (const p of [p0, p1]) { xs.push(o[0] + u[0] * a + n[0] * p); zs.push(o[1] + u[1] * a + n[1] * p); }
+    return [Math.min(...xs), Math.min(...zs), Math.max(...xs), Math.max(...zs)];
+  };
+  const cells = r => { const out = []; for (let gx = Math.floor(r[0] / B); gx <= Math.floor(r[2] / B); gx++) for (let gz = Math.floor(r[1] / B); gz <= Math.floor(r[3] / B); gz++) out.push(gx + ',' + gz); return out; };
+  const add = (r, owner) => { for (const c of cells(r)) { if (!grid.has(c)) grid.set(c, []); grid.get(c).push([r, owner]); } };
+  const free = (r, ignore) => { const e = 0.02; for (const c of cells(r)) for (const [q, o] of grid.get(c) ?? []) if (!ignore.has(o) && r[0] < q[2] - e && r[2] > q[0] + e && r[1] < q[3] - e && r[3] > q[1] + e) return false; return true; };
+  for (const s of out.streets.values()) add(rectOf(s.o, s.u, 0, s.len, -(SW / 2 + s.wr), SW / 2 + s.wl), s.key);   // exactly what the first run allotted
+  const active = new Map();                                  // dir id -> street currently receiving its new children
+  for (const s of out.streets.values()) active.set(s.dir.id, s);
+  const later = [];
+  for (const d of dirs) for (const k of d.kids) if (k.born > cut) later.push([d, k]);
+  later.sort((a, b) => a[1].seq - b[1].seq);
+  let extN = 0;
+  const grow = (s, born, newLen) => { if (newLen > s.len) { add(rectOf(s.o, s.u, s.len, newLen, -SW / 2, SW / 2), s.key); s.len = newLen; } s.ends.push([born, s.len]); };
+  // try to put something `along` long and `perp` deep at the end of street s, on either side
+  function tryAppend(s, along, perp, born, owner) {
+    const sides = s.cur[0] <= s.cur[1] ? [0, 1] : [1, 0];
+    for (const side of sides) for (let a = s.cur[side], tries = 0; tries < (s === main ? 4000 : 1); tries++, a += 0.5) {
+      const sg = side === 0 ? 1 : -1, newLen = Math.max(s.len, a + along + GAP + END);
+      const body = rectOf(s.o, s.u, a, a + along, sg * (SW / 2 + GAP), sg * (SW / 2 + GAP + perp));
+      const road = rectOf(s.o, s.u, s.len, newLen, -SW / 2, SW / 2);
+      const ignore = new Set([owner ?? s.key, s.key, s.pk]);
+      if (!free(body, ignore) || (newLen > s.len && !free(road, ignore))) continue;
+      if (a > s.cur[side]) add(rectOf(s.o, s.u, s.cur[side], a, sg * (SW / 2 + GAP), sg * HALF), s.key);   // skipped stretch stays vacant
+      add(body, owner ?? s.key); s.cur[side] = a + along + GAP; grow(s, born, newLen);
+      return { side, a, sg };
+    }
+    return null;
+  }
+  const main = out.streets.get('d0');
+  function newStreet(dir, born, ext) {
+    const key = (ext ? 'x' : 'd') + dir.id + (ext ? '.' + (++extN) : ''), W = 2 * HALF;   // a stub: room for one Lot each side
+    for (const [parent, isMain] of ext ? [[main, true]] : [[active.get(dir.parent.id), false], [main, true]]) {
+      if (!parent) continue;
+      const spot = tryAppend(parent, W, END + LOT + GAP * 2, born, key);
+      if (!spot) continue;
+      const n = rot(parent.u), centre = spot.a + W / 2;
+      const o = [parent.o[0] + parent.u[0] * centre + n[0] * spot.sg * SW / 2, parent.o[1] + parent.u[1] * centre + n[1] * spot.sg * SW / 2];
+      const s = { key, pk: parent.key, dir, o, u: [n[0] * spot.sg, n[1] * spot.sg], len: 0, cur: [GAP, GAP], ends: [], ext: ext || isMain && dir.parent !== root };
+      out.streets.set(key, s); grow(s, born, END); active.set(dir.id, s);
+      return s;
+    }
+    throw new Error('no room on the main street');
+  }
+  for (const [d, k] of later) {
+    if (k.kind === 'dir') { newStreet(k.node, k.born, false); continue; }
+    let s = active.get(d.id) ?? newStreet(d, k.born, false);
+    let spot = tryAppend(s, LOT, LOT, k.born);
+    for (let i = 0; !spot && i < 3; i++) { s = newStreet(d, k.born, true); spot = tryAppend(s, LOT, LOT, k.born); }
+    if (!spot) throw new Error('could not place a Lot for ' + d.path);
+    const n = rot(s.u), c = spot.a + LOT / 2, dd = spot.sg * (SW / 2 + GAP + LOT / 2);
+    out.lots.set(k.lot.id, [s.o[0] + s.u[0] * c + n[0] * dd, s.o[1] + s.u[1] * c + n[1] * dd]);
+    if (s.ext) out.extLots.add(k.lot.id);
+  }
+  return out;
+}
+
+
+// Variants D and E: organic growth in blocks. A block holds 2 rows of 4 Lots and is ringed by streets. Each block belongs
+// to one Neighbourhood (a top-level directory or one of its direct subdirectories). When a Neighbourhood's block is full it
+// claims a free spot on the City's edge, nearest the centre, so the City grows outwards in rings. It prefers spots next to
+// its own blocks (then its District's) if they are at most `slack` blocks further out; otherwise it starts a separate piece.
+// Blocks are claimed in history order and never move, so any re-run produces exactly the same City as a fresh run.
+const BCOLS = 4, BROWS = 2, BW = BCOLS * LOT + (BCOLS - 1) * GAP, BH = BROWS * LOT + GAP, CW = BW + SW, CH = BH + SW, SLOTS = BCOLS * BROWS;
+const neighbourhoodOf = dir => { let n = dir; while (n.depth > 2) n = n.parent; return n; };
+const topOf = dir => { let n = dir; while (n.depth > 1) n = n.parent; return n; };
+let allLotsInOrder = null;
+function layoutBlocks(cut, brick, slack) {
+  if (!allLotsInOrder) { allLotsInOrder = []; for (const d of dirs) for (const k of d.kids) if (k.kind === 'lot') allLotsInOrder.push(k); allLotsInOrder.sort((a, b) => a.seq - b.seq); }
+  const out = { lots: new Map(), streets: new Map(), extLots: new Set(), cells: [], fragments: 0 };
+  const taken = new Map(), frontier = new Set(['0,0']), own = new Map();
+  const centre = (i, j) => [(i + (brick && (j & 1) ? 0.5 : 0)) * CW, j * CH];
+  const nbrs = (i, j) => !brick ? [[i - 1, j], [i + 1, j], [i, j - 1], [i, j + 1]]
+    : (j & 1) ? [[i - 1, j], [i + 1, j], [i, j - 1], [i + 1, j - 1], [i, j + 1], [i + 1, j + 1]]
+              : [[i - 1, j], [i + 1, j], [i - 1, j - 1], [i, j - 1], [i - 1, j + 1], [i, j + 1]];
+  function claim(owner, born) {
+    const top = topOf(owner);
+    let best = null, mine = null, kin = null;
+    for (const key of frontier) {
+      const [i, j] = key.split(',').map(Number), [x, z] = centre(i, j), d = Math.hypot(x, z) / CW;
+      if (!best || d < best.d) best = { i, j, d };
+      let adjMine = false, adjKin = false;
+      for (const [a, b] of nbrs(i, j)) { const c = taken.get(a + ',' + b); if (!c) continue; if (c.owner === owner) adjMine = true; else if (topOf(c.owner) === top) adjKin = true; }
+      if (adjMine && (!mine || d < mine.d)) mine = { i, j, d };
+      if (adjKin && (!kin || d < kin.d)) kin = { i, j, d };
+    }
+    const hadAny = own.has(owner.id);
+    const pick = mine && mine.d <= best.d + slack ? mine : kin && kin.d <= best.d + slack ? kin : best;
+    const [x, z] = centre(pick.i, pick.j), key = pick.i + ',' + pick.j;
+    const fragment = hadAny && pick !== mine;
+    const cell = { i: pick.i, j: pick.j, x, z, owner, born, used: 0, fragment };
+    if (fragment) out.fragments++;
+    taken.set(key, cell); frontier.delete(key); out.cells.push(cell);
+    for (const [a, b] of nbrs(pick.i, pick.j)) { const k = a + ',' + b; if (!taken.has(k)) frontier.add(k); }
+    own.set(owner.id, cell);
+    return cell;
+  }
+  for (const k of allLotsInOrder) {
+    if (k.born > cut) break;
+    const owner = neighbourhoodOf(k.lot.dir);
+    let cell = own.get(owner.id);
+    if (!cell || cell.used === SLOTS) cell = claim(owner, k.born);
+    const s = cell.used++, col = Math.floor(s / BROWS), row = s % BROWS;
+    out.lots.set(k.lot.id, [cell.x - BW / 2 + LOT / 2 + col * (LOT + GAP), cell.z - BH / 2 + LOT / 2 + row * (LOT + GAP)]);
+    if (cell.fragment) out.extLots.add(k.lot.id);
+  }
+  return out;
+}
+
+// Variant F: villages on open countryside. Each District becomes a village, founded at the free spot nearest the centre
+// that keeps `spacing` blocks of open land from every other village. Inside a village, Neighbourhoods grow with variant E's
+// brick blocks around the village's own centre, on a grid turned by a seeded angle. A village keeps one block of open land
+// from its neighbours unless it has nowhere else to grow. Decided in history order only, so re-runs never move anything.
+function rngF(seed) { let a = seed >>> 0; return () => { a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function layoutVillages(cut, spacing, slack) {
+  if (!allLotsInOrder) { allLotsInOrder = []; for (const d of dirs) for (const k of d.kids) if (k.kind === 'lot') allLotsInOrder.push(k); allLotsInOrder.sort((a, b) => a.seq - b.seq); }
+  const out = { lots: new Map(), lotRot: new Map(), streets: new Map(), extLots: new Set(), cells: [], links: [], fragments: 0, villages: [] };
+  const villageOfNbhd = new Map(), villages = new Map();
+  const R = Math.hypot(CW, CH) / 2;                         // a block's radius, for spacing checks
+  const B = 8, grid = new Map();                            // spatial hash of every block centre, tagged with its village
+  const addBlock = c => { const k = Math.floor(c.x / B) + ',' + Math.floor(c.z / B); if (!grid.has(k)) grid.set(k, []); grid.get(k).push(c); };
+  const nearOther = (x, z, v, dist) => {
+    const r = Math.ceil(dist / B), gx = Math.floor(x / B), gz = Math.floor(z / B);
+    for (let a = gx - r; a <= gx + r; a++) for (let b = gz - r; b <= gz + r; b++) for (const c of grid.get(a + ',' + b) ?? [])
+      if (c.village !== v && Math.hypot(c.x - x, c.z - z) < dist) return true;
+    return false;
+  };
+  const nbrs = (i, j) => (j & 1) ? [[i - 1, j], [i + 1, j], [i, j - 1], [i + 1, j - 1], [i, j + 1], [i + 1, j + 1]]
+                                 : [[i - 1, j], [i + 1, j], [i - 1, j - 1], [i, j - 1], [i - 1, j + 1], [i, j + 1]];
+  function districtAt(dir, t) {                             // the District a directory belongs to at time t
+    let best = null;
+    for (let n = dir; n && n.depth > 0; n = n.parent) if (n.manifest.some(([f, e]) => t >= f && t < e)) { best = n; break; }
+    return best ?? topOf(dir);
+  }
+  function found(key, node, born) {
+    let seed = [0, 0];
+    if (villages.size) {
+      const gap = spacing * CW + 2 * R;
+      search: for (let r = 0; r < 4000; r += CW / 2) {
+        const steps = Math.max(1, Math.round(2 * Math.PI * r / (CW / 2))), off = rngF(node.id)() * Math.PI * 2;
+        for (let s = 0; s < steps; s++) { const a = off + s * 2 * Math.PI / steps, x = r * Math.cos(a), z = r * Math.sin(a);
+          if (!nearOther(x, z, null, gap) && [...villages.values()].every(v => Math.hypot(v.seed[0] - x, v.seed[1] - z) >= gap)) { seed = [x, z]; break search; } }
+      }
+    }
+    const v = { key, node, seed, rot: (rngF(node.id * 31 + 7)() - 0.5) * 0.9, taken: new Map(), frontier: new Set(['0,0']), own: new Map(), born };
+    villages.set(key, v); out.villages.push(v);
+    if (villages.size > 1) {                                // country road to the nearest older village
+      let near = null; for (const o of villages.values()) if (o !== v && (!near || Math.hypot(o.seed[0] - seed[0], o.seed[1] - seed[1]) < Math.hypot(near.seed[0] - seed[0], near.seed[1] - seed[1]))) near = o;
+      out.links.push({ a: near.seed, b: seed, born });
+    }
+    return v;
+  }
+  const toWorld = (v, lx, lz) => { const c = Math.cos(v.rot), s = Math.sin(v.rot); return [v.seed[0] + lx * c - lz * s, v.seed[1] + lx * s + lz * c]; };
+  const local = (i, j) => [(i + ((j & 1) ? 0.5 : 0)) * CW, j * CH];
+  function claim(v, owner, born) {
+    let best = null, mine = null, bestFree = null, mineFree = null;
+    for (const key of v.frontier) {
+      const [i, j] = key.split(',').map(Number), [lx, lz] = local(i, j), [x, z] = toWorld(v, lx, lz), d = Math.hypot(lx, lz) / CW;
+      if (nearOther(x, z, v, 2 * R + 0.2)) continue;                         // would overlap another village
+      const roomy = !nearOther(x, z, v, 2 * R + CW);                          // keeps a block of open land
+      let adj = false; for (const [a, b] of nbrs(i, j)) if (v.taken.get(a + ',' + b)?.owner === owner) adj = true;
+      const c = { i, j, x, z, d };
+      if (!best || d < best.d) best = c;
+      if (adj && (!mine || d < mine.d)) mine = c;
+      if (roomy && (!bestFree || d < bestFree.d)) bestFree = c;
+      if (roomy && adj && (!mineFree || d < mineFree.d)) mineFree = c;
+    }
+    const B0 = bestFree ?? best, M0 = bestFree ? mineFree : mine;
+    if (!B0) return null;
+    const hadAny = v.own.has(owner.id);
+    const pick = M0 && M0.d <= B0.d + slack ? M0 : B0;
+    const key = pick.i + ',' + pick.j, fragment = hadAny && pick !== M0;
+    const cell = { i: pick.i, j: pick.j, x: pick.x, z: pick.z, rot: v.rot, owner, born, used: 0, fragment, village: v };
+    if (fragment) out.fragments++;
+    v.taken.set(key, cell); v.frontier.delete(key); out.cells.push(cell); addBlock(cell);
+    for (const [a, b] of nbrs(pick.i, pick.j)) { const k = a + ',' + b; if (!v.taken.has(k)) v.frontier.add(k); }
+    v.own.set(owner.id, cell);
+    return cell;
+  }
+  for (const k of allLotsInOrder) {
+    if (k.born > cut) break;
+    const owner = neighbourhoodOf(k.lot.dir);
+    if (!villageOfNbhd.has(owner.id)) { const dn = owner.depth === 0 ? owner : districtAt(owner, k.born); villageOfNbhd.set(owner.id, 'v' + dn.id); if (!villages.has('v' + dn.id)) found('v' + dn.id, dn, k.born); }
+    const v = villages.get(villageOfNbhd.get(owner.id));
+    let cell = v.own.get(owner.id);
+    if (!cell || cell.used === SLOTS) cell = claim(v, owner, k.born);
+    if (!cell) throw new Error('village ' + v.key + ' has no room');
+    const s = cell.used++, col = Math.floor(s / BROWS), row = s % BROWS;
+    const [lx, lz] = local(cell.i, cell.j);
+    out.lots.set(k.lot.id, toWorld(v, lx - BW / 2 + LOT / 2 + col * (LOT + GAP), lz - BH / 2 + LOT / 2 + row * (LOT + GAP)));
+    out.lotRot.set(k.lot.id, v.rot);
+    if (cell.fragment) out.extLots.add(k.lot.id);
+  }
+  return out;
+}
+
+// ---------- three.js ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+$('stage').appendChild(renderer.domElement);
+const labels = new CSS2DRenderer(); labels.domElement.style.cssText = 'position:absolute;inset:0;pointer-events:none';
+$('stage').appendChild(labels.domElement);
+const camera = new THREE.PerspectiveCamera(40, 1, 0.5, 6000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.maxPolarAngle = Math.PI * 0.47;
+
+const PAL = ['#e07a5f', '#3d85c6', '#81b29a', '#f2cc8f', '#9c6ade', '#4fb0c6', '#d4a5a5', '#a7c957', '#e9c46a', '#6d9dc5', '#ef8354', '#90be6d', '#c77dff', '#5fa8d3'];
+let scene, full, streets, cells = [], links = [], linkMesh, treeMesh, buildMesh, padMesh, streetMesh, pavingMesh, cellMesh, blockMesh, moved = new Set(), regions = [], districtColour = new Map(), camFitted = false;
+const VNAME = { F: 'Villages on open countryside, each grown like E', D: 'Organic blocks: grid, grows outwards in rings', E: 'Organic blocks: offset brick rows', A: 'Classic: alternate sides, laid out once', B: 'Balanced: shorter side first, laid out once', C: 'Frozen first run + extension streets' };
+
+function build(keepCamera) {
+  const cut = +$('cut').value;
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(css('--sky'));
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x667766, 1.6));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.6); sun.position.set(40, 80, 30); scene.add(sun);
+  const organic = variant === 'D' || variant === 'E' || variant === 'F', slack = +$('slack').value;
+  full = variant === 'F' ? layoutVillages(T, +$('spacing').value, slack) : organic ? layoutBlocks(T, variant === 'E', slack) : variant === 'C' ? layoutFrozen(cut) : layout(T, variant);
+  streets = [...full.streets.values()]; cells = full.cells ?? [];
+  $('slack-ctl').hidden = $('slack-note').hidden = !organic; $('spacing-ctl').hidden = variant !== 'F'; links = full.links ?? [];
+  let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+  for (const s of streets) for (const [x, z] of [s.o, [s.o[0] + s.u[0] * s.len, s.o[1] + s.u[1] * s.len]]) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); }
+  for (const c of cells) { minX = Math.min(minX, c.x - CW / 2); maxX = Math.max(maxX, c.x + CW / 2); minZ = Math.min(minZ, c.z - CH / 2); maxZ = Math.max(maxZ, c.z + CH / 2); }
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshLambertMaterial({ color: css('--ground') }));
+  ground.rotation.x = -Math.PI / 2; ground.scale.set(maxX - minX + 60, maxZ - minZ + 60, 1); ground.position.set((minX + maxX) / 2, -0.02, (minZ + maxZ) / 2); scene.add(ground);
+  // Districts: top-level directories, plus manifest directories while their manifest exists; each gets a colour by birth order
+  regions = []; districtColour = new Map(); let ci = 0;
+  for (const n of dirs) if (n.depth === 1 || (n.depth > 1 && n.manifest.length)) {
+    const colour = new THREE.Color(PAL[ci++ % PAL.length]); districtColour.set(n.id, colour);
+    const el = document.createElement('div'); el.className = 'label'; el.style.setProperty('--c', '#' + colour.getHexString());
+    const label = new CSS2DObject(el); scene.add(label);
+    regions.push({ node: n, el, label });
+  }
+  const box = new THREE.BoxGeometry(1, 1, 1); box.translate(0.5, 0, 0);
+  pavingMesh = new THREE.InstancedMesh(box, new THREE.MeshLambertMaterial({ color: 0xffffff }), streets.length);
+  streetMesh = new THREE.InstancedMesh(box, new THREE.MeshLambertMaterial({ color: css('--street') }), streets.length);
+  for (const m of [pavingMesh, streetMesh]) { m.frustumCulled = false; scene.add(m); }
+  const cbox = new THREE.BoxGeometry(1, 1, 1);
+  cellMesh = new THREE.InstancedMesh(cbox, new THREE.MeshLambertMaterial({ color: css('--street') }), Math.max(1, cells.length));
+  blockMesh = new THREE.InstancedMesh(cbox, new THREE.MeshLambertMaterial({ color: 0xffffff }), Math.max(1, cells.length));
+  for (const m of [cellMesh, blockMesh]) { m.frustumCulled = false; m.count = cells.length; scene.add(m); }
+  linkMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial({ color: css('--street') }), Math.max(1, links.length));
+  linkMesh.count = links.length; linkMesh.frustumCulled = false; scene.add(linkMesh);
+  if (variant === 'F') {                     // trees on the open land the villages never reach
+    const tr = rngF(99), N = 2500, cone = new THREE.ConeGeometry(0.45, 1.4, 6); cone.translate(0, 0.7, 0);
+    treeMesh = new THREE.InstancedMesh(cone, new THREE.MeshLambertMaterial({ color: '#5f8f4e' }), N); let n = 0;
+    const near = (x, z) => cells.some(c => Math.hypot(c.x - x, c.z - z) < CW * 1.1) || links.some(l => { const [ax, az] = l.a, [bx, bz] = l.b, dx = bx - ax, dz = bz - az, L = dx * dx + dz * dz || 1, u = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / L)); return Math.hypot(ax + u * dx - x, az + u * dz - z) < 1.2; });
+    for (let i = 0; i < N * 3 && n < N; i++) { const x = minX - 20 + tr() * (maxX - minX + 40), z = minZ - 20 + tr() * (maxZ - minZ + 40); if (near(x, z)) continue;
+      const k = 0.6 + tr() * 0.8; m4.compose(v.set(x, 0, z), q.identity(), s3.set(k, k, k)); treeMesh.setMatrixAt(n++, m4); }
+    treeMesh.count = n; scene.add(treeMesh);
+  }
+  padMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(LOT, 0.04, LOT), new THREE.MeshLambertMaterial({ color: 0xffffff }), lots.length);
+  const body = new THREE.BoxGeometry(1, 1, 1); body.translate(0, 0.5, 0);
+  buildMesh = new THREE.InstancedMesh(body, new THREE.MeshLambertMaterial({ color: 0xffffff }), lots.length);
+  for (const m of [padMesh, buildMesh]) { m.frustumCulled = false; scene.add(m); }
+  if (!keepCamera || !camFitted) {
+    const cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2, span = Math.max(maxX - minX, maxZ - minZ, 20);
+    controls.target.set(cx, 0, cz); camera.position.set(cx + span * 0.3, span * 0.7, cz + span * 0.75); camFitted = true;
+  }
+  stability(cut);
+  $('vtag').innerHTML = `<b>${variant}</b> ${VNAME[variant]}`;
+  try { history.replaceState(null, '', '#' + variant); } catch { }
+}
+function stability(cut) {
+  moved = new Set(); let smoved = 0, sfirst = 0, lfirst = 0;
+  if (variant === 'D' || variant === 'E' || variant === 'F') {
+    const first = variant === 'F' ? layoutVillages(cut, +$('spacing').value, +$('slack').value) : layoutBlocks(cut, variant === 'E', +$('slack').value); lfirst = first.lots.size; sfirst = first.cells.length;
+    for (const [id, p] of first.lots) { const q = full.lots.get(id); if (Math.hypot(p[0] - q[0], p[1] - q[1]) > 1e-3) moved.add(id); }
+    for (let i = 0; i < first.cells.length; i++) if (first.cells[i].x !== cells[i].x || first.cells[i].z !== cells[i].z) smoved++;
+  } else if (variant === 'C') {
+    for (const l of lots) if (l.from <= cut) lfirst++;
+    for (const s of streets) if (s.dir.born <= cut && !s.ext && s.key.startsWith('d')) sfirst++;
+    moved = full.extLots;
+  } else {
+    const first = layout(cut, variant); lfirst = first.lots.size; sfirst = first.streets.size;
+    for (const [id, p] of first.lots) { const q = full.lots.get(id); if (Math.hypot(p[0] - q[0], p[1] - q[1]) > 1e-3) moved.add(id); }
+    for (const [k, s] of first.streets) { const q = full.streets.get(k); if (Math.hypot(s.o[0] - q.o[0], s.o[1] - q.o[1]) > 1e-3 || s.u[0] !== q.u[0] || s.u[1] !== q.u[1]) smoved++; }
+  }
+  const ext = streets.filter(s => s.ext).length;
+  const organic = variant === 'D' || variant === 'E' || variant === 'F';
+  if (organic) { const m = moved; moved = full.extLots; $('s-moved').textContent = `${m.size} of ${lfirst}`; $('s-moved').classList.toggle('warn', m.size > 0);
+    $('s-smoved').textContent = `${smoved} of ${sfirst} blocks`; $('s-smoved').classList.toggle('warn', smoved > 0);
+    const torn = new Set(cells.filter(c => c.fragment).map(c => topOf(c.owner).id)).size;
+    $('s-ext').previousElementSibling.textContent = 'Detached District pieces';
+    $('s-ext').textContent = `${full.fragments} blocks (${torn} Districts)`;
+    $('showMovedLabel').textContent = 'Highlight Lots in detached pieces';
+    $('cut-note').textContent = 'Pretend the first run stopped at this commit and a later run added the rest. Blocks are claimed in history order, so the earlier City is exactly a part of the later one.';
+    $('o-cut').textContent = `commit ${cut} · ${COMMITS[Math.min(cut, T - 1)][0]}`; return; }
+  $('s-ext').previousElementSibling.textContent = 'Extension streets';
+  const lm = variant === 'C' ? 0 : moved.size;
+  $('s-moved').textContent = `${lm} of ${lfirst}`; $('s-moved').classList.toggle('warn', lm > 0);
+  $('s-smoved').textContent = `${smoved} of ${sfirst}`; $('s-smoved').classList.toggle('warn', smoved > 0);
+  $('s-ext').textContent = variant === 'C' ? `${ext} (${full.extLots.size} Lots on them)` : 'n/a';
+  $('showMovedLabel').textContent = variant === 'C' ? 'Highlight Lots placed on extension streets' : 'Highlight Lots that would move';
+  $('cut-note').textContent = variant === 'C'
+    ? 'This variant is laid out as if a first run ended here: that layout is frozen and everything newer is appended where it fits. Move the slider to see how the City would look after that re-run.'
+    : 'Pretend the first run stopped at this commit and a later run added the rest. Lots that would have to move are shown in red.';
+  $('o-cut').textContent = `commit ${cut} · ${COMMITS[Math.min(cut, T - 1)][0]}`;
+}
+
+// ---------- per-frame state: a pure function of t ----------
+const D = 4;   // transition length, in commits
+const ease = x => { x = Math.min(1, Math.max(0, x)); return 1 - Math.pow(1 - x, 3); };
+function heightAt(lot, t) {
+  if (t < lot.from) return 0;
+  const k = lot.keys; let lo = 0, hi = k.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (k[mid][0] <= t) lo = mid; else hi = mid - 1; }
+  const prev = lo > 0 ? k[lo - 1][1] : 0;
+  let h = prev + (k[lo][1] - prev) * ease((t - k[lo][0]) / D);
+  if (t >= lot.to) h *= 1 - ease((t - lot.to) / D);
+  return h;
+}
+function catAt(lot, t) { let c = lot.cats[0][1]; for (const [ct, cc] of lot.cats) if (ct <= t) c = cc; return c; }
+// District colour of a directory at time t: its top-level directory's colour, blended toward each manifest District it sits in
+function pavingColour(dir, t, ground, out) {
+  const chain = []; for (let n = dir; n && n.depth > 0; n = n.parent) chain.unshift(n);
+  if (!chain.length) return out.copy(ground);
+  out.copy(districtColour.get(chain[0].id) ?? ground).lerp(ground, 1 - ease((t - chain[0].born) / D));
+  for (const n of chain.slice(1)) {
+    if (!n.manifest.length) continue;
+    let a = 0; for (const [f, e] of n.manifest) if (t >= f) a = Math.max(a, ease((t - f) / D) * (t >= e ? 1 - ease((t - e) / D) : 1));
+    if (a > 0) out.lerp(districtColour.get(n.id), a);
+  }
+  return out.lerp(ground, 0.35);
+}
+const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), s3 = new THREE.Vector3(), col = new THREE.Color(), Y = new THREE.Vector3(0, 1, 0);
+const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
+let lastLogT = -1;
+function frame(t) {
+  const showMoved = $('showMoved').checked, showEmpty = $('showEmpty').checked, showLabels = $('showLabels').checked;
+  const lotC = new THREE.Color(css('--lot')), warn = new THREE.Color(variant === 'C' ? css('--accent') : css('--warn')), ground = new THREE.Color(css('--ground'));
+  let alive = 0, empty = 0;
+  for (const lot of lots) {
+    const p = full.lots.get(lot.id);
+    if (!p || t < lot.from) { padMesh.setMatrixAt(lot.id, ZERO); buildMesh.setMatrixAt(lot.id, ZERO); continue; }
+    if (t < lot.to) alive++; else empty++;
+    // the Lot itself: stays after its Building leaves
+    if (showEmpty || t < lot.to + D) {
+      const g = ease((t - lot.from) / D);
+      q.setFromAxisAngle(Y, -(full.lotRot?.get(lot.id) ?? 0));
+      m4.compose(v.set(p[0], 0.05, p[1]), q, s3.set(g, 1, g)); padMesh.setMatrixAt(lot.id, m4);
+      padMesh.setColorAt(lot.id, showMoved && moved.has(lot.id) ? warn : lotC);
+    } else padMesh.setMatrixAt(lot.id, ZERO);
+    const h = heightAt(lot, t);
+    if (h * FH < 0.01) { buildMesh.setMatrixAt(lot.id, ZERO); continue; }   // empty Lot: collapse, never flatten
+    q.setFromAxisAngle(Y, -(full.lotRot?.get(lot.id) ?? 0));
+    m4.compose(v.set(p[0], 0.07, p[1]), q, s3.set(0.9, h * FH, 0.9)); buildMesh.setMatrixAt(lot.id, m4);
+    col.set(CAT[catAt(lot, t)]);
+    if (showMoved && moved.has(lot.id)) col.lerp(warn, 0.75);
+    buildMesh.setColorAt(lot.id, col);
+  }
+  for (const m of [padMesh, buildMesh]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+  // streets (and their District paving) grow to their furthest child built so far
+  const labelAt = new Map();
+  streets.forEach((s, i) => {
+    let len = 0; for (const [b, e] of s.ends) if (b <= t) len += (e - len) * ease((t - b) / D);
+    if (len < 0.01) { streetMesh.setMatrixAt(i, ZERO); pavingMesh.setMatrixAt(i, ZERO); return; }
+    q.setFromAxisAngle(Y, Math.atan2(-s.u[1], s.u[0]));
+    m4.compose(v.set(s.o[0], 0.04, s.o[1]), q, s3.set(len, 0.03, SW)); streetMesh.setMatrixAt(i, m4);
+    m4.compose(v.set(s.o[0], 0.01, s.o[1]), q, s3.set(len, 0.02, 2 * HALF)); pavingMesh.setMatrixAt(i, m4);
+    pavingMesh.setColorAt(i, pavingColour(s.dir, t, ground, col));
+    if (!labelAt.has(s.dir.id) && !s.ext) labelAt.set(s.dir.id, s);
+  });
+  for (const m of [streetMesh, pavingMesh]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+  cells.forEach((c, i) => {
+    if (t < c.born) { cellMesh.setMatrixAt(i, ZERO); blockMesh.setMatrixAt(i, ZERO); return; }
+    const g = ease((t - c.born) / D);
+    q.setFromAxisAngle(Y, -(c.rot ?? 0));
+    m4.compose(v.set(c.x, 0.0, c.z), q, s3.set(CW * g, 0.04, CH * g)); cellMesh.setMatrixAt(i, m4);
+    m4.compose(v.set(c.x, 0.01, c.z), q, s3.set((BW + 0.2) * g, 0.04, (BH + 0.2) * g)); blockMesh.setMatrixAt(i, m4);
+    blockMesh.setColorAt(i, pavingColour(c.owner, t, ground, col));
+    for (let n = c.owner; n && n.depth > 0; n = n.parent) if (!labelAt.has(n.id)) labelAt.set(n.id, { o: [c.x - BW / 2, c.z - BH / 2 - 0.3], u: [0, 0] });
+  });
+  links.forEach((l, i) => {                  // country roads are built as the newer village is founded
+    const g = ease((t - l.born) / D); if (t < l.born) { linkMesh.setMatrixAt(i, ZERO); return; }
+    const dx = l.b[0] - l.a[0], dz = l.b[1] - l.a[1], L = Math.hypot(dx, dz) * g;
+    q.setFromAxisAngle(Y, Math.atan2(-dz, dx));
+    m4.compose(v.set(l.a[0] + dx * g / 2, 0.02, l.a[1] + dz * g / 2), q, s3.set(L, 0.03, SW * 0.8)); linkMesh.setMatrixAt(i, m4);
+  });
+  linkMesh.instanceMatrix.needsUpdate = true;
+  for (const m of [cellMesh, blockMesh]) { m.instanceMatrix.needsUpdate = true; if (m.instanceColor) m.instanceColor.needsUpdate = true; }
+  // District labels at the start of the District's street
+  let districts = 0;
+  for (const r of regions) {
+    const n = r.node, s = labelAt.get(n.id);
+    const isPkg = n.manifest.some(([f, e]) => t >= f && t < e);
+    const on = s && t >= n.born && (n.depth === 1 || isPkg);
+    if (on) {
+      districts++;
+      r.label.position.set(s.o[0] + s.u[0] * 0.6, 0.6, s.o[1] + s.u[1] * 0.6);
+      let name = n.names[0][1]; for (const [nt, np] of n.names) if (nt <= t) name = np;
+      r.el.innerHTML = `${name.split('/').pop()}<small>${isPkg ? 'package' : 'directory'}</small>`;
+    }
+    r.el.style.opacity = on && showLabels ? 1 : 0;
+  }
+  $('s-alive').textContent = alive.toLocaleString(); $('s-lots').textContent = `${alive.toLocaleString()} / ${empty.toLocaleString()}`;
+  $('s-districts').textContent = districts;
+  if (Math.floor(t) !== lastLogT) {
+    lastLogT = Math.floor(t);
+    const past = events.filter(e => e[0] <= t).slice(-6);
+    $('log').innerHTML = past.map((e, i) => `<div class="${i === past.length - 1 ? 'now' : ''}" title="${e[1].replace(/<[^>]+>/g, '')}">${COMMITS[e[0]][0]} ${e[1]}</div>`).join('') || '<div>No identity events yet.</div>';
+  }
+  const ci = Math.min(T - 1, Math.floor(t));
+  $('when').textContent = `${COMMITS[ci][0]} · ${ci + 1}/${T}`;
+}
+
+// ---------- UI ----------
+function rules() {
+  replay($('crossParent').checked);
+  $('h-reloc').textContent = H.reloc; $('h-street').textContent = H.street; $('h-renov').textContent = H.renov;
+  $('h-split').textContent = `${H.split} / ${H.merge}`; $('h-empty').textContent = lots.filter(l => l.to !== Infinity).length;
+  lastLogT = -1;
+}
+$('repo').textContent = DATA.repo;
+$('legend').innerHTML = Object.entries(CAT).map(([k, c]) => `<span style="--c:${c}">${k}</span>`).join('');
+$('time').max = T - 1 + D; $('cut').max = T - 1; $('cut').value = Math.floor(T * 0.6);
+const VKEYS = ['F', 'E', 'D', 'A', 'B', 'C'];
+const readHash = () => { const m = /^#([A-F])$/.exec(location.hash); if (m) variant = m[1]; };
+const cycle = d => { variant = VKEYS[(VKEYS.indexOf(variant) + d + VKEYS.length) % VKEYS.length]; build(); };
+$('prev').onclick = () => cycle(-1); $('next').onclick = () => cycle(1);
+addEventListener('keydown', e => { if (e.target.closest('input, select, textarea')) return; if (e.key === 'ArrowLeft') cycle(-1); if (e.key === 'ArrowRight') cycle(1); if (e.key === ' ') { e.preventDefault(); $('play').click(); } });
+addEventListener('hashchange', () => { readHash(); build(); });
+let playing = false, t = 0;
+$('play').onclick = () => { if (!playing && t >= T - 1 + D) t = 0; playing = !playing; $('play').textContent = playing ? 'Pause' : 'Play'; };
+$('time').addEventListener('input', () => { t = +$('time').value; });
+$('cut').addEventListener('input', () => { if (variant === 'C') build(true); else stability(+$('cut').value); });
+$('crossParent').addEventListener('change', () => { rules(); allLotsInOrder = null; build(true); });
+$('slack').addEventListener('input', () => { $('o-slack').textContent = $('slack').value + ' blocks';
+$('spacing').addEventListener('input', () => { $('o-spacing').textContent = $('spacing').value + ' blocks'; build(true); });
+$('o-spacing').textContent = $('spacing').value + ' blocks'; build(true); });
+$('o-slack').textContent = $('slack').value + ' blocks';
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => build(true));
+function resize() { renderer.setSize(innerWidth, innerHeight); labels.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+addEventListener('resize', resize);
+const clock = new THREE.Clock();
+function tick() {
+  const dt = Math.min(clock.getDelta(), 0.1);
+  if (playing) { t = Math.min(T - 1 + D, t + dt * +$('speed').value); if (t >= T - 1 + D) { playing = false; $('play').textContent = 'Play'; } $('time').value = t; }
+  frame(t); controls.update(); renderer.render(scene, camera); labels.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+readHash(); rules(); resize(); build(); t = T - 1 + D; $('time').value = t;
+requestAnimationFrame(tick);
+</script>
