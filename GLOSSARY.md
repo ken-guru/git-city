@@ -32,13 +32,13 @@
 
 **Lane**: One unit of a Road's capacity in one direction. Every Road has at least one Lane each way; a stronger connection adds Lanes, and a Road can have more Lanes one way than the other when the dependency mostly runs one way. A Road that no connection uses is an unpaved track.
 
-**External Dependency**: A package from outside the repo that a Module's manifest declares as a direct dependency. It is never a Module. Packages that are only pulled in transitively, or imported without being declared, are not External Dependencies.
+**External Dependency**: A package from outside the repo that a Module's manifest declares as a direct dependency, including development-only ones. It is never a Module. Packages that are only pulled in transitively, or imported without being declared, are not External Dependencies.
 
-**External City**: An External Dependency, or a group of them sharing a name prefix (for example everything under `react`), drawn on the horizon outside the city limits.
+**External City**: A group of External Dependencies sharing a scope or name prefix (for example everything under `@babel`), large enough to stand on its own, drawn on the horizon beyond the Countryside.
 
-**Outskirts**: A single External City that holds every External Dependency too minor to get its own.
+**Outskirts**: A single External City that holds every External Dependency whose group is too small to get its own.
 
-**Highway**: A connection leaving the city limits towards an External City. It is distinct from a Road, which never leaves the City.
+**Highway**: A connection from a District towards an External City. Highways leave each District for an orbital motorway that rings the Countryside, and spurs lead from it to the External Cities. It is distinct from a Road, which never leaves the City.
 
 **Timeline**: The ordered sequence of commits that the City animates through and that the viewer can scrub.
 
