@@ -20,9 +20,13 @@
 
 **Module**: An internal grouping of the repo's own code, never anything outside the repo. A directory below the root with a package manifest is a Module; any file not under one belongs to its top-level directory's Module. A manifest in the root directory never makes the whole repo one Module. A directory becomes or stops being a Module when its manifest is added or removed.
 
-**District**: A Module drawn as a colour-coded area that contains its Buildings. When a Module appears partway through history, its District splits off from the surrounding one in place, and when it disappears the area merges back; no Building moves either way.
+**District**: A Module drawn as a colour-coded village of Blocks, set apart from the others on the Countryside. A Module that appears partway through history becomes a village of its own only if it already existed when its first files arrived; otherwise it splits off in place inside the village it grew up in, and merges back the same way. No Building moves either way.
 
-**Neighbourhood**: A subdirectory of a Module, drawn as an area inside its District and named like a street ("Mill Lane"). There is only one level: anything deeper belongs to its nearest Neighbourhood.
+**Neighbourhood**: A subdirectory of a Module, drawn as the Blocks it owns inside its District and named like a street ("Mill Lane"). There is only one level: anything deeper belongs to its nearest Neighbourhood.
+
+**Block**: A small group of Lots ringed by streets and owned by one Neighbourhood. A District grows by adding Blocks as close to its centre as it can, and a Block never moves.
+
+**Countryside**: The open land between Districts. Roads and Highways cross it; its fields, forests, hills, mountains and rivers are scenery only and never stand for anything in the repo.
 
 **Road**: A connection between code inside the City, made when one file in the repo references another. A Road between Districts bundles every file-to-file connection crossing between them.
 
