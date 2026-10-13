@@ -1,0 +1,138 @@
+<style>
+[hidden] { display: none !important; }
+/* ---- player, shared ---- */
+#player { position: fixed; inset: 0; pointer-events: none; font-family: var(--body); color: var(--fg); }
+#player > * { pointer-events: auto; }
+.pbtn { font: 600 15px var(--mono); width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--panel-edge); background: var(--panel); color: var(--fg); cursor: pointer; display: inline-grid; place-items: center; padding: 0; flex: none; }
+.pbtn.primary { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); width: 46px; height: 46px; font-size: 18px; }
+.pbtn[aria-pressed="true"] { outline: 2px solid var(--accent); outline-offset: 1px; }
+.pbtn:focus-visible, .seg button:focus-visible, .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.seg { display: inline-flex; border: 1px solid var(--panel-edge); border-radius: 999px; overflow: hidden; background: var(--panel); }
+.seg button { font: 600 12px var(--body); border: 0; background: transparent; color: var(--fg); padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }
+.chip { font: 600 12px var(--mono); border: 1px solid var(--panel-edge); border-radius: 999px; background: var(--panel); color: var(--fg); padding: 6px 10px; cursor: pointer; white-space: nowrap; }
+.when { font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.when b { font-family: var(--display); font-size: 17px; letter-spacing: .03em; display: block; color: var(--fg); }
+.when span { color: var(--muted); }
+.scrub { position: relative; height: 34px; flex: 1; min-width: 120px; }
+.scrub canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.scrub input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.scrub input:focus-visible + .focusring { outline: 2px solid var(--accent); outline-offset: 2px; }
+.focusring { position: absolute; inset: 0; border-radius: 4px; pointer-events: none; }
+.status { font: 12px var(--mono); color: var(--muted); white-space: nowrap; }
+.status.loading { color: var(--accent); }
+.status.loading::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 6px; animation: pulse 0.9s infinite alternate; }
+@keyframes pulse { from { opacity: .25; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .status.loading::before { animation: none; } }
+#vswitch { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 6px;
+  background: var(--pill); color: var(--pill-fg); border-radius: 999px; padding: 6px 8px; box-shadow: 0 4px 18px rgb(0 0 0 / .3); font: 12px var(--mono); max-width: calc(100% - 32px); z-index: 5; }
+#vswitch button { background: transparent; color: inherit; border: 0; font: 600 16px var(--mono); width: 30px; height: 30px; border-radius: 50%; cursor: pointer; }
+#vswitch button:focus-visible { outline: 2px solid var(--accent); }
+#vswitch .tag { padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#vswitch .tag b { color: var(--accent); }
+#help { position: fixed; top: calc(60px + env(safe-area-inset-top, 0px)); left: 16px; max-width: 280px; font-size: 12px; line-height: 1.45; color: var(--muted);
+  background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--panel-edge); border-radius: 6px; padding: 8px 10px; }
+#help kbd { font: 11px var(--mono); border: 1px solid var(--panel-edge); border-radius: 3px; padding: 0 4px; background: var(--panel); color: var(--fg); }
+
+/* ---- A: media bar ---- */
+#pa { position: fixed; left: 16px; right: 16px; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); background: var(--panel); border: 1px solid var(--panel-edge);
+  border-radius: 10px; box-shadow: 0 6px 24px rgb(0 0 0 / .14); padding: 10px 12px; display: grid; gap: 8px 12px;
+  grid-template-columns: auto 1fr auto; grid-template-areas: "ctl scrub when" "ctl opts opts"; align-items: center; }
+#pa .ctl { grid-area: ctl; display: flex; gap: 6px; align-items: center; }
+#pa .scrub { grid-area: scrub; }
+#pa .when { grid-area: when; text-align: right; min-width: 15ch; }
+#pa .opts { grid-area: opts; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+@media (max-width: 640px) {
+  #pa { grid-template-columns: 1fr auto; grid-template-areas: "scrub scrub" "ctl when" "opts opts"; }
+}
+
+/* ---- B: story ribbon ---- */
+#pb { position: fixed; left: 0; right: 0; bottom: 0; background: color-mix(in srgb, var(--panel) 94%, transparent); border-top: 1px solid var(--panel-edge);
+  box-shadow: 0 -6px 24px rgb(0 0 0 / .10); padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); display: grid; gap: 8px;
+  grid-template-columns: auto 1fr auto; grid-template-areas: "ctl head opts" "ribbon ribbon ribbon"; align-items: center; }
+#pb .ctl { grid-area: ctl; display: flex; gap: 6px; align-items: center; }
+#pb .head { grid-area: head; display: flex; gap: 14px; align-items: baseline; min-width: 0; overflow: hidden; }
+#pb .opts { grid-area: opts; display: flex; gap: 8px; align-items: center; }
+#pb .ribbon { grid-area: ribbon; height: 92px; }
+#pb .recent { font: 12px var(--mono); color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+#pb .recent i { font-style: normal; color: var(--accent); }
+@media (max-width: 640px) {
+  #pb { grid-template-columns: 1fr auto; grid-template-areas: "head head" "ribbon ribbon" "ctl opts"; }
+  #pb .ribbon { height: 70px; }
+  #pb .recent { display: none; }
+}
+
+#tip { position: fixed; width: 250px; background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 6px; box-shadow: 0 6px 20px rgb(0 0 0 / .18);
+  padding: 8px 10px; font-size: 12px; line-height: 1.4; pointer-events: none; z-index: 6; }
+#tip .t { font-family: var(--display); font-size: 15px; letter-spacing: .03em; }
+#tip .s { font-family: var(--mono); color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+#tip ul { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; }
+#tip li { display: flex; gap: 6px; align-items: center; font-family: var(--mono); font-size: 11px; }
+#tip li .sw { width: 9px; height: 9px; border-radius: 2px; background: var(--c); flex: none; }
+#tip li .n { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+#tip .ev { margin-top: 6px; border-top: 1px solid var(--panel-edge); padding-top: 4px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+#tip .ev i { font-style: normal; color: var(--accent); }
+@media (max-width: 640px) {
+  #pb .opts { flex-wrap: wrap; justify-content: flex-end; }
+  #pb .seg button { padding: 6px 7px; font-size: 11px; }
+}
+/* ---- C: minimal ---- */
+#pc-date { position: fixed; top: calc(60px + env(safe-area-inset-top, 0px)); right: 16px; text-align: right; background: color-mix(in srgb, var(--panel) 80%, transparent);
+  border-radius: 6px; padding: 4px 10px; }
+#pc-pill { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(22px + env(safe-area-inset-bottom, 0px)); display: flex; gap: 6px; align-items: center;
+  background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 999px; padding: 5px 6px; box-shadow: 0 6px 24px rgb(0 0 0 / .16); }
+#pc-edge { position: fixed; left: 0; right: 0; bottom: 0; height: 8px; transition: height .18s ease; }
+#pc-edge:hover, #pc-edge:focus-within, #pc-edge.open { height: 40px; }
+#pc-edge .scrub { position: absolute; inset: 0; height: auto; }
+@media (prefers-reduced-motion: reduce) { #pc-edge { transition: none; } }
+</style>
+
+<nav id="vswitch" aria-label="Prototype variant switcher">
+  <button id="vprev" aria-label="Previous variant">‹</button>
+  <span class="tag" id="vtag2"></span>
+  <button id="vnext" aria-label="Next variant">›</button>
+</nav>
+<div id="help"><b>Try:</b> play, reverse, change speed, switch <i>Real time</i> / <i>Per commit</i>, and drag far ahead of the buffered (darker) part of the timeline to see loading. Keys: <kbd>Space</kbd> play, <kbd>←</kbd>/<kbd>→</kbd> one commit, <kbd>Shift</kbd>+arrows 5%, <kbd>Home</kbd>/<kbd>End</kbd>, <kbd>R</kbd> reverse, <kbd>[</kbd>/<kbd>]</kbd> variant. <button class="chip" id="hidehelp">Hide</button></div>
+
+<div id="player" aria-label="Timeline player">
+  <!-- A: media bar -->
+  <section id="pa" data-v="A" aria-label="Player">
+    <div class="ctl">
+      <button class="pbtn" data-act="start" aria-label="Jump to first commit">⏮</button>
+      <button class="pbtn" data-act="reverse" aria-label="Play backwards" aria-pressed="false">◀</button>
+      <button class="pbtn primary" data-act="play" aria-label="Play">▶</button>
+      <button class="pbtn" data-act="end" aria-label="Jump to latest">⏭</button>
+    </div>
+    <div class="scrub" data-style="bars"><canvas></canvas><input type="range" min="0" max="1000000" step="1" aria-label="Timeline"><span class="focusring"></span></div>
+    <div class="when"></div>
+    <div class="opts">
+      <span class="seg" data-ctl="mode"><button data-mode="real">Real time</button><button data-mode="equal">Per commit</button></span>
+      <span class="seg" data-ctl="speed"></span>
+      <span class="status"></span>
+    </div>
+  </section>
+  <!-- B: story ribbon -->
+  <section id="pb" data-v="B" aria-label="Player">
+    <div class="ctl">
+      <button class="pbtn" data-act="reverse" aria-label="Play backwards" aria-pressed="false">◀</button>
+      <button class="pbtn primary" data-act="play" aria-label="Play">▶</button>
+      <button class="pbtn" data-act="end" aria-label="Jump to latest">⏭</button>
+    </div>
+    <div class="head"><div class="when"></div><div class="recent"></div></div>
+    <div class="opts">
+      <span class="seg" data-ctl="mode"><button data-mode="real">Real time</button><button data-mode="equal">Per commit</button></span>
+      <span class="seg" data-ctl="speed"></span>
+    </div>
+    <div class="scrub ribbon" data-style="stream"><canvas></canvas><input type="range" min="0" max="1000000" step="1" aria-label="Timeline"><span class="focusring"></span></div>
+  </section>
+  <!-- C: minimal -->
+  <div id="pc-date" data-v="C" class="when"></div>
+  <div id="pc-pill" data-v="C">
+    <button class="pbtn" data-act="reverse" aria-label="Play backwards" aria-pressed="false">◀</button>
+    <button class="pbtn primary" data-act="play" aria-label="Play">▶</button>
+    <button class="chip" data-ctl="speedcycle"></button>
+    <button class="chip" data-ctl="modecycle"></button>
+    <span class="status"></span>
+  </div>
+  <div id="pc-edge" data-v="C"><div class="scrub" data-style="thin"><canvas></canvas><input type="range" min="0" max="1000000" step="1" aria-label="Timeline"><span class="focusring"></span></div></div>
+</div>
