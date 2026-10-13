@@ -98,7 +98,7 @@ Sources: [Detecting imports](https://github.com/ken-guru/git-city/issues/3), [Ex
 - web-tree-sitter (WASM) behind a pluggable **extractor** interface turns a blob into raw specifiers with kind flags: static, dynamic, type-only, re-export, require.
 - Results are cached by blob ID.
 - **v1 extractors:** TS, TSX, JS and Python.
-- **⏭ Later:** Go, Rust, Java, C#, Ruby, PHP, C and C++ (see Q2). Files in unsupported languages still become Buildings, just without Roads.
+- **⏭ Later:** Go, Rust, C#, Ruby, PHP, C and C++. Java and Kotlin are being costed for v1 in [Cost of supporting Java and Kotlin in v1](https://github.com/ken-guru/git-city/issues/28). Files in unsupported languages still become Buildings, just without Roads.
 
 ### Resolve
 - Specifiers are resolved against each commit's in-memory path set. No filesystem and no `node_modules`.
@@ -167,7 +167,7 @@ All of these are computed by the CLI.
 | Unknown | House |
 
 - Dot-directories are classified like any other path: `.github/` is Build/CI, `.vscode/` is Config.
-- **⏭ Later:** age weathering of materials (see Q3).
+- **⏭ Later:** age weathering of materials.
 
 ### Modules and Districts
 - **What a Module is:** a directory below the root with a package manifest. Any other file belongs to its top-level directory's Module. A root manifest never forms a Module; its Highways leave from the City centre.
@@ -417,7 +417,7 @@ When the output would exceed the budget, or history passes about 50k commits:
 ### Serving
 - **Chunk names:** index plus a content hash, so hosts can cache them forever. The world file is never cached.
 - **Over HTTP:** GitHub Pages, any static host, or `git-city serve`.
-- **From disk:** opened from `file://`, the page shows a one-line explanation and the command to run (see Q4).
+- **From disk:** opened from `file://`, the page shows a one-line explanation and the command to run.
 
 ---
 
@@ -460,7 +460,7 @@ Each also runs as `git city …`.
   - street-width cap.
 
   It changes the look, never privacy.
-- **⏭ Later:** `collapse` rules, which turn a whole directory into one Building (see Q3). Changing `exclude` or `collapse` asks for a full rebuild, with a warning that the layout changes.
+- **⏭ Later:** `collapse` rules, which turn a whole directory into one Building. Changing `exclude` or `collapse` asks for a full rebuild, with a warning that the layout changes.
 
 ### Flags
 **Flags can only make output more private.** Anything that reveals more lives only in config.
@@ -517,7 +517,7 @@ Sources: [Rendering](https://github.com/ken-guru/git-city/issues/4), [Building g
   - Slow devices drop a render-resolution step.
 
 ### Shared animation timing
-Proposed for confirmation (see Q1). Units are **commits of Timeline position**, as in every prototype.
+Units are **commits of Timeline position**, as in every prototype.
 - **Easing:** ease-out cubic.
 - **Base duration:** **D = 4 commits**.
 
