@@ -28,9 +28,9 @@
 
 **Countryside**: The open land between Districts. Roads and Highways cross it; its fields, forests, hills, mountains and rivers are scenery only and never stand for anything in the repo.
 
-**Road**: A connection between code inside the City, made when one file in the repo references another. A Road between Districts bundles every file-to-file connection crossing between them.
+**Road**: A connection between code inside the City, made when one file in the repo references another. Between Districts, Roads form one shared network across the Countryside: each connection travels the shortest way along it, so a Road carries every connection that passes over it. Inside a District, connections run along its Block streets.
 
-**Lane**: One unit of a Road's capacity in one direction. A stronger connection has more Lanes, and a Road can have more Lanes one way than the other when the dependency mostly runs one way.
+**Lane**: One unit of a Road's capacity in one direction. Every Road has at least one Lane each way; a stronger connection adds Lanes, and a Road can have more Lanes one way than the other when the dependency mostly runs one way. A Road that no connection uses is an unpaved track.
 
 **External Dependency**: A package from outside the repo that a Module's manifest declares as a direct dependency. It is never a Module. Packages that are only pulled in transitively, or imported without being declared, are not External Dependencies.
 
