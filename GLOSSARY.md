@@ -44,6 +44,8 @@
 
 **Contributor**: A person who authored commits. Contributors are absent from the City unless the user opts in, and then they appear under a Real name or a Pseudonym.
 
+**Automation**: Every bot that authored commits (release, dependency and CI bots), shown together as a single Contributor.
+
 **Real name**: The actual name of a file, Module or concept as it appears in the repo.
 
 **Pseudonym**: A replacement name the user chooses explicitly for a specific file, Module or concept.
