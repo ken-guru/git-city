@@ -4,7 +4,9 @@
 
 **City**: The whole visualization of one repo at one point on the Timeline.
 
-**Building**: One file in the repo. It grows and shrinks as the file does.
+**Building**: One file in the repo. It grows and shrinks as the file does. Only when the user asks for it does a whole directory stand as one Building; files are never grouped automatically.
+
+**Step**: How far the player moves through history at once: one commit, or for older history on a very long timeline, a day, week or month of commits taken together. Steps change how finely the past plays back, never where anything stands.
 
 **Lot**: The fixed patch of ground a Building occupies for as long as its file stays in one directory. It is sized for the widest the Building gets there, with room for one more step, and stays empty before the Building is built and after it is demolished or relocated. A Lot is never reused.
 
