@@ -20,7 +20,7 @@
 
 **Module**: An internal grouping of the repo's own code, never anything outside the repo. A directory below the root with a package manifest is a Module; any file not under one belongs to its top-level directory's Module. A manifest in the root directory never makes the whole repo one Module. A directory becomes or stops being a Module when its manifest is added or removed.
 
-**District**: A Module drawn as a colour-coded village of Blocks, set apart from the others on the Countryside. A Module that appears partway through history becomes a village of its own only if it already existed when its first files arrived; otherwise it splits off in place inside the village it grew up in, and merges back the same way. No Building moves either way.
+**District**: A Module drawn as a village of Blocks, coloured by its Role, set apart from the others on the Countryside. A Module that appears partway through history becomes a village of its own only if it already existed when its first files arrived; otherwise it splits off in place inside the village it grew up in, and merges back the same way. No Building moves either way.
 
 **Neighbourhood**: A subdirectory of a Module, drawn as the Blocks it owns inside its District and named like a street ("Mill Lane"). There is only one level: anything deeper belongs to its nearest Neighbourhood.
 
@@ -50,9 +50,9 @@
 
 **Generated name**: A name GitCity makes up automatically from the City's Theme. Unlike a Pseudonym, the user doesn't choose it. A District's Generated name combines a proper name with its Role's noun ("Ashford Keep"); External Cities and the City itself get a proper name only.
 
-**Theme**: The naming style for a whole City, such as modern or medieval. It supplies the word pieces for place, street and person names and a noun for every Role.
+**Theme**: The naming and colour style for a whole City, such as modern or medieval. It supplies the word pieces for place, street and person names and a noun for every Role, and may supply a palette with a hue for every Role.
 
-**Role**: What a Module is for (auth, tests, docs, API, UI, data…), detected from its path and the mix of Categories inside it. A Theme turns a Role into a noun, for example docs → "Archive".
+**Role**: What a Module is for (auth, tests, docs, API, UI, data…), detected from its path and the mix of Categories inside it. A Theme turns a Role into a noun, for example docs → "Archive", and its palette turns a Role into a hue, so Districts with the same Role share a hue.
 
 **Label**: The fallback display for something with no Pseudonym, Generated name or revealed Real name. It is the thing's type plus its birth-order number, for example "TypeScript file 412". It identifies nothing outside the City.
 
