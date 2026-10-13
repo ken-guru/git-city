@@ -642,14 +642,16 @@ These are for slicing into build tickets, in dependency order. Each part should 
 
 ## 14. Later (beyond the v1 cut)
 
-- Extractors for Go, Rust, Java, C#, Ruby, PHP, C and C++. Rules for Go and Maven are in the import research.
-- Python project-name to import-name tables.
-- Lockfiles and transitive dependencies.
-- `collapse` rules (a directory as one Building).
-- Age weathering of materials.
-- User Theme files loaded from a path.
-- An LLM namer behind the Namer interface.
-- `WebGPURenderer`.
+Each item has a follow-up ticket labelled `after-v1`, to pick up once v1 has shipped.
+
+- [Import extractors for more languages](https://github.com/ken-guru/git-city/issues/29): Go, Rust, C#, Ruby, PHP, C and C++. Java and Kotlin depend on [Cost of supporting Java and Kotlin in v1](https://github.com/ken-guru/git-city/issues/28).
+- [Python project-name to import-name mapping](https://github.com/ken-guru/git-city/issues/30)
+- [Lockfiles and transitive dependencies](https://github.com/ken-guru/git-city/issues/31)
+- [Collapse rules: a directory as one Building](https://github.com/ken-guru/git-city/issues/32)
+- [Age weathering of Building materials](https://github.com/ken-guru/git-city/issues/33)
+- [User Theme files loaded from a path](https://github.com/ken-guru/git-city/issues/34)
+- [LLM namer behind the Namer interface](https://github.com/ken-guru/git-city/issues/35)
+- [WebGPURenderer upgrade](https://github.com/ken-guru/git-city/issues/36)
 
 ## 15. Out of scope
 
