@@ -1,0 +1,56 @@
+<style>
+[hidden] { display: none !important; }
+#spanel { position: fixed; top: calc(12px + env(safe-area-inset-top, 0px)); left: 16px; width: 300px; max-height: calc(100% - 150px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 6px; padding: 14px 16px; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 12px; box-shadow: 0 6px 24px rgb(0 0 0 / .12); }
+#spanel h1 { font-family: var(--display); font-weight: 700; font-size: 22px; letter-spacing: .03em; text-transform: uppercase; margin: 0; }
+#spanel h1 small { display: block; font-family: var(--mono); font-weight: 400; font-size: 11px; color: var(--muted); letter-spacing: 0; text-transform: none; margin-top: 2px; }
+.seg2 { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--panel-edge); border-radius: 6px; overflow: hidden; }
+.seg2 button { font: 600 12px var(--body); border: 0; background: transparent; color: var(--fg); padding: 6px 8px; cursor: pointer; }
+.seg2 button[aria-pressed="true"] { background: var(--accent); color: var(--accent-fg); }
+#legend2 { display: grid; gap: 2px; font: 12px var(--mono); }
+#legend2 button { display: flex; gap: 8px; align-items: center; border: 0; background: transparent; color: var(--fg); font: inherit; padding: 3px 4px; border-radius: 4px; cursor: pointer; text-align: left; }
+#legend2 button:hover, #legend2 button:focus-visible, #legend2 button[aria-pressed="true"] { background: color-mix(in srgb, var(--accent) 18%, transparent); outline: none; }
+#legend2 .sw { width: 10px; height: 10px; border-radius: 50%; background: var(--c); flex: none; }
+#legend2 .n { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+#caption2 { position: fixed; top: calc(14px + env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%); max-width: min(640px, calc(100% - 360px));
+  background: color-mix(in srgb, var(--panel) 90%, transparent); border: 1px solid var(--panel-edge); border-radius: 6px; padding: 6px 12px; font-size: 13px; line-height: 1.4; }
+#caption2:empty { display: none; }
+#caption2 .who { font-weight: 700; } #caption2 .sw { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--c); margin-right: 6px; }
+#caption2 .meta { font: 11px var(--mono); color: var(--muted); display: block; }
+#feed { position: fixed; right: 16px; top: calc(70px + env(safe-area-inset-top, 0px)); width: 300px; max-height: calc(100% - 220px); overflow: hidden;
+  background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 6px; padding: 10px 12px; font-size: 12px; display: flex; flex-direction: column; gap: 6px; }
+#feed .row2 { display: grid; grid-template-columns: 10px 1fr; gap: 2px 8px; }
+#feed .sw { width: 9px; height: 9px; border-radius: 50%; background: var(--c); margin-top: 4px; }
+#feed .meta { grid-column: 2; font: 10px var(--mono); color: var(--muted); }
+#vswitch { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(70px + env(safe-area-inset-bottom, 0px)); display: flex; align-items: center; gap: 6px;
+  background: var(--pill); color: var(--pill-fg); border-radius: 999px; padding: 6px 8px; box-shadow: 0 4px 18px rgb(0 0 0 / .3); font: 12px var(--mono); max-width: calc(100% - 32px); }
+#vswitch button { background: transparent; color: inherit; border: 0; font: 600 16px var(--mono); width: 30px; height: 30px; border-radius: 50%; cursor: pointer; }
+#vswitch button:focus-visible { outline: 2px solid var(--accent); }
+#vswitch .tag { padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#vswitch .tag b { color: var(--accent); }
+@media (max-width: 900px) { #caption2 { max-width: calc(100% - 32px); top: auto; bottom: calc(118px + env(safe-area-inset-bottom, 0px)); } #feed { display: none; } }
+@media (max-width: 640px) { #spanel { right: 16px; width: auto; max-height: 34%; } #vswitch { bottom: calc(104px + env(safe-area-inset-bottom, 0px)); } #caption2 { bottom: calc(150px + env(safe-area-inset-bottom, 0px)); } }
+</style>
+<aside id="spanel" aria-label="Prototype controls">
+  <h1>Contributors<small>prototype · throwaway · git-city#24 · <span id="srepo"></span></small></h1>
+  <section class="group">
+    <p class="eyebrow">Contributors (opt-in)</p>
+    <span class="seg2" id="lvl"><button data-l="off">Off</button><button data-l="anon">Anonymous</button><button data-l="generated">Generated names</button><button data-l="real">Real</button></span>
+    <label class="check"><input type="checkbox" id="msgs" checked> Commit messages (opt-in; Concept Pseudonyms apply)</label>
+    <p class="note">Play the timeline. At high speed the caption switches to a summary. Hover or tap a person to light up the Buildings they changed in the last 120 commits.</p>
+  </section>
+  <section class="group">
+    <p class="eyebrow">People</p>
+    <div id="legend2"></div>
+  </section>
+  <dl class="stats" hidden><dt>Decorations</dt><dd id="st-dec">–</dd></dl>
+  <input type="checkbox" id="sc-on" checked hidden><input type="checkbox" id="sc-obst" hidden><input type="checkbox" id="rd-marks" checked hidden>
+</aside>
+<div id="caption2" aria-live="polite"></div>
+<aside id="feed" aria-label="Recent commits" hidden></aside>
+<nav id="vswitch" aria-label="Prototype variant switcher">
+  <button id="vprev" aria-label="Previous variant">‹</button>
+  <span class="tag" id="vtag2"></span>
+  <button id="vnext" aria-label="Next variant">›</button>
+</nav>
