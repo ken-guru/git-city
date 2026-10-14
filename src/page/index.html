@@ -10,12 +10,16 @@
         --bg: #e9eef2;
         --fg: #1d2630;
         --panel: rgba(255, 255, 255, 0.85);
+        --ribbon-unloaded: rgba(29, 38, 48, 0.05);
+        --ribbon-loaded: rgba(29, 38, 48, 0.22);
       }
       @media (prefers-color-scheme: dark) {
         :root {
           --bg: #10161c;
           --fg: #dde5ec;
           --panel: rgba(24, 32, 40, 0.85);
+          --ribbon-unloaded: rgba(221, 229, 236, 0.06);
+          --ribbon-loaded: rgba(221, 229, 236, 0.26);
         }
       }
       html,
@@ -32,20 +36,92 @@
       }
       #player {
         position: fixed;
-        left: 16px;
-        bottom: 16px;
+        left: 0;
+        right: 0;
+        bottom: 0;
         display: flex;
-        gap: 12px;
-        align-items: center;
-        padding: 8px 12px;
-        border-radius: 8px;
+        flex-direction: column;
+        gap: 6px;
+        padding: 8px 16px 10px;
         background: var(--panel);
       }
       #player button {
         font: inherit;
-        min-width: 4.5em;
         padding: 4px 10px;
         cursor: pointer;
+        white-space: nowrap;
+      }
+      #player button[aria-pressed="true"] {
+        font-weight: 600;
+        text-decoration: underline;
+      }
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 12px;
+        align-items: center;
+      }
+      .readout {
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .caption {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        opacity: 0.8;
+      }
+      .speeds {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .track {
+        position: relative;
+        height: 56px;
+      }
+      .track:focus-within {
+        outline: 2px solid var(--fg);
+        outline-offset: 2px;
+      }
+      #ribbon {
+        width: 100%;
+        height: 56px;
+      }
+      #scrubber {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        opacity: 0;
+        cursor: ew-resize;
+      }
+      .tooltip {
+        position: absolute;
+        bottom: 100%;
+        margin-bottom: 6px;
+        transform: translateX(-50%);
+        max-width: 280px;
+        padding: 6px 8px;
+        border-radius: 6px;
+        background: var(--panel);
+        pointer-events: none;
+        font-size: 12px;
+      }
+      .tooltip .swatch {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        margin-right: 6px;
+        border-radius: 2px;
+        vertical-align: -1px;
+      }
+      .status {
+        min-height: 1.4em;
+        font-size: 12px;
+        opacity: 0.8;
       }
       #notice {
         position: fixed;
@@ -77,6 +153,11 @@
         opacity: 0.7;
         font-size: 11px;
       }
+      @media (max-width: 640px) {
+        .caption {
+          display: none;
+        }
+      }
       [hidden] {
         display: none !important;
       }
@@ -85,8 +166,22 @@
   <body>
     <div id="notice" hidden></div>
     <div id="player" hidden>
-      <button id="play" type="button">Play</button>
-      <span id="status" aria-live="polite"></span>
+      <div class="controls">
+        <button id="back" type="button">Play backwards</button>
+        <button id="play" type="button">Play</button>
+        <button id="latest" type="button">Jump to latest</button>
+        <span class="readout"><span id="date"></span> · <span id="count"></span></span>
+        <span id="caption" class="caption"></span>
+        <button id="mode-real" type="button" aria-pressed="true">Real time</button>
+        <button id="mode-commit" type="button" aria-pressed="false">Per commit</button>
+        <span id="speeds" class="speeds"></span>
+      </div>
+      <div id="track" class="track">
+        <canvas id="ribbon" aria-hidden="true"></canvas>
+        <input id="scrubber" type="range" min="0" max="10000" value="0" aria-label="Position in history" />
+        <div id="tooltip" class="tooltip" role="tooltip" hidden></div>
+      </div>
+      <span id="status" class="status" aria-live="polite"></span>
     </div>
     <script type="module" src="%PAGE_SCRIPT%"></script>
   </body>

@@ -1,6 +1,6 @@
 import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, PerspectiveCamera, PlaneGeometry, Scene, WebGLRenderer } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
+import { type Chunk, decodeWorld, FormatVersionError, type World } from "../shared/format.js";
 import { type PlacesFile, parsePlaces } from "../shared/places.js";
 import { CityBuildings } from "./buildings.js";
 import { addCountryside, type CountrysideHandle } from "./countryside.js";
@@ -9,12 +9,14 @@ import { ChunkStream } from "./chunks.js";
 import { BLOCK_WORLD, cityExtent, lotBlock, placeLot } from "./lots.js";
 import { cityTitle, createDistrictLabels } from "./labels.js";
 import { LodController, type LodSettings, settingsFor } from "./lod.js";
+import { RibbonData } from "./ribbon-data.js";
+import { Ribbon } from "./ribbon.js";
 import { RoadLayer } from "./roads.js";
-import { appendTimelines, buildTimelines, durationFor, TRANSITION_COMMITS, type Timelines } from "./state.js";
+import { appendTimelines, buildTimelines, durationFor, type Timelines } from "./state.js";
+import { Player, Timescale } from "./timescale.js";
 
-/** Tuning values for the City. The player and camera tickets replace the rest. */
+/** Tuning values for the City. */
 const TUNING = {
-  commitsPerSecond: 2,
   /** District labels are hidden beyond this many City extents from the camera, at a height of `labelHeight`. */
   labelDistance: 1.5,
   labelHeight: 3,
@@ -35,9 +37,7 @@ const PALETTE = {
 } as const;
 
 const notice = document.getElementById("notice")!;
-const player = document.getElementById("player")!;
-const playButton = document.getElementById("play") as HTMLButtonElement;
-const status = document.getElementById("status")!;
+const playerBar = document.getElementById("player")!;
 
 function showNotice(...parts: (string | Node)[]) {
   notice.replaceChildren(...parts);
@@ -77,8 +77,10 @@ async function main() {
   const stream = new ChunkStream(world, (name) => fetchBytes(`chunks/${name}`));
   // The first chunk is needed to play at all; the rest stream in behind it, in order.
   let timelines: Timelines;
+  let first: Chunk;
   try {
-    timelines = buildTimelines(await stream.load(0), world.stints.file.length, world.language);
+    first = await stream.load(0);
+    timelines = buildTimelines(first, world.stints.file.length, world.language);
   } catch (e) {
     if (e instanceof FormatVersionError) return showVersionNotice();
     throw e;
@@ -90,10 +92,13 @@ async function main() {
   } catch (e) {
     console.warn("District names could not be loaded", e);
   }
-  play(world, timelines, stream, places);
+  const onChunk = play(world, timelines, stream, first, places);
   stream
     .loadAll((index, chunk) => {
-      if (index > 0) appendTimelines(timelines, chunk, world.language);
+      if (index > 0) {
+        appendTimelines(timelines, chunk, world.language);
+        onChunk(chunk);
+      }
     })
     .catch((e: unknown) => {
       if (e instanceof FormatVersionError) return showVersionNotice();
@@ -101,9 +106,8 @@ async function main() {
     });
 }
 
-function play(world: World, timelines: Timelines, stream: ChunkStream, places?: PlacesFile) {
-  const commitCount = world.commitDays.length;
-  const endTime = commitCount - 1 + TRANSITION_COMMITS;
+/** Builds the City and its player. Returns the hook that feeds each later chunk to the ribbon's data. */
+function play(world: World, timelines: Timelines, stream: ChunkStream, first: Chunk, places?: PlacesFile): (chunk: Chunk) => void {
   // The City's extent is set by its Blocks: the layout places them all, so the page frames what it has.
   const extent = cityExtent(world);
   const theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -124,7 +128,6 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   scene.add(ground);
   // The Blocks are where the layout put them, so the scenery fades out next to each claimed Block.
   const blocks = blockSites(world);
-  const duration = durationFor(TUNING.commitsPerSecond);
   const countryside: CountrysideHandle = addCountryside(scene, {
     // The City seed the CLI wrote into the world file: the same seed the layout used.
     seed: world.citySeed,
@@ -184,6 +187,12 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   if (labels) document.body.append(labels.element);
   if (places) document.title = cityTitle(places);
 
+  const scale = new Timescale(world.commitDays, world.stepCommits);
+  const player = new Player(scale);
+  const data = new RibbonData(world, places, (district) => blockPaving(district, places?.districts, theme).getStyle());
+  data.addChunk(first);
+  const ribbon = new Ribbon(data, player, () => stream.loadedThrough());
+
   function resize() {
     renderer.setSize(innerWidth, innerHeight);
     labels?.setSize(innerWidth, innerHeight);
@@ -205,47 +214,36 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   }
   applyDetail();
 
-  let time = 0;
-  let playing = false;
-  let last = performance.now();
+  playerBar.hidden = false;
 
-  function setPlaying(value: boolean) {
-    if (value && time >= endTime) time = 0;
-    playing = value;
-    playButton.textContent = playing ? "Pause" : "Play";
-  }
-  playButton.addEventListener("click", () => setPlaying(!playing));
-  setPlaying(false);
-  player.hidden = false;
-
+  // The City draws the Timeline at the playhead's speed, so transitions last as long as the viewer sees them.
   function draw(t: number) {
-    city.update(t, TUNING.commitsPerSecond, camera.position);
+    const rate = player.stepsPerSecond();
+    const duration = durationFor(rate);
+    city.update(t, rate, camera.position);
     blockLayer.update(t, duration, camera.position, detail.massFar);
     roadLayer.update(t, duration);
-    const commit = Math.min(commitCount - 1, Math.max(0, Math.floor(t)));
-    const day = new Date(world.commitDays[commit]! * SECONDS_PER_DAY * 1000).toISOString().slice(0, 10);
-    status.textContent = Math.floor(t) > stream.loadedThrough()
-      ? "Loading this part of history…"
-      : `Commit ${commit + 1} of ${commitCount} · ${day}`;
   }
 
+  let last = performance.now();
   renderer.setAnimationLoop((now) => {
     if (lod.frame(now)) applyDetail();
     const seconds = Math.min(0.1, (now - last) / 1000);
     last = now;
-    if (playing) {
-      // The City holds at the last commit that has loaded, and carries on when the next chunk arrives.
-      const loaded = stream.loadedThrough();
-      const limit = loaded >= commitCount - 1 ? endTime : loaded;
-      time = Math.min(limit, time + seconds * TUNING.commitsPerSecond);
-      if (time >= endTime) setPlaying(false);
-    }
-    draw(time);
+    // Playback holds at the last loaded commit, and carries on when the next chunk arrives.
+    player.advance(seconds, stream.loadedThrough());
+    draw(player.buffer(stream.loadedThrough()).displayed);
+    ribbon.update();
     controls.update();
     renderer.render(scene, camera);
     labels?.update(camera);
     labels?.render(scene, camera);
   });
+
+  return (chunk: Chunk) => {
+    data.addChunk(chunk);
+    ribbon.markDirty();
+  };
 }
 
 /** The Blocks in world-file form: each with its position in Block widths, its village, and the commit that claimed it. */
