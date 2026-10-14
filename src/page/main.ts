@@ -2,6 +2,7 @@ import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, Pe
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { decodeChunk, decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
 import { CityBuildings } from "./buildings.js";
+import { LodController, settingsFor } from "./lod.js";
 import { buildTimelines, gridColumns, gridSlot, TRANSITION_COMMITS } from "./state.js";
 
 /** Tuning values for the City. The player and camera tickets replace the rest. */
@@ -75,7 +76,6 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
   const extent = columns * TUNING.lotSpacing;
 
   const renderer = new WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   document.body.prepend(renderer.domElement);
 
   const scene = new Scene();
@@ -121,7 +121,16 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
     camera.updateProjectionMatrix();
   }
   addEventListener("resize", resize);
-  resize();
+
+  // Level of detail follows the measured frame rate. A new level changes what is drawn, not the data.
+  const lod = new LodController();
+  function applyDetail() {
+    const detail = settingsFor(lod.level);
+    city.setDetail(detail);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, detail.pixelRatioCap));
+    resize();
+  }
+  applyDetail();
 
   let time = 0;
   let playing = false;
@@ -144,6 +153,7 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
   }
 
   renderer.setAnimationLoop((now) => {
+    if (lod.frame(now)) applyDetail();
     const seconds = Math.min(0.1, (now - last) / 1000);
     last = now;
     if (playing) {
