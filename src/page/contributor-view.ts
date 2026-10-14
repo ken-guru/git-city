@@ -56,7 +56,8 @@ export function createContributorView(
       },
     );
   }
-  const caption = document.getElementById("caption");
+  // The ribbon owns #caption (its identity caption); the commit caption has its own element.
+  const caption = document.getElementById("commit-caption");
 
   return {
     update(t, commitsPerSecond, when) {
