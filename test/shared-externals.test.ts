@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cityVisibility, CITY_FADE_STEPS, HIGHWAY_BUILD_STEPS, horizonRadius, highwayVisibility, MIN_SPUR_GAP, placeAngles } from "../src/shared/externals.js";
+import { cityVisibility, CITY_FADE_STEPS, HIGHWAY_BUILD_STEPS, horizonRadius, highwayVisibility, MIN_SPUR_GAP, placeAngles, ringLanesOf } from "../src/shared/externals.js";
 
 /**
  * Seam under test: the horizon, spur placement and the arrival and departure timing (SPEC §7). Expected values are
@@ -28,6 +28,42 @@ describe("spur angles", () => {
 
   it("returns angles in the order given, not the sorted order", () => {
     expect(placeAngles([3, 1])).toEqual([3, 1]);
+  });
+});
+
+describe("Lanes on the ring", () => {
+  // Eight segments of π/4 each: segment i's middle is at (i + ½)·π/4, so segments 0 to 3 cover the first half turn.
+  const quarter = Math.PI / 4;
+
+  it("adds the Lanes of two overlapping arcs on the segments where they overlap", () => {
+    // Arc A goes the short way from 0 to π/2 with 2 Lanes; arc B from π/4 to π with 3 Lanes.
+    const lanes = ringLanesOf(
+      [
+        { from: 0, to: Math.PI / 2, lanes: 2 },
+        { from: quarter, to: Math.PI, lanes: 3 },
+      ],
+      8,
+    );
+    expect(lanes).toEqual([
+      2, // only A
+      5, // A and B overlap
+      3, // only B
+      3, // only B
+      1, // nothing: the minimum of 1 each way
+      1,
+      1,
+      1,
+    ]);
+  });
+
+  it("takes the shorter way round, so an arc from π/4 to 7π/4 goes backwards through 0", () => {
+    // Back from π/4 through 0 to −π/4: the segments either side of 0 carry the 4 Lanes, the rest keep the minimum.
+    const lanes = ringLanesOf([{ from: quarter, to: (7 * Math.PI) / 4, lanes: 4 }], 8);
+    expect(lanes).toEqual([4, 1, 1, 1, 1, 1, 1, 4]);
+  });
+
+  it("keeps at least 1 Lane on every segment", () => {
+    expect(ringLanesOf([], 4)).toEqual([1, 1, 1, 1]);
   });
 });
 

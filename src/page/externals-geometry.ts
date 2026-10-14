@@ -37,6 +37,8 @@ export interface CityGeometry {
 export interface ExternalsGeometry {
   /** Radius of the horizon ring, in world units. */
   ring: number;
+  /** Lanes on each ring segment, from the CLI. */
+  ringLanes: number[];
   cities: CityGeometry[];
   highways: HighwayGeometry[];
 }
@@ -66,15 +68,50 @@ export function externalsGeometry(file: ExternalCitiesFile, villages: readonly P
   });
   const highways: HighwayGeometry[] = file.highways.map((h) => {
     const village = h.district >= 0 ? villages[h.district] : undefined;
+    // A District's access Highway meets the ring at its village's angle, and the ring carries it on to its City.
+    // The root manifest's road leaves from the centre and meets the ring at its City's angle.
     const start = village === undefined ? { x: 0, z: 0 } : { x: village.x * blockWorld, z: village.z * blockWorld };
+    const meets = village === undefined ? file.cities[h.city]!.angle : Math.atan2(village.z, village.x);
     return {
       start,
-      end: onRing(file.cities[h.city]!.angle, ring),
+      end: onRing(meets, ring),
       city: h.city,
       from: h.from,
       to: h.to,
       lanes: h.lanes,
     };
   });
-  return { ring, cities, highways };
+  return { ring, ringLanes: file.ring, cities, highways };
+}
+
+/** Width of one Lane in world units. */
+export const LANE_WIDTH = 0.7;
+/** Width of the centre marking, in world units. */
+export const MARKING_WIDTH = 0.15;
+
+/** One Lane's band across a road: its lateral offset from the centre line, its width, and its direction of travel. */
+export interface LaneBand {
+  offset: number;
+  width: number;
+  direction: 1 | -1;
+}
+
+/**
+ * The Lanes of a Highway with `lanes` Lanes each way: `lanes` bands on each side of the centre line, packed edge to edge
+ * so no Lane overlaps another. More Lanes make a wider road.
+ */
+export function laneBands(lanes: number): LaneBand[] {
+  const count = Math.max(1, Math.floor(lanes));
+  const bands: LaneBand[] = [];
+  for (const direction of [1, -1] as const) {
+    for (let i = 0; i < count; i++) {
+      bands.push({ offset: direction * (MARKING_WIDTH / 2 + LANE_WIDTH * (i + 0.5)), width: LANE_WIDTH, direction });
+    }
+  }
+  return bands;
+}
+
+/** The total width of a Highway with `lanes` Lanes each way, including the centre marking. */
+export function highwayWidth(lanes: number): number {
+  return MARKING_WIDTH + 2 * LANE_WIDTH * Math.max(1, Math.floor(lanes));
 }

@@ -6,6 +6,8 @@ import {
   type HighwayEntry,
   horizonRadius,
   placeAngles,
+  type RingArc,
+  ringLanesOf,
 } from "../shared/externals.js";
 import type { Config } from "./config.js";
 import { type DependencyReport, type ExternalPlan, type ExternalRegistry, highwayLanes, importerKey } from "./imports/externals.js";
@@ -120,10 +122,19 @@ export function externalCities(input: CitiesInput): CitiesResult {
     outskirts: i === outskirtsIndex,
   }));
 
+  // The ring: each Highway from a District travels the shorter arc from its village's angle to its City's angle.
+  const arcs: RingArc[] = highways
+    .filter((h) => h.district >= 0)
+    .map((h) => {
+      const v = input.villages[h.district]!;
+      return { from: Math.atan2(v.row, v.col), to: angles[h.city]!, lanes: h.lanes };
+    });
+  const ring = ringLanesOf(arcs);
+
   const extent = input.villages.reduce((max, v) => Math.max(max, Math.hypot(v.col, v.row)), 0);
   const hiddenKeys = keys.filter((_, i) => names[i]!.source !== NAME_SOURCES.indexOf("real"));
   return {
-    file: { formatVersion: EXTERNAL_CITIES_FORMAT_VERSION, horizon: horizonRadius(extent), cities, highways },
+    file: { formatVersion: EXTERNAL_CITIES_FORMAT_VERSION, horizon: horizonRadius(extent), cities, highways, ring },
     hiddenKeys,
   };
 }

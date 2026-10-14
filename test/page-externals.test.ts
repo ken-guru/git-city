@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { Mesh, MeshLambertMaterial, Scene } from "three";
+import { Mesh, MeshLambertMaterial, RingGeometry, Scene } from "three";
 import { type ExternalCitiesFile, parseExternalCities } from "../src/shared/externals.js";
 import { ExternalLayer } from "../src/page/externals.js";
-import { CITY_BEYOND_RING_BLOCKS, externalsGeometry } from "../src/page/externals-geometry.js";
+import { CITY_BEYOND_RING_BLOCKS, externalsGeometry, highwayWidth, LANE_WIDTH, laneBands, MARKING_WIDTH } from "../src/page/externals-geometry.js";
 
 /**
  * Seam under test: the page's geometry for the horizon, spurs and Highways (SPEC §7), from the CLI's externals.json.
@@ -12,7 +12,7 @@ import { CITY_BEYOND_RING_BLOCKS, externalsGeometry } from "../src/page/external
 
 const BLOCK = 6;
 const file: ExternalCitiesFile = {
-  formatVersion: 1,
+  formatVersion: 2,
   horizon: 20,
   cities: [
     { name: "Thornwick", source: 0, angle: 0, from: 3, to: null, members: 9, outskirts: false },
@@ -22,6 +22,7 @@ const file: ExternalCitiesFile = {
     { city: 0, district: 1, from: 3, to: null, lanes: 2 },
     { city: 1, district: -1, from: 5, to: 9, lanes: 1 },
   ],
+  ring: [2, 2, 1, 1, 1, 1, 1, 1],
 };
 const villages = [
   { x: 0, z: 0 },
@@ -71,8 +72,42 @@ describe("parsing externals.json", () => {
   });
 
   it("refuses another format version, or a file without its lists", () => {
-    expect(() => parseExternalCities(JSON.stringify({ ...file, formatVersion: 2 }))).toThrow(/format 2/);
-    expect(() => parseExternalCities(JSON.stringify({ formatVersion: 1, horizon: 3 }))).toThrow(/shape/);
+    expect(() => parseExternalCities(JSON.stringify({ ...file, formatVersion: 1 }))).toThrow(/format 1/);
+    expect(() => parseExternalCities(JSON.stringify({ formatVersion: 2, horizon: 3 }))).toThrow(/shape/);
+  });
+});
+
+describe("Lanes beyond road width", () => {
+  it("packs each Lane edge to edge on either side of the centre line, so no two Lanes overlap", () => {
+    for (const lanes of [1, 2, 3, 6]) {
+      const bands = laneBands(lanes);
+      expect(bands).toHaveLength(2 * lanes);
+      // Sorted by where each band starts, no band reaches into the next.
+      const spans = bands.map((b) => [b.offset - b.width / 2, b.offset + b.width / 2] as const).sort((a, b) => a[0] - b[0]);
+      for (let i = 1; i < spans.length; i++) expect(spans[i]![0]).toBeGreaterThanOrEqual(spans[i - 1]![1] - 1e-9);
+      // The marking sits between the two directions, and each direction keeps its own side.
+      expect(bands.filter((b) => b.direction === 1).every((b) => b.offset > 0)).toBe(true);
+      expect(bands.filter((b) => b.direction === -1).every((b) => b.offset < 0)).toBe(true);
+    }
+  });
+
+  it("makes a road wider with more Lanes, and keeps at least one Lane each way", () => {
+    expect(highwayWidth(0)).toBe(highwayWidth(1));
+    expect(highwayWidth(3)).toBeGreaterThan(highwayWidth(2));
+    expect(highwayWidth(2)).toBeCloseTo(MARKING_WIDTH + 4 * LANE_WIDTH, 10);
+  });
+});
+
+describe("the ring drawn in three.js", () => {
+  it("draws one arc per segment, wider where more Lanes run", () => {
+    const layer = new ExternalLayer(new Scene(), externalsGeometry(file, villages, BLOCK), "light", () => 0);
+    expect(layer.ringMeshes).toHaveLength(file.ring.length);
+    const widthOf = (m: Mesh) => {
+      const p = (m.geometry as RingGeometry).parameters;
+      return p.outerRadius - p.innerRadius;
+    };
+    expect(widthOf(layer.ringMeshes[0]!)).toBeGreaterThan(widthOf(layer.ringMeshes[2]!));
+    expect(widthOf(layer.ringMeshes[0]!)).toBeCloseTo(highwayWidth(2) * 0.7, 6);
   });
 });
 
@@ -80,7 +115,8 @@ describe("the External Cities drawn in three.js", () => {
   const scene = new Scene();
   const layer = new ExternalLayer(scene, externalsGeometry(file, villages, BLOCK), "light", () => 0);
   const [thornwickBody, outskirtsBody] = layer.cityBodies;
-  const [accessHighway, rootHighway] = layer.highwayMeshes;
+  // Each Highway's first mesh is its first Lane; every Lane of a Highway grows together.
+  const [accessHighway, rootHighway] = layer.highwayMeshes.map((lanes) => lanes[0]!);
   const opacity = (m: Mesh) => (m.material as MeshLambertMaterial).opacity;
 
   it("draws nothing before the first Step", () => {

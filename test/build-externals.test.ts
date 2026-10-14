@@ -28,6 +28,7 @@ async function citiesFileOf(repo: FixtureRepo) {
     horizon: number;
     cities: { name: string; source: number; from: number; to: number | null; members: number; outskirts: boolean }[];
     highways: { city: number; district: number; from: number; to: number | null; lanes: number }[];
+    ring: number[];
   };
 }
 
@@ -47,6 +48,9 @@ describe("External Cities in the output", () => {
     expect(babel.from).toBe(2);
     expect(babel.to).toBeNull();
     expect(babel.members).toBe(3);
+    // The ring has one Lane count per segment, each at least 1 (SPEC §7).
+    expect(file.ring).toHaveLength(64);
+    expect(file.ring.every((n) => n >= 1)).toBe(true);
     expect(file.highways.filter((h) => h.city === 0).map((h) => [h.district, h.from, h.lanes])).toEqual([
       [-1, 0, 1],
       [-1, 1, 1],

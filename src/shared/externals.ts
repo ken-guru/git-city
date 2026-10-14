@@ -3,7 +3,41 @@
  * by the CLI (which decides the horizon and the angles) and the page (which only animates them).
  */
 
-export const EXTERNAL_CITIES_FORMAT_VERSION = 1;
+export const EXTERNAL_CITIES_FORMAT_VERSION = 2;
+
+/** Segments the horizon ring is divided into, each carrying its own Lanes. */
+export const RING_SEGMENTS = 64;
+
+/** A Highway's travel along the ring: from its village's angle to its City's angle, with the Lanes it carries. */
+export interface RingArc {
+  from: number;
+  to: number;
+  lanes: number;
+}
+
+/**
+ * The Lanes on each ring segment: the sum of the Lanes of every arc whose shorter way round passes over the segment.
+ * A segment that no arc crosses still keeps 1 Lane each way (SPEC §7).
+ */
+export function ringLanesOf(arcs: readonly RingArc[], segments: number = RING_SEGMENTS): number[] {
+  const tau = 2 * Math.PI;
+  const step = tau / segments;
+  const lanes = new Array<number>(segments).fill(0);
+  for (const arc of arcs) {
+    // The signed shorter way from `from` to `to`, in (-π, π].
+    let travel = ((arc.to - arc.from) % tau + tau) % tau;
+    if (travel > Math.PI) travel -= tau;
+    for (let i = 0; i < segments; i++) {
+      // Offset of the segment's middle from the arc's start, wrapped into (-π, π].
+      let offset = ((i + 0.5) * step - arc.from) % tau;
+      offset = ((offset % tau) + tau) % tau;
+      if (offset > Math.PI) offset -= tau;
+      const covered = travel >= 0 ? offset >= 0 && offset <= travel : offset <= 0 && offset >= travel;
+      if (covered) lanes[i]! += arc.lanes;
+    }
+  }
+  return lanes.map((n) => Math.max(1, n));
+}
 
 /** One External City (or the Outskirts) as the output lists it. */
 export interface CityEntry {
@@ -39,6 +73,8 @@ export interface ExternalCitiesFile {
   horizon: number;
   cities: CityEntry[];
   highways: HighwayEntry[];
+  /** Lanes on each of the ring's RING_SEGMENTS segments, in order from the +x axis. */
+  ring: number[];
 }
 
 /**
@@ -48,7 +84,7 @@ export interface ExternalCitiesFile {
 export function parseExternalCities(text: string): ExternalCitiesFile {
   const file = JSON.parse(text) as Partial<ExternalCitiesFile>;
   if (file.formatVersion !== EXTERNAL_CITIES_FORMAT_VERSION) throw new Error(`externals.json is format ${file.formatVersion}, expected ${EXTERNAL_CITIES_FORMAT_VERSION}`);
-  if (typeof file.horizon !== "number" || !Array.isArray(file.cities) || !Array.isArray(file.highways)) {
+  if (typeof file.horizon !== "number" || !Array.isArray(file.cities) || !Array.isArray(file.highways) || !Array.isArray(file.ring)) {
     throw new Error("externals.json does not have the expected shape");
   }
   return file as ExternalCitiesFile;

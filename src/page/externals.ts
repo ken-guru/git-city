@@ -1,69 +1,114 @@
 import { BoxGeometry, Mesh, MeshLambertMaterial, RingGeometry, type Scene } from "three";
 import { cityVisibility, highwayVisibility } from "../shared/externals.js";
-import { type CityGeometry, type ExternalsGeometry, type HighwayGeometry, type Point } from "./externals-geometry.js";
+import { type CityGeometry, type ExternalsGeometry, type HighwayGeometry, highwayWidth, laneBands, MARKING_WIDTH, type Point } from "./externals-geometry.js";
 
 /**
  * The horizon ring, the orbital motorway's access Highways, the spurs and the External Cities, drawn in three.js (SPEC §7).
  * Each piece's visibility and growth come from the CLI's Steps through the shared timing: a Highway is built outward from
- * its village, a City fades in, and departure runs the same in reverse.
+ * its village, a City fades in, and departure runs the same in reverse. A Highway is one strip per Lane, so more Lanes make
+ * a wider road; the ring is one arc per segment, as wide as the Lanes the CLI counted on it.
  */
 
 const ASPHALT = { light: 0x3d434b, dark: 0x2a2f36 } as const;
+const MARKING = 0xf4f4f0;
 const HAZE = { light: 0xa9b7c4, dark: 0x5d6b78 } as const;
-const RING_WIDTH = 3;
 const SPUR_WIDTH = 1.4;
-const ROAD_BASE_WIDTH = 2.2;
-const LANE_WIDTH = 0.7;
 /** Height of the road surface above the ground, in world units. */
 const LIFT = 0.25;
+/** Width of a ring segment per Lane, in world units. */
+const RING_LANE_WIDTH = 0.7;
 
 /** The ground height at a world position, from the Countryside's terrain. */
 export type GroundAt = (x: number, z: number) => number;
 
-interface Strip {
+/** One mesh of a road, at a lateral offset from its centre line. */
+interface Lane {
   mesh: Mesh;
+  offset: number;
+}
+
+/** A road from `start` along `direction`, built to `length` by scaling its unit boxes along their own axis. */
+interface Road {
+  lanes: Lane[];
   start: Point;
   direction: Point;
   length: number;
   y: number;
 }
 
-/** A road-like strip from `start` to `end`, built to full length by scaling the unit box along its own axis. */
-function strip(scene: Scene, start: Point, end: Point, width: number, material: MeshLambertMaterial, ground: GroundAt): Strip {
+/** One strip of a road: its lateral offset from the centre line, its width, and its material. */
+interface Band {
+  offset: number;
+  width: number;
+  material: MeshLambertMaterial;
+}
+
+/** Makes one box per band of a road (or a single box for a spur), all sharing the road's start and direction. */
+function road(scene: Scene, start: Point, end: Point, bands: readonly Band[], ground: GroundAt): Road {
   const dx = end.x - start.x;
   const dz = end.z - start.z;
   const length = Math.hypot(dx, dz) || 1;
-  const mesh = new Mesh(new BoxGeometry(1, 0.2, width), material);
-  mesh.rotation.y = -Math.atan2(dz, dx);
-  mesh.visible = false;
-  scene.add(mesh);
-  const y = ground(start.x, start.z) + LIFT;
-  return { mesh, start, direction: { x: dx / length, z: dz / length }, length, y };
+  const lanes = bands.map(({ offset, width, material }) => {
+    const mesh = new Mesh(new BoxGeometry(1, 0.2, width), material);
+    mesh.rotation.y = -Math.atan2(dz, dx);
+    mesh.visible = false;
+    scene.add(mesh);
+    return { mesh, offset };
+  });
+  return { lanes, start, direction: { x: dx / length, z: dz / length }, length, y: ground(start.x, start.z) + LIFT };
 }
 
-/** Grows a strip to `fraction` of its length, from its start outward. */
-function grow(s: Strip, fraction: number): void {
-  s.mesh.visible = fraction > 0;
-  s.mesh.scale.x = Math.max(fraction * s.length, 0.001);
-  const along = (fraction * s.length) / 2;
-  s.mesh.position.set(s.start.x + s.direction.x * along, s.y, s.start.z + s.direction.z * along);
+/** Grows a road to `fraction` of its length, from its start outward. Each lane keeps its lateral offset. */
+function grow(r: Road, fraction: number): void {
+  // The lateral direction is the road's direction turned a quarter turn.
+  const normal = { x: -r.direction.z, z: r.direction.x };
+  const along = (fraction * r.length) / 2;
+  for (const { mesh, offset } of r.lanes) {
+    mesh.visible = fraction > 0;
+    mesh.scale.x = Math.max(fraction * r.length, 0.001);
+    mesh.position.set(r.start.x + r.direction.x * along + normal.x * offset, r.y, r.start.z + r.direction.z * along + normal.z * offset);
+  }
+}
+
+interface HighwayPiece {
+  road: Road;
+  geometry: HighwayGeometry;
+}
+
+interface CityPiece {
+  spur: Road;
+  body: Mesh;
+  material: MeshLambertMaterial;
+  geometry: CityGeometry;
 }
 
 export class ExternalLayer {
-  private readonly highways: { strip: Strip; geometry: HighwayGeometry }[] = [];
-  private readonly cities: { spur: Strip; body: Mesh; material: MeshLambertMaterial; geometry: CityGeometry }[] = [];
+  private readonly highways: HighwayPiece[] = [];
+  private readonly cities: CityPiece[] = [];
+  private readonly ring: Mesh[] = [];
 
   constructor(scene: Scene, geometry: ExternalsGeometry, theme: "light" | "dark", ground: GroundAt) {
     const asphalt = new MeshLambertMaterial({ color: ASPHALT[theme] });
-    if (geometry.cities.length > 0) {
-      const ring = new Mesh(new RingGeometry(geometry.ring - RING_WIDTH / 2, geometry.ring + RING_WIDTH / 2, 192), asphalt);
-      ring.rotation.x = -Math.PI / 2;
-      ring.position.y = LIFT;
-      scene.add(ring);
-    }
+    const marking = new MeshLambertMaterial({ color: MARKING });
+    const segments = geometry.ringLanes.length;
+    const step = (2 * Math.PI) / Math.max(1, segments);
+    geometry.ringLanes.forEach((lanes, i) => {
+      // RingGeometry sweeps in the XY plane; the ring lies flat with its angle reversed, so segment i spans -(i+1)·step.
+      const width = highwayWidth(lanes) * RING_LANE_WIDTH;
+      const arc = new Mesh(
+        new RingGeometry(geometry.ring - width / 2, geometry.ring + width / 2, 4, 1, -(i + 1) * step, step),
+        asphalt,
+      );
+      arc.rotation.x = -Math.PI / 2;
+      arc.position.y = LIFT;
+      scene.add(arc);
+      this.ring.push(arc);
+    });
     for (const h of geometry.highways) {
-      const width = ROAD_BASE_WIDTH + LANE_WIDTH * h.lanes;
-      this.highways.push({ strip: strip(scene, h.start, h.end, width, asphalt, ground), geometry: h });
+      const bands: Band[] = laneBands(h.lanes).map((b) => ({ offset: b.offset, width: b.width, material: asphalt }));
+      // The centre marking is one more strip, in white, over the middle of the road.
+      bands.push({ offset: 0, width: MARKING_WIDTH, material: marking });
+      this.highways.push({ road: road(scene, h.start, h.end, bands, ground), geometry: h });
     }
     for (const c of geometry.cities) {
       const material = new MeshLambertMaterial({ color: HAZE[theme], transparent: true, opacity: 0 });
@@ -72,13 +117,14 @@ export class ExternalLayer {
       body.position.set(c.position.x, ground(c.position.x, c.position.z) + c.height / 2, c.position.z);
       body.visible = false;
       scene.add(body);
-      this.cities.push({ spur: strip(scene, c.spurStart, c.spurEnd, SPUR_WIDTH, asphalt, ground), body, material, geometry: c });
+      const spur = road(scene, c.spurStart, c.spurEnd, [{ offset: 0, width: SPUR_WIDTH, material: asphalt }], ground);
+      this.cities.push({ spur, body, material, geometry: c });
     }
   }
 
-  /** The Highway meshes, in the order of the geometry's Highways. */
-  get highwayMeshes(): readonly Mesh[] {
-    return this.highways.map((h) => h.strip.mesh);
+  /** The meshes of each Highway, in the order of the geometry's Highways: one per Lane, then the centre marking. */
+  get highwayMeshes(): readonly (readonly Mesh[])[] {
+    return this.highways.map((h) => h.road.lanes.map((l) => l.mesh));
   }
 
   /** The City bodies, in the order of the geometry's Cities. */
@@ -86,9 +132,14 @@ export class ExternalLayer {
     return this.cities.map((c) => c.body);
   }
 
+  /** The ring's arc meshes, one per segment, in order. */
+  get ringMeshes(): readonly Mesh[] {
+    return this.ring;
+  }
+
   /** Draws every piece at time `t` (in Steps). Pure in `t`: scrubbing and reversing need nothing extra. */
   update(t: number): void {
-    for (const { strip: s, geometry } of this.highways) grow(s, highwayVisibility(t, geometry.from, geometry.to));
+    for (const { road: r, geometry } of this.highways) grow(r, highwayVisibility(t, geometry.from, geometry.to));
     for (const { spur, body, material, geometry } of this.cities) {
       const visible = cityVisibility(t, geometry.from, geometry.to);
       grow(spur, visible);
