@@ -154,10 +154,24 @@ describe("the registry", () => {
   });
 });
 
+describe("@types folding", () => {
+  it("counts @types/x and x as one member, shown under the name that is not @types", () => {
+    const declared = [decl("npm", "@types/react"), decl("npm", "react"), decl("npm", "react-dom"), decl("npm", "react-router")];
+    const plan = planExternals(declared);
+    expect(plan.cities).toEqual([
+      expect.objectContaining({ key: "react", members: ["react", "react-dom", "react-router"] }),
+    ]);
+  });
+
+  it("gives an import of x the declaration of @types/x when only the types are declared", () => {
+    expect(classifyImport("npm", "react", [decl("npm", "@types/react")])?.name).toBe("@types/react");
+  });
+});
+
 describe("matched identity", () => {
   it("counts a Python name declared in two spellings once, the import matching both", () => {
     const declared = [decl("python", "Foo_Bar", "a"), decl("python", "foo-bar", "b")];
-    const report = externalReport(declared, new Map([[importerKey("python", "foo_bar"), 2]]));
+    const report = externalReport(declared, declared, new Map([[importerKey("python", "foo_bar"), 2]]));
     expect(report.dependencies.map((d) => [d.name, d.importers, d.lanes])).toEqual([["Foo_Bar", 2, 2]]);
   });
 
@@ -171,7 +185,7 @@ describe("the dependency report for the build summary", () => {
   it("lists every declared dependency with its City or the Outskirts, and Highway Lanes at least 1 each way", () => {
     const declared = [decl("npm", "@babel/core"), decl("npm", "@babel/cli"), decl("npm", "babel-loader"), decl("npm", "left-pad"), decl("python", "Foo_Bar")];
     const importers = new Map([[importerKey("npm", "@babel/core"), 4]]);
-    const report = externalReport(declared, importers);
+    const report = externalReport(declared, declared, importers);
     expect(report.cities).toEqual([{ key: "babel", ecosystem: "npm", members: 3 }]);
     expect(report.dependencies.map((d) => [d.name, d.city, d.importers, d.lanes])).toEqual([
       ["@babel/cli", "babel", 0, 1],

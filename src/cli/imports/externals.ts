@@ -3,9 +3,9 @@ import { normalisePythonName } from "./python.js";
 /**
  * External Dependencies (SPEC §4 and §7). A declared dependency comes from a manifest a Module owns: package.json
  * (dependencies, devDependencies, peerDependencies), pyproject.toml and requirements*.txt. Lockfiles are never read.
- * An import is matched to a declaration by normalised name: npm exact, Python PEP 503. Declarations group into
- * External Cities by npm scope or by a shared first name token; the largest groups of at least `threshold` distinct
- * members get their own City, at most MAX_CITIES, and everything else falls to the Outskirts.
+ * An import is matched to a declaration by normalised name: npm exact (with `@types/x` folded into `x`), Python PEP 503.
+ * Declarations group into External Cities by npm scope or by a shared first name token; the largest groups of at least
+ * `threshold` distinct members get their own City, at most MAX_CITIES, and everything else falls to the Outskirts.
  */
 
 export type Ecosystem = "npm" | "python";
@@ -37,10 +37,26 @@ export function declarationsOf(path: string, text: string): Declaration[] {
   return [];
 }
 
+/** Whether a path is a manifest this module reads: package.json, pyproject.toml or requirements*.txt, outside node_modules. */
+export function isManifestPath(path: string): boolean {
+  if (path.split("/").includes("node_modules")) return false;
+  return /(^|\/)(package\.json|pyproject\.toml|requirements[^/]*\.txt)$/.test(path);
+}
+
 /** The npm package an import specifier names: "@scope/name" or "name", without any subpath. */
 export function npmPackageName(specifier: string): string {
   const parts = specifier.split("/");
   return specifier.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0]!;
+}
+
+/** The identity a name is matched and counted by: normalised for Python (PEP 503), and for npm the name with `@types/` removed. */
+export function identityOf(ecosystem: Ecosystem, name: string): string {
+  return ecosystem === "python" ? normalisePythonName(name) : stripTypes(name);
+}
+
+/** Identity key of a name within an ecosystem, as the maps in this module use it. */
+export function importerKey(ecosystem: Ecosystem, name: string): string {
+  return `${ecosystem}\u0000${identityOf(ecosystem, name)}`;
 }
 
 /**
@@ -52,27 +68,17 @@ export function classifyImport(ecosystem: Ecosystem, importName: string, declare
 }
 
 /**
- * A matcher over one declaration list, built once: a Python name is matched by `normalisePythonName` (the same rule
- * as `pythonNameMatches`), an npm name exactly. The first declaration with a given name wins.
+ * A matcher over one declaration list, built once. Names match on identity: a Python name by `normalisePythonName`
+ * (the same rule as `pythonNameMatches`), an npm name exactly, with `@types/x` answering for `x`.
+ * The first declaration with a given identity wins.
  */
 export function declarationIndex(declared: readonly Declaration[]): (ecosystem: Ecosystem, importName: string) => Declaration | undefined {
   const index = new Map<string, Declaration>();
   for (const d of declared) {
-    const id = importerKey(d.ecosystem, matchName(d.ecosystem, d.name));
+    const id = importerKey(d.ecosystem, d.name);
     if (!index.has(id)) index.set(id, d);
   }
-  return (ecosystem, importName) => index.get(importerKey(ecosystem, matchName(ecosystem, importName)));
-}
-
-/** The form a name takes when matched: normalised for Python (PEP 503), as written for npm. */
-function matchName(ecosystem: Ecosystem, name: string): string {
-  return ecosystem === "python" ? normalisePythonName(name) : name;
-}
-
-/** Whether a path is a manifest this module reads: package.json, pyproject.toml or requirements*.txt, outside node_modules. */
-export function isManifestPath(path: string): boolean {
-  if (path.split("/").includes("node_modules")) return false;
-  return /(^|\/)(package\.json|pyproject\.toml|requirements[^/]*\.txt)$/.test(path);
+  return (ecosystem, importName) => index.get(importerKey(ecosystem, importName));
 }
 
 /**
@@ -82,7 +88,7 @@ export function isManifestPath(path: string): boolean {
  * the token is not on the stoplist. Otherwise the name stands alone and its own key is returned.
  */
 export function groupKeyOf(ecosystem: Ecosystem, name: string, declared: readonly Declaration[]): string {
-  const bare = ecosystem === "npm" ? stripTypes(name) : normalisePythonName(name);
+  const bare = identityOf(ecosystem, name);
   if (ecosystem === "npm" && bare.startsWith("@")) return bare.slice(1).split("/")[0]!;
   const token = firstToken(bare);
   if (STOPLIST.has(token)) return bare;
@@ -90,7 +96,7 @@ export function groupKeyOf(ecosystem: Ecosystem, name: string, declared: readonl
   let isPackage = false;
   for (const d of declared) {
     if (d.ecosystem !== ecosystem) continue;
-    const other = ecosystem === "npm" ? stripTypes(d.name) : normalisePythonName(d.name);
+    const other = identityOf(ecosystem, d.name);
     if (other === token) isPackage = true;
     if (other.startsWith("@") ? other.slice(1).split("/")[0] === token : firstToken(other) === token) sharing.add(other);
   }
@@ -115,6 +121,11 @@ export interface ExternalPlan {
 export interface PlanOptions {
   /** Distinct members a group needs to get its own City, from MIN_THRESHOLD to MAX_THRESHOLD. */
   threshold?: number;
+  /**
+   * `externals.groups` from the config: a dependency (by declared name or identity) mapped to the group key it joins,
+   * in place of the grouping rules above.
+   */
+  groups?: Readonly<Record<string, string>>;
 }
 
 /**
@@ -123,7 +134,7 @@ export interface PlanOptions {
  */
 export function planExternals(declarations: readonly Declaration[], options: PlanOptions = {}): ExternalPlan {
   const threshold = checkedThreshold(options.threshold);
-  const groups = groupsOf(declarations);
+  const groups = groupsOf(declarations, options);
   const qualifying = groups.filter((g) => g.members.length >= threshold).sort(byRank);
   const cities = qualifying.slice(0, MAX_CITIES);
   const cityIds = new Set(cities.map(groupId));
@@ -134,81 +145,174 @@ export function planExternals(declarations: readonly Declaration[], options: Pla
   return { cities, outskirts };
 }
 
+/** A span in which a manifest declares a dependency: from the commit it was added to the commit it was removed (undefined while open). */
+export interface Span {
+  ecosystem: Ecosystem;
+  name: string;
+  manifest: string;
+  from: number;
+  to?: number;
+}
+
+/**
+ * A stretch of history in which an External City is present: its distinct declared members reached the threshold
+ * (promotion) and at least one is still declared. `to` is set when the last one is removed.
+ */
+export interface Presence {
+  ecosystem: Ecosystem;
+  key: string;
+  from: number;
+  to?: number;
+}
+
+export interface RegistrySnapshot {
+  seen: [string, Declaration][];
+  spans: Span[];
+  presence: Presence[];
+}
+
 /**
  * Every declared dependency seen across history, fed one commit at a time in history order. Members are kept once seen,
  * so a group's count never shrinks when a manifest drops a dependency. A group's promotion is the commit at which its
- * distinct members first reach the threshold.
+ * distinct members first reach the threshold; its presence then follows whether any member is still declared.
  */
 export class ExternalRegistry {
   private readonly seen = new Map<string, Declaration>();
-  private readonly current = new Map<string, number>();
-  private readonly promoted = new Map<string, number>();
-  private readonly threshold: number;
+  private readonly spans: Span[] = [];
+  private readonly open = new Map<string, Span>();
+  private readonly presence: Presence[] = [];
+  private readonly options: PlanOptions;
 
   constructor(options: PlanOptions = {}) {
-    this.threshold = checkedThreshold(options.threshold);
+    checkedThreshold(options.threshold);
+    this.options = options;
   }
 
   /** A manifest at `commit` declares `d`. */
   declare(commit: number, d: Declaration): void {
-    const id = nameId(d);
-    this.seen.set(id, d);
-    this.current.set(id, (this.current.get(id) ?? 0) + 1);
-    this.promote(commit);
+    if (this.open.has(spanKey(d))) return;
+    const id = importerKey(d.ecosystem, d.name);
+    const have = this.seen.get(id);
+    if (have === undefined || (isTypesOnly(have) && !isTypesOnly(d))) this.seen.set(id, d);
+    const span: Span = { ecosystem: d.ecosystem, name: d.name, manifest: d.manifest, from: commit };
+    this.spans.push(span);
+    this.open.set(spanKey(d), span);
+    this.settle(commit);
   }
 
   /** A manifest at `commit` stops declaring `d`. Its group keeps the member. */
   undeclare(commit: number, d: Declaration): void {
-    const id = nameId(d);
-    const left = (this.current.get(id) ?? 0) - 1;
-    if (left <= 0) this.current.delete(id);
-    else this.current.set(id, left);
-    this.promote(commit);
-  }
-
-  /** The commit a group was promoted at, or undefined while it is below the threshold. */
-  promotedAt(key: string, ecosystem: Ecosystem = "npm"): number | undefined {
-    return this.promoted.get(`${ecosystem}\u0000${key}`);
+    const span = this.open.get(spanKey(d));
+    if (span === undefined) return;
+    span.to = commit;
+    this.open.delete(spanKey(d));
+    this.settle(commit);
   }
 
   /** Declarations currently in some manifest. */
   currentlyDeclared(): Declaration[] {
-    return [...this.current.keys()].map((id) => this.seen.get(id)!);
+    return [...this.open.values()].map((s) => ({ ecosystem: s.ecosystem, name: s.name, manifest: s.manifest }));
+  }
+
+  /** Every distinct declaration seen, with the spelling kept for display. */
+  everDeclared(): Declaration[] {
+    return [...this.seen.values()];
   }
 
   /** The plan over everything ever seen. */
   plan(): ExternalPlan {
-    return planExternals([...this.seen.values()], { threshold: this.threshold });
+    return planExternals(this.everDeclared(), this.options);
   }
 
-  private promote(commit: number): void {
-    const all = [...this.seen.values()];
-    for (const g of groupsOf(all)) {
-      const id = groupId(g);
-      if (g.members.length >= this.threshold && !this.promoted.has(id)) this.promoted.set(id, commit);
+  /** The commit a group was first present as a City, or undefined while it is below the threshold. */
+  promotedAt(key: string, ecosystem: Ecosystem = "npm"): number | undefined {
+    return this.presence.find((p) => p.ecosystem === ecosystem && p.key === key)?.from;
+  }
+
+  /** Every span, open or closed, in the order they began. */
+  spansOf(): readonly Span[] {
+    return this.spans;
+  }
+
+  /** Every presence interval, in the order they began. */
+  presenceOf(): readonly Presence[] {
+    return this.presence;
+  }
+
+  snapshot(): RegistrySnapshot {
+    return { seen: [...this.seen], spans: this.spans.map((s) => ({ ...s })), presence: this.presence.map((p) => ({ ...p })) };
+  }
+
+  static restore(options: PlanOptions, s: RegistrySnapshot): ExternalRegistry {
+    const registry = new ExternalRegistry(options);
+    for (const [id, d] of s.seen) registry.seen.set(id, d);
+    for (const span of s.spans) {
+      const copy = { ...span };
+      registry.spans.push(copy);
+      if (copy.to === undefined) registry.open.set(spanKey(copy), copy);
+    }
+    for (const p of s.presence) registry.presence.push({ ...p });
+    return registry;
+  }
+
+  /** Opens or closes each City's presence to match whether one of its members is declared now. */
+  private settle(commit: number): void {
+    const threshold = checkedThreshold(this.options.threshold);
+    const ever = assignGroups([...this.seen.values()], this.options);
+    const present = new Set<string>();
+    for (const d of this.open.values()) {
+      const group = ever.groupOf.get(importerKey(d.ecosystem, d.name));
+      if (group !== undefined) present.add(groupIdOf(group.ecosystem, group.key));
+    }
+    for (const group of ever.groups) {
+      if (group.members.length < threshold) continue;
+      const id = groupIdOf(group.ecosystem, group.key);
+      const live = this.presence.find((p) => p.to === undefined && groupIdOf(p.ecosystem, p.key) === id);
+      if (present.has(id) && live === undefined) this.presence.push({ ecosystem: group.ecosystem, key: group.key, from: commit });
+      else if (!present.has(id) && live !== undefined) live.to = commit;
     }
   }
 }
 
 /** Groups declarations by ecosystem and group key, counting distinct members and declaration entries. */
-function groupsOf(declarations: readonly Declaration[]): ExternalCity[] {
+function groupsOf(declarations: readonly Declaration[], options: PlanOptions): ExternalCity[] {
+  return assignGroups(declarations, options).groups;
+}
+
+/**
+ * The grouping of a declaration list: every group, and for each distinct identity the group it joined. A declared
+ * `@types/x` and `x` are one identity, so they are one member; the spelling kept is the one not under `@types/`.
+ */
+function assignGroups(
+  declarations: readonly Declaration[],
+  options: PlanOptions,
+): { groups: ExternalCity[]; groupOf: Map<string, { ecosystem: Ecosystem; key: string }> } {
   const distinct = new Map<string, Declaration>();
-  for (const d of declarations) if (!distinct.has(nameId(d))) distinct.set(nameId(d), d);
+  for (const d of declarations) {
+    const id = importerKey(d.ecosystem, d.name);
+    const have = distinct.get(id);
+    if (have === undefined || (isTypesOnly(have) && !isTypesOnly(d))) distinct.set(id, d);
+  }
   const list = [...distinct.values()];
+  const groupOf = new Map<string, { ecosystem: Ecosystem; key: string }>();
+  for (const d of list) {
+    const override = options.groups?.[d.name] ?? options.groups?.[identityOf(d.ecosystem, d.name)];
+    groupOf.set(importerKey(d.ecosystem, d.name), { ecosystem: d.ecosystem, key: override ?? groupKeyOf(d.ecosystem, d.name, list) });
+  }
   const groups = new Map<string, ExternalCity>();
   for (const d of list) {
-    const key = groupKeyOf(d.ecosystem, d.name, list);
-    const id = `${d.ecosystem}\u0000${key}`;
-    const group = groups.get(id) ?? { key, ecosystem: d.ecosystem, members: [], declarations: 0 };
-    group.members.push(d.name);
-    groups.set(id, group);
+    const group = groupOf.get(importerKey(d.ecosystem, d.name))!;
+    const id = groupIdOf(group.ecosystem, group.key);
+    const city = groups.get(id) ?? { key: group.key, ecosystem: group.ecosystem, members: [], declarations: 0 };
+    city.members.push(d.name);
+    groups.set(id, city);
   }
   for (const d of declarations) {
-    const key = groupKeyOf(d.ecosystem, d.name, list);
-    groups.get(`${d.ecosystem}\u0000${key}`)!.declarations++;
+    const group = groupOf.get(importerKey(d.ecosystem, d.name))!;
+    groups.get(groupIdOf(group.ecosystem, group.key))!.declarations++;
   }
   for (const g of groups.values()) g.members.sort();
-  return [...groups.values()];
+  return { groups: [...groups.values()], groupOf };
 }
 
 function byRank(a: ExternalCity, b: ExternalCity): number {
@@ -216,12 +320,19 @@ function byRank(a: ExternalCity, b: ExternalCity): number {
 }
 
 function groupId(g: Pick<ExternalCity, "key" | "ecosystem">): string {
-  return `${g.ecosystem}\u0000${g.key}`;
+  return groupIdOf(g.ecosystem, g.key);
 }
 
-/** Identity of a declared name: its matched form, so `Foo_Bar` and `foo-bar` are one dependency. */
-function nameId(d: Declaration): string {
-  return importerKey(d.ecosystem, d.name);
+function groupIdOf(ecosystem: Ecosystem, key: string): string {
+  return `${ecosystem}\u0000${key}`;
+}
+
+function spanKey(d: Declaration): string {
+  return `${d.ecosystem}\u0000${d.name}\u0000${d.manifest}`;
+}
+
+function isTypesOnly(d: Declaration): boolean {
+  return d.ecosystem === "npm" && d.name.startsWith("@types/");
 }
 
 function checkedThreshold(threshold: number | undefined): number {
@@ -335,33 +446,29 @@ export interface ExternalReport {
   dependencies: DependencyReport[];
 }
 
-/** The `importers` key for a declaration, as `externalReport` reads it. */
-export function importerKey(ecosystem: Ecosystem, name: string): string {
-  return `${ecosystem}\u0000${matchName(ecosystem, name)}`;
-}
-
 /**
- * The report for a set of declarations: each distinct declared name with its City (or the Outskirts) and its Highway
- * Lanes. `importers` maps `importerKey` to the number of files whose import matched that name.
+ * The report: each dependency declared now (`current`) with its City (or the Outskirts) and its Highway Lanes, and the
+ * Cities of the whole history (`ever`). `importers` maps `importerKey` to the number of files whose import matched it.
  */
 export function externalReport(
-  declarations: readonly Declaration[],
+  current: readonly Declaration[],
+  ever: readonly Declaration[],
   importers: ReadonlyMap<string, number>,
   options: PlanOptions = {},
 ): ExternalReport {
-  const plan = planExternals(declarations, options);
+  const plan = planExternals(ever, options);
   const cityIds = new Set(plan.cities.map(groupId));
+  const { groupOf } = assignGroups(ever, options);
   const distinct = new Map<string, Declaration>();
-  for (const d of declarations) if (!distinct.has(nameId(d))) distinct.set(nameId(d), d);
-  const list = [...distinct.values()];
-  const dependencies = list
+  for (const d of current) if (!distinct.has(importerKey(d.ecosystem, d.name))) distinct.set(importerKey(d.ecosystem, d.name), d);
+  const dependencies = [...distinct.values()]
     .map((d): DependencyReport => {
-      const key = groupKeyOf(d.ecosystem, d.name, list);
+      const group = groupOf.get(importerKey(d.ecosystem, d.name));
       const count = importers.get(importerKey(d.ecosystem, d.name)) ?? 0;
       return {
         name: d.name,
         ecosystem: d.ecosystem,
-        city: cityIds.has(`${d.ecosystem}\u0000${key}`) ? key : undefined,
+        city: group !== undefined && cityIds.has(groupIdOf(group.ecosystem, group.key)) ? group.key : undefined,
         importers: count,
         lanes: highwayLanes(count),
       };
