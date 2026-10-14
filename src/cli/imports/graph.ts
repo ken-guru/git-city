@@ -70,7 +70,7 @@ export class ImportGraph {
   private readonly importersOfProbe = new Map<string, Set<string>>();
   /** Targets whose importer set changed during the current `apply`. */
   private touched = new Set<string>();
-  private readonly snapshotView: Snapshot = {
+  private readonly resolverView: Snapshot = {
     paths: this.paths,
     read: (path) => this.configText.get(path),
   };
@@ -185,7 +185,7 @@ export class ImportGraph {
     if (!record) return;
     const probes = new Set<string>();
     for (const { specifier } of record.specifiers) {
-      const resolved = resolveImport(this.snapshotView, importer, specifier);
+      const resolved = resolveImport(this.resolverView, importer, specifier);
       for (const probe of resolved.probes) probes.add(probe);
       this.record(importer, resolved.target);
     }
