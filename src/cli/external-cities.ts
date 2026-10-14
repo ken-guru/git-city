@@ -1,5 +1,12 @@
 import { NAME_SOURCES } from "../shared/places.js";
-import { horizonRadius, placeAngles } from "../shared/externals.js";
+import {
+  type CityEntry,
+  EXTERNAL_CITIES_FORMAT_VERSION,
+  type ExternalCitiesFile,
+  type HighwayEntry,
+  horizonRadius,
+  placeAngles,
+} from "../shared/externals.js";
 import type { Config } from "./config.js";
 import { type DependencyReport, type ExternalPlan, type ExternalRegistry, highwayLanes, importerKey } from "./imports/externals.js";
 import { type ExternalNameOptions, nameExternals } from "./naming.js";
@@ -7,46 +14,14 @@ import { type ExternalNameOptions, nameExternals } from "./naming.js";
 /**
  * The External Cities as the page draws them (SPEC §7): the horizon, each City's spur and presence, the Outskirts, and
  * each Highway from its declaring District (or the City centre) to its City. The CLI decides every value; the page only
- * animates them. Times are Steps, so they agree with the rest of the output.
+ * animates them. Times are Steps, so they agree with the rest of the output. The file's types are in shared/externals.
  */
 
-export const EXTERNAL_CITIES_FORMAT_VERSION = 1;
+export type { CityEntry, ExternalCitiesFile, HighwayEntry } from "../shared/externals.js";
+export { EXTERNAL_CITIES_FORMAT_VERSION } from "../shared/externals.js";
 
 /** The Outskirts' display name: a fixed term, not a dependency's name. */
 const OUTSKIRTS_NAME = "Outskirts";
-
-export interface CityEntry {
-  name: string;
-  /** Index in NAME_SOURCES (generated, real, pseudonym). */
-  source: number;
-  /** Spur angle from the City centre, in radians. */
-  angle: number;
-  /** Step the City arrives (promotion). */
-  from: number;
-  /** Step the City departs, or null while it stands. */
-  to: number | null;
-  members: number;
-  /** True for the Outskirts, the single low sprawl that holds every small group. */
-  outskirts: boolean;
-}
-
-export interface HighwayEntry {
-  /** Index into `cities`. */
-  city: number;
-  /** Index of the declaring District's village in the layout, or -1 for the root manifest's road from the City centre. */
-  district: number;
-  from: number;
-  to: number | null;
-  lanes: number;
-}
-
-export interface ExternalCitiesFile {
-  formatVersion: number;
-  /** Distance of the horizon ring from the centre, in Block units. */
-  horizon: number;
-  cities: CityEntry[];
-  highways: HighwayEntry[];
-}
 
 export interface CitiesInput {
   registry: ExternalRegistry;

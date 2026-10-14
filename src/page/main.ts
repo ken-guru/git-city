@@ -1,7 +1,10 @@
 import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, PerspectiveCamera, PlaneGeometry, Scene, WebGLRenderer } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
+import { type ExternalCitiesFile, parseExternalCities } from "../shared/externals.js";
 import { type PlacesFile, parsePlaces } from "../shared/places.js";
+import { ExternalLayer } from "./externals.js";
+import { externalsGeometry } from "./externals-geometry.js";
 import { CityBuildings } from "./buildings.js";
 import { addCountryside, type CountrysideHandle } from "./countryside.js";
 import { BlockLayer, blockPaving } from "./blocks.js";
@@ -90,7 +93,14 @@ async function main() {
   } catch (e) {
     console.warn("District names could not be loaded", e);
   }
-  play(world, timelines, stream, places);
+  // Without externals.json the City still plays, just without the horizon and the External Cities.
+  let externals: ExternalCitiesFile | undefined;
+  try {
+    externals = parseExternalCities(new TextDecoder().decode(await fetchBytes("externals.json", { cache: "no-store" })));
+  } catch (e) {
+    console.warn("External Cities could not be loaded", e);
+  }
+  play(world, timelines, stream, places, externals);
   stream
     .loadAll((index, chunk) => {
       if (index > 0) appendTimelines(timelines, chunk, world.language);
@@ -101,7 +111,7 @@ async function main() {
     });
 }
 
-function play(world: World, timelines: Timelines, stream: ChunkStream, places?: PlacesFile) {
+function play(world: World, timelines: Timelines, stream: ChunkStream, places?: PlacesFile, externals?: ExternalCitiesFile) {
   const commitCount = world.commitDays.length;
   const endTime = commitCount - 1 + TRANSITION_COMMITS;
   // The City's extent is set by its Blocks: the layout places them all, so the page frames what it has.
@@ -155,6 +165,16 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
     theme,
     timelines.roads,
   );
+
+  // The horizon, the Highways and the External Cities, from the CLI's externals.json, over the Countryside's terrain.
+  const externalLayer = externals
+    ? new ExternalLayer(
+        scene,
+        externalsGeometry(externals, villageSites(world), BLOCK_WORLD),
+        theme,
+        (x, z) => countryside.land.heightAt(x / BLOCK_WORLD, z / BLOCK_WORLD),
+      )
+    : undefined;
 
   const city = new CityBuildings(
     scene,
@@ -220,6 +240,7 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
 
   function draw(t: number) {
     city.update(t, TUNING.commitsPerSecond, camera.position);
+    externalLayer?.update(t);
     blockLayer.update(t, duration, camera.position, detail.massFar);
     roadLayer.update(t, duration);
     const commit = Math.min(commitCount - 1, Math.max(0, Math.floor(t)));

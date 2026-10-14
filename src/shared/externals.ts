@@ -3,6 +3,57 @@
  * by the CLI (which decides the horizon and the angles) and the page (which only animates them).
  */
 
+export const EXTERNAL_CITIES_FORMAT_VERSION = 1;
+
+/** One External City (or the Outskirts) as the output lists it. */
+export interface CityEntry {
+  name: string;
+  /** Index in NAME_SOURCES (generated, real, pseudonym). */
+  source: number;
+  /** Spur angle from the City centre, in radians. */
+  angle: number;
+  /** Step the City arrives (promotion). */
+  from: number;
+  /** Step the City departs, or null while it stands. */
+  to: number | null;
+  members: number;
+  /** True for the Outskirts, the single low sprawl that holds every small group. */
+  outskirts: boolean;
+}
+
+/** One Highway: from its declaring District (or the City centre) to its City, built and dismantled over Steps. */
+export interface HighwayEntry {
+  /** Index into `cities`. */
+  city: number;
+  /** Index of the declaring District's village in the layout, or -1 for the root manifest's road from the City centre. */
+  district: number;
+  from: number;
+  to: number | null;
+  lanes: number;
+}
+
+/** The externals.json file: the horizon, the Cities, and the Highways. */
+export interface ExternalCitiesFile {
+  formatVersion: number;
+  /** Distance of the horizon ring from the centre, in Block units. */
+  horizon: number;
+  cities: CityEntry[];
+  highways: HighwayEntry[];
+}
+
+/**
+ * Reads externals.json, refusing a file from another format version or one with the wrong shape. Throws when it cannot
+ * be used, so the page can say so instead of drawing a broken City.
+ */
+export function parseExternalCities(text: string): ExternalCitiesFile {
+  const file = JSON.parse(text) as Partial<ExternalCitiesFile>;
+  if (file.formatVersion !== EXTERNAL_CITIES_FORMAT_VERSION) throw new Error(`externals.json is format ${file.formatVersion}, expected ${EXTERNAL_CITIES_FORMAT_VERSION}`);
+  if (typeof file.horizon !== "number" || !Array.isArray(file.cities) || !Array.isArray(file.highways)) {
+    throw new Error("externals.json does not have the expected shape");
+  }
+  return file as ExternalCitiesFile;
+}
+
 /** Steps an External City takes to fade in or out. */
 export const CITY_FADE_STEPS = 1;
 /** Steps a Highway takes to be built, or dismantled. */
