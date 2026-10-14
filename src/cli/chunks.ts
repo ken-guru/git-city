@@ -8,11 +8,11 @@ import { applyEvent, birthStates, type FileStates } from "../shared/replay.js";
 import type { TimelineData } from "./timeline.js";
 
 /** A new chunk starts after this many commits (SPEC §9). */
-export const CHUNK_COMMITS = 2000;
+const CHUNK_COMMITS = 2000;
 /** ...or once a chunk compresses to about this many bytes (SPEC §9). */
-export const CHUNK_BYTES = 256 * 1024;
+const CHUNK_BYTES = 256 * 1024;
 /** The compressed size is checked at this many commits apart, so a chunk can run this far past CHUNK_BYTES. */
-export const CHECK_EVERY = 100;
+const CHECK_EVERY = 100;
 /** The world file plus the first chunk, compressed, must fit this (SPEC §9 budget). */
 export const FIRST_PLAY_BUDGET_BYTES = 1024 * 1024;
 /** Everything except the bundle, compressed (SPEC §9 budget). */
@@ -57,17 +57,19 @@ export function planChunks(timeline: ChunkInput, limits: ChunkLimits = {}): Plan
     const snapshot = snapshotOf(state);
     let end = start;
     let bytes: Uint8Array;
+    let compressedBytes: number;
     for (;;) {
       end = Math.min(commits, end + checkEvery, start + chunkCommits);
       bytes = encodeRange(timeline, snapshot, start, end, firstEvent);
+      compressedBytes = deflateSync(bytes).length;
       if (end === commits || end - start === chunkCommits) break;
-      if (deflateSync(bytes).length >= chunkBytes) break;
+      if (compressedBytes >= chunkBytes) break;
     }
     plans.push({
       firstCommit: start,
       bytes,
       hash: createHash("sha256").update(bytes).digest().subarray(0, CHUNK_HASH_BYTES),
-      compressedBytes: deflateSync(bytes).length,
+      compressedBytes,
     });
     applyEvents(state, timeline, firstEvent[start]!, firstEvent[end]!);
     start = end;

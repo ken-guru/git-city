@@ -85,7 +85,7 @@ describe("chunk streaming", () => {
     const { stream, fetched } = streamOf(world, bytes);
 
     expect(stream.loadedThrough()).toBe(-1);
-    await stream.stream();
+    await stream.loadAll();
 
     expect(fetched).toEqual(world.chunks.map((c) => c.name));
     expect(stream.loadedThrough()).toBe(24);
@@ -146,7 +146,7 @@ describe("playing across streamed chunks", () => {
     const { stream } = streamOf(world, bytes);
     const whole = buildTimelines(decodeChunk(planChunks(timeline, { chunkCommits: commits })[0]!.bytes), files);
     let streamed: ReturnType<typeof buildTimelines> | undefined;
-    await stream.stream((index, chunk) => {
+    await stream.loadAll((index, chunk) => {
       if (streamed === undefined) streamed = buildTimelines(chunk, files);
       else appendTimelines(streamed, chunk);
     });

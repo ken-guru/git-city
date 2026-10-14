@@ -50,7 +50,7 @@ export class ChunkStream {
   }
 
   /** Loads every chunk in order, calling `onLoaded` as each one arrives. */
-  async stream(onLoaded?: (index: number, chunk: Chunk) => void): Promise<void> {
+  async loadAll(onLoaded?: (index: number, chunk: Chunk) => void): Promise<void> {
     for (let index = 0; index < this.world.chunks.length; index++) {
       const chunk = await this.load(index);
       onLoaded?.(index, chunk);

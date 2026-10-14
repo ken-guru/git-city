@@ -92,10 +92,13 @@ async function main() {
   }
   play(world, timelines, stream, places);
   stream
-    .stream((index, chunk) => {
+    .loadAll((index, chunk) => {
       if (index > 0) appendTimelines(timelines, chunk);
     })
-    .catch((e: unknown) => console.error("History stopped loading", e));
+    .catch((e: unknown) => {
+      if (e instanceof FormatVersionError) return showVersionNotice();
+      console.error("History stopped loading", e);
+    });
 }
 
 function play(world: World, timelines: Timelines, stream: ChunkStream, places?: PlacesFile) {
