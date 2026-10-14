@@ -1,3 +1,6 @@
 .devcontainer/.env
 .devcontainer/project-mounts.local.json
 .devcontainer/allowed-domains.local.txt
+node_modules/
+dist/
+git-city-site/

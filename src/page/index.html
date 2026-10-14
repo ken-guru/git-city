@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GitCity</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #e9eef2;
+        --fg: #1d2630;
+        --panel: rgba(255, 255, 255, 0.85);
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #10161c;
+          --fg: #dde5ec;
+          --panel: rgba(24, 32, 40, 0.85);
+        }
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.4 system-ui, sans-serif;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+      }
+      #player {
+        position: fixed;
+        left: 16px;
+        bottom: 16px;
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: var(--panel);
+      }
+      #player button {
+        font: inherit;
+        min-width: 4.5em;
+        padding: 4px 10px;
+        cursor: pointer;
+      }
+      #notice {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        padding: 16px;
+        text-align: center;
+      }
+      #notice code {
+        user-select: all;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="notice" hidden></div>
+    <div id="player" hidden>
+      <button id="play" type="button">Play</button>
+      <span id="status" aria-live="polite"></span>
+    </div>
+    <script type="module" src="%PAGE_SCRIPT%"></script>
+  </body>
+</html>
