@@ -205,6 +205,17 @@
           display: none;
         }
       }
+      .postcard {
+        position: fixed;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        padding: 4px 12px;
+        border-radius: 8px;
+        background: var(--panel);
+        pointer-events: none;
+        white-space: nowrap;
+      }
       [hidden] {
         display: none !important;
       }
@@ -214,6 +225,7 @@
     <div id="notice" hidden></div>
     <aside id="legend" class="legend" aria-label="Contributors" hidden></aside>
     <p id="commit-caption" class="commit-caption" aria-live="polite" hidden></p>
+    <div id="postcard" class="postcard" hidden></div>
     <div id="player" hidden>
       <div class="controls">
         <button id="back" type="button">Play backwards</button>
@@ -223,6 +235,7 @@
         <span id="caption" class="caption"></span>
         <button id="mode-real" type="button" aria-pressed="true">Real time</button>
         <button id="mode-commit" type="button" aria-pressed="false">Per commit</button>
+        <button id="follow" type="button" aria-pressed="true">Follow changes: on</button>
         <span id="speeds" class="speeds"></span>
       </div>
       <div id="track" class="track">
