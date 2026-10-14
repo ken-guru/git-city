@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { build } from "../src/cli/build.js";
 import { seedNumber } from "../src/cli/namer.js";
-import { type Chunk, decodeChunk, decodeWorld, EVENT_ADD, FORMAT_VERSION } from "../src/shared/format.js";
+import { type Chunk, decodeChunk, decodeWorld, EVENT_ADD, EVENT_DELETE, FORMAT_VERSION } from "../src/shared/format.js";
 import { dayOf, FixtureRepo } from "./fixture.js";
 
 const cleanups: (() => void)[] = [];
@@ -49,8 +49,12 @@ async function buildSite(repo: FixtureRepo, options: { branch?: string } = {}) {
   return { outDir, world, chunks };
 }
 
+/** The Building events of a chunk (add and delete), as [commit, kind]. Block and Road events are left out. */
 function eventsOf(chunk: Chunk): [number, string][] {
-  return [...chunk.eventCommit].map((commit, i) => [commit, chunk.eventKind[i] === EVENT_ADD ? "add" : "delete"]);
+  return [...chunk.eventCommit]
+    .map((commit, i) => [commit, chunk.eventKind[i]] as const)
+    .filter(([, kind]) => kind === EVENT_ADD || kind === EVENT_DELETE)
+    .map(([commit, kind]) => [commit, kind === EVENT_ADD ? "add" : "delete"]);
 }
 
 describe("git-city build", () => {
@@ -198,7 +202,11 @@ describe("re-runs over several chunks", () => {
 function lifetimes(chunk: Chunk): [number, number | null][] {
   const born = new Map<number, number>();
   const died = new Map<number, number>();
-  chunk.eventFile.forEach((file, i) => (chunk.eventKind[i] === EVENT_ADD ? born : died).set(file, chunk.eventCommit[i]!));
+  chunk.eventFile.forEach((file, i) => {
+    const kind = chunk.eventKind[i];
+    if (kind === EVENT_ADD) born.set(file, chunk.eventCommit[i]!);
+    else if (kind === EVENT_DELETE) died.set(file, chunk.eventCommit[i]!);
+  });
   return [...born]
     .map(([file, commit]): [number, number | null] => [commit, died.get(file) ?? null])
     .sort((x, y) => x[0] - y[0] || (x[1] ?? Infinity) - (y[1] ?? Infinity));

@@ -13,7 +13,20 @@ import {
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { BUILDING_TYPES, type BuildingType, LANGUAGES } from "../shared/buildings.js";
 import { type LodSettings, settingsFor } from "./lod.js";
-import { type BuildingSegment, buildingPose, durationFor, FOUNDATION_SHARE, KIND_CHANGE, KIND_NONE, type ScaffoldSegment, scaffoldPose } from "./state.js";
+import {
+  type BuildingSegment,
+  buildingPose,
+  durationFor,
+  FOUNDATION_SHARE,
+  KIND_CHANGE,
+  KIND_NONE,
+  type LanguageSegment,
+  languageAt,
+  type ScaffoldSegment,
+  scaffoldPose,
+} from "./state.js";
+import type { Spot } from "./lots.js";
+import { massShown } from "./blocks.js";
 
 /**
  * The modular kit. Every Building type is one unit-height body (y 0..1) plus props on its roof (y from 1 up).
@@ -281,25 +294,39 @@ function cityMaterial(uniforms: CityUniforms, color: number, mode: "building" | 
   return material;
 }
 
+/** Linear blend of two colours given as 0xRRGGBB, by `share` from 0 (`a`) to 1 (`b`). */
+export function mixColour(a: number, b: number, share: number): number {
+  const channel = (shift: number) => {
+    const from = (a >> shift) & 255;
+    const to = (b >> shift) & 255;
+    return Math.round(from + (to - from) * share) & 255;
+  };
+  return (channel(16) << 16) | (channel(8) << 8) | channel(0);
+}
+
 function rgb(hex: number): [number, number, number] {
   return [((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255];
 }
 
 export interface CityData {
-  fileCount: number;
+  stintCount: number;
+  /** Per Stint: its Building type at creation, and the language its file had then. Changes come from the timelines. */
   buildingType: Uint8Array;
   language: Uint8Array;
   seed: Uint32Array;
   buildings: BuildingSegment[][];
   scaffolds: ScaffoldSegment[][];
-  /** Where a file's Lot is on the ground. */
-  place: (file: number) => { x: number; z: number };
+  languages: LanguageSegment[][];
+  /** Where a Stint stands on the ground, or undefined when it has no Lot (it is then never drawn). */
+  place: (stint: number) => Spot | undefined;
+  /** The centre of the Block the Stint's Lot is in: beyond the mass distance, the Block draws as a mass instead. */
+  block: (stint: number) => Spot;
 }
 
 interface TypeMesh {
   mesh: InstancedMesh;
-  /** File ids in instance order. */
-  files: number[];
+  /** Stint ids in instance order. */
+  stints: number[];
   start: InstancedBufferAttribute;
   kind: InstancedBufferAttribute;
   from: InstancedBufferAttribute;
@@ -321,6 +348,10 @@ export class CityBuildings {
   private readonly uniforms: CityUniforms;
   private readonly place: CityData["place"];
   private readonly data: CityData;
+  /** The colour each Stint's instance last received, so only changed colours are written. */
+  private readonly lastColour = new Map<number, number>();
+  /** Beyond this distance from the camera, a Block draws as a mass and its Buildings are not drawn (see `setDetail`). */
+  private massFar = Number.POSITIVE_INFINITY;
 
   constructor(scene: Scene, data: CityData, theme: keyof typeof PALETTE) {
     this.data = data;
@@ -339,19 +370,19 @@ export class CityBuildings {
       uWindowFar: { value: detail.windowFar },
       uPropFar: { value: detail.propFar },
     };
-    this.slot = new Int32Array(data.fileCount);
-    this.onBuilding = new Uint8Array(data.fileCount);
-    this.onScaffold = new Uint8Array(data.fileCount);
+    this.slot = new Int32Array(data.stintCount);
+    this.onBuilding = new Uint8Array(data.stintCount);
+    this.onScaffold = new Uint8Array(data.stintCount);
 
     BUILDING_TYPES.forEach((type, typeIndex) => {
-      const files: number[] = [];
-      for (let f = 0; f < data.fileCount; f++) {
+      const stints: number[] = [];
+      for (let f = 0; f < data.stintCount; f++) {
         if (data.buildingType[f] === typeIndex) {
-          this.slot[f] = files.length;
-          files.push(f);
+          this.slot[f] = stints.length;
+          stints.push(f);
         }
       }
-      const n = files.length;
+      const n = stints.length;
       const geometry = buildingKit(type);
       const attrs = {
         start: new InstancedBufferAttribute(new Float32Array(n), 1),
@@ -368,7 +399,7 @@ export class CityBuildings {
       geometry.setAttribute("aSeed", attrs.seed);
       geometry.setAttribute("aLanguage", attrs.language);
       const mesh = new InstancedMesh(geometry, cityMaterial(this.uniforms, WALL[type], "building"), n);
-      files.forEach((f, i) => {
+      stints.forEach((f, i) => {
         const language = LANGUAGES[data.language[f]!]?.colour ?? 0;
         attrs.language.array.set(rgb(language), i * 3);
         attrs.seed.setX(i, data.seed[f]! & 0xffffff);
@@ -376,25 +407,25 @@ export class CityBuildings {
       });
       // Instance bounds are computed once, so collapsing and growing instances would leave them stale.
       mesh.frustumCulled = false;
-      this.types.push({ mesh, files, ...attrs });
+      this.types.push({ mesh, stints, ...attrs });
       this.objects.push(mesh);
     });
 
     const scaffoldGeometry = scaffoldKit();
     const scaffoldAttrs = {
-      start: new InstancedBufferAttribute(new Float32Array(data.fileCount), 1),
-      from: new InstancedBufferAttribute(new Float32Array(data.fileCount), 1),
-      to: new InstancedBufferAttribute(new Float32Array(data.fileCount), 1),
-      height: new InstancedBufferAttribute(new Float32Array(data.fileCount), 1),
+      start: new InstancedBufferAttribute(new Float32Array(data.stintCount), 1),
+      from: new InstancedBufferAttribute(new Float32Array(data.stintCount), 1),
+      to: new InstancedBufferAttribute(new Float32Array(data.stintCount), 1),
+      height: new InstancedBufferAttribute(new Float32Array(data.stintCount), 1),
     };
     scaffoldGeometry.setAttribute("aStart", scaffoldAttrs.start);
     scaffoldGeometry.setAttribute("aFrom", scaffoldAttrs.from);
     scaffoldGeometry.setAttribute("aTo", scaffoldAttrs.to);
     scaffoldGeometry.setAttribute("aHeight", scaffoldAttrs.height);
     this.scaffoldAttrs = scaffoldAttrs;
-    this.scaffold = new InstancedMesh(scaffoldGeometry, cityMaterial(this.uniforms, PALETTE[theme].steel, "scaffold"), data.fileCount);
+    this.scaffold = new InstancedMesh(scaffoldGeometry, cityMaterial(this.uniforms, PALETTE[theme].steel, "scaffold"), data.stintCount);
     this.scaffold.frustumCulled = false;
-    for (let f = 0; f < data.fileCount; f++) this.setPlacement(this.scaffold, f, f, false);
+    for (let f = 0; f < data.stintCount; f++) this.setPlacement(this.scaffold, f, f, false);
     this.objects.push(this.scaffold);
 
     for (const object of this.objects) scene.add(object);
@@ -405,52 +436,81 @@ export class CityBuildings {
     this.uniforms.uWindowNear.value = detail.windowNear;
     this.uniforms.uWindowFar.value = detail.windowFar;
     this.uniforms.uPropFar.value = detail.propFar;
+    this.massFar = detail.massFar;
   }
 
-  /** Puts a file's instance on its Lot, or collapses it to nothing. */
-  private setPlacement(mesh: InstancedMesh, instance: number, file: number, visible: boolean) {
-    const { x, z } = this.place(file);
-    const scale = visible ? 1 : 0;
-    this.matrix.makeScale(scale, scale, scale).setPosition(x, 0, z);
+  /** Whether a Stint's Block is far enough from the camera to draw as a mass, which hides the Buildings inside it. */
+  private inMass(stint: number, camera: { x: number; z: number }): boolean {
+    const block = this.data.block(stint);
+    return massShown(Math.hypot(block.x - camera.x, block.z - camera.z), this.massFar);
+  }
+
+  /** Puts a Stint's instance on its Lot, or collapses it to nothing (also when the file has no Lot). */
+  private setPlacement(mesh: InstancedMesh, instance: number, stint: number, visible: boolean) {
+    const spot = this.place(stint);
+    const scale = visible && spot ? 1 : 0;
+    this.matrix.makeScale(scale, scale, scale).setPosition(spot?.x ?? 0, 0, spot?.z ?? 0);
     mesh.setMatrixAt(instance, this.matrix);
   }
 
-  /** Sets every instance for time `t` (in commits) and at `commitsPerSecond` speed. */
-  update(t: number, commitsPerSecond: number): void {
+  /** The roof and trim colour of a Stint at `t`: it eases from one language to the next when the language changes. */
+  private setLanguage(attribute: InstancedBufferAttribute, i: number, f: number, t: number, duration: number): void {
+    const segments = this.data.languages[f]!;
+    if (segments.length === 0) return;
+    const birth = this.data.language[f]!;
+    const { from, to, share } = languageAt(segments, birth, t, duration);
+    const colour = LANGUAGES[to]?.colour ?? 0;
+    const previous = LANGUAGES[from]?.colour ?? colour;
+    const mixed = mixColour(previous, colour, share);
+    if (this.lastColour.get(f) === mixed) return;
+    this.lastColour.set(f, mixed);
+    const [r, g, b] = rgb(mixed);
+    attribute.setXYZ(i, r, g, b);
+  }
+
+  /**
+   * Sets every instance for time `t` (in commits), at `commitsPerSecond` speed, and for a camera at `camera`
+   * (its horizontal position): Buildings in Blocks beyond the mass distance are not drawn.
+   */
+  update(t: number, commitsPerSecond: number, camera: { x: number; z: number }): void {
     const duration = durationFor(commitsPerSecond);
     this.uniforms.uTime.value = t;
     this.uniforms.uDuration.value = duration;
 
     for (const type of this.types) {
-      const { files, start, kind, from, to } = type;
-      files.forEach((f, i) => {
+      const { stints, start, kind, from, to } = type;
+      stints.forEach((f, i) => {
         const pose = buildingPose(this.data.buildings[f]!, t, duration);
+        this.setLanguage(type.language, i, f, t, duration);
         start.setX(i, Math.max(-1e6, pose.start));
         // A hidden Lot has no transition; it is collapsed by its matrix, so any kind will do. Use a change to keep the shader on one branch.
         kind.setX(i, pose.kind === KIND_NONE ? KIND_CHANGE : pose.kind);
         from.setX(i, pose.from);
         to.setX(i, pose.to);
-        if (pose.visible !== Boolean(this.onBuilding[f])) {
-          this.onBuilding[f] = pose.visible ? 1 : 0;
-          this.setPlacement(type.mesh, i, f, pose.visible);
+        const shown = pose.visible && !this.inMass(f, camera);
+        if (shown !== Boolean(this.onBuilding[f])) {
+          this.onBuilding[f] = shown ? 1 : 0;
+          this.setPlacement(type.mesh, i, f, shown);
         }
       });
       start.needsUpdate = kind.needsUpdate = from.needsUpdate = to.needsUpdate = true;
       type.mesh.instanceMatrix.needsUpdate = true;
     }
 
-    for (let f = 0; f < this.data.fileCount; f++) {
+    for (let f = 0; f < this.data.stintCount; f++) {
       const building = buildingPose(this.data.buildings[f]!, t, duration);
       const pose = scaffoldPose(this.data.scaffolds[f]!, building, t, duration);
       this.scaffoldAttrs.start.setX(f, Math.max(-1e6, pose.start));
       this.scaffoldAttrs.from.setX(f, pose.from);
       this.scaffoldAttrs.to.setX(f, pose.to);
       this.scaffoldAttrs.height.setX(f, pose.height);
-      if (pose.visible !== Boolean(this.onScaffold[f])) {
-        this.onScaffold[f] = pose.visible ? 1 : 0;
-        this.setPlacement(this.scaffold, f, f, pose.visible);
+      const shown = pose.visible && !this.inMass(f, camera);
+      if (shown !== Boolean(this.onScaffold[f])) {
+        this.onScaffold[f] = shown ? 1 : 0;
+        this.setPlacement(this.scaffold, f, f, shown);
       }
     }
+    for (const type of this.types) type.language.needsUpdate = true;
     this.scaffoldAttrs.start.needsUpdate = this.scaffoldAttrs.from.needsUpdate = true;
     this.scaffoldAttrs.to.needsUpdate = this.scaffoldAttrs.height.needsUpdate = true;
     this.scaffold.instanceMatrix.needsUpdate = true;

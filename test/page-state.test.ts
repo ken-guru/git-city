@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   EVENT_ADD,
+  EVENT_BLOCK_OWNER,
+  EVENT_ROAD_BUILT,
+  EVENT_ROAD_LANES,
   EVENT_DELETE,
   EVENT_FLOORS,
+  EVENT_LANGUAGE,
+  EVENT_RELOCATE,
+  EVENT_RENOVATE,
   EVENT_SCAFFOLD_OFF,
   EVENT_SCAFFOLD_ON,
   type Chunk,
@@ -14,17 +20,23 @@ import {
   buildTimelines,
   displayedFloors,
   durationFor,
-  gridColumns,
-  gridSlot,
   KIND_BUILD,
   KIND_CHANGE,
   KIND_DEMOLISH,
+  languageAt,
   scaffoldPose,
   TRANSITION_COMMITS,
 } from "../src/page/state.js";
 
 const EMPTY_SNAPSHOT: ChunkSnapshot = {
   file: new Uint32Array(0),
+  stint: new Uint32Array(0),
+  blockIds: new Uint32Array(0),
+  blockDistricts: new Uint32Array(0),
+  roadIds: new Uint32Array(0),
+  roadBuilt: new Uint32Array(0),
+  roadForward: new Uint8Array(0),
+  roadBackward: new Uint8Array(0),
   floors: new Uint8Array(0),
   scaffolded: new Uint8Array(0),
   buildingType: new Uint8Array(0),
@@ -43,6 +55,22 @@ function chunkOf(
     snapshot,
     eventCommit: Uint32Array.from(events, (e) => e[0]),
     eventFile: Uint32Array.from(events, (e) => e[1]),
+    // Each file is its own Stint here, unless the test says otherwise.
+    eventStint: Uint32Array.from(events, (e) => e[1]),
+    eventKind: Uint8Array.from(events, (e) => e[2]),
+    eventValue: Uint8Array.from(events, (e) => e[3]),
+  };
+}
+
+/** A chunk whose events name their Stints. */
+function staged(events: [commit: number, file: number, kind: number, value: number, stint: number][], firstCommit = 0): Chunk {
+  return {
+    formatVersion: 6,
+    firstCommit,
+    snapshot: EMPTY_SNAPSHOT,
+    eventCommit: Uint32Array.from(events, (e) => e[0]),
+    eventFile: Uint32Array.from(events, (e) => e[1]),
+    eventStint: Uint32Array.from(events, (e) => e[4]),
     eventKind: Uint8Array.from(events, (e) => e[2]),
     eventValue: Uint8Array.from(events, (e) => e[3]),
   };
@@ -121,6 +149,13 @@ describe("Lots and poses", () => {
 describe("snapshots", () => {
   const snapshot: ChunkSnapshot = {
     file: Uint32Array.of(0, 1),
+    stint: Uint32Array.of(0, 1),
+    blockIds: new Uint32Array(0),
+    blockDistricts: new Uint32Array(0),
+    roadIds: new Uint32Array(0),
+    roadBuilt: new Uint32Array(0),
+    roadForward: new Uint8Array(0),
+    roadBackward: new Uint8Array(0),
     floors: Uint8Array.of(4, 2),
     scaffolded: Uint8Array.of(1, 0),
     buildingType: Uint8Array.of(0, 0),
@@ -181,15 +216,151 @@ describe("scaffolding", () => {
   });
 });
 
-describe("page grid", () => {
-  it("gives every file its own spot on a square grid", () => {
-    const columns = gridColumns(10);
-    const slots = Array.from({ length: 10 }, (_, file) => gridSlot(file, columns));
+describe("language changes", () => {
+  it("eases the colour from the birth language to the new one, from the commit of the change", () => {
+    const { languages } = buildTimelines(chunkOf([[5, 0, EVENT_LANGUAGE, 3]]), 1, Uint8Array.of(1));
+    const segments = languages[0]!;
+    expect(languageAt(segments, 1, 4)).toEqual({ from: 1, to: 1, share: 1 }); // before the change: birth language, no easing
+    expect(languageAt(segments, 1, 5)).toEqual({ from: 1, to: 3, share: 0 });
+    expect(languageAt(segments, 1, 6.5).share).toBeCloseTo(1 - (1 - 1.5 / 4) ** 3);
+    expect(languageAt(segments, 1, 9)).toEqual({ from: 1, to: 3, share: 1 });
+  });
 
-    expect(columns).toBe(4);
-    expect(slots[0]).toEqual({ column: 0, row: 0 });
-    expect(slots[3]).toEqual({ column: 3, row: 0 });
-    expect(slots[4]).toEqual({ column: 0, row: 1 });
-    expect(new Set(slots.map((s) => `${s.column},${s.row}`)).size).toBe(10);
+  it("starts a file's language from its birth language when it is added in the chunk", () => {
+    const add: [number, number, number, number] = [2, 0, EVENT_ADD, 1];
+    const { languages } = buildTimelines(chunkOf([add, [4, 0, EVENT_LANGUAGE, 2], [8, 0, EVENT_LANGUAGE, 5]]), 1, Uint8Array.of(7));
+    // The birth language holds from the ADD, then each change eases from the one before it.
+    expect(languages[0]!.map((s) => [s.from, s.to])).toEqual([
+      [7, 7],
+      [7, 2],
+      [2, 5],
+    ]);
+  });
+
+  it("uses the snapshot language as the starting point of a chunk, so the chunk stands alone", () => {
+    const snapshot: ChunkSnapshot = { ...EMPTY_SNAPSHOT, file: Uint32Array.of(0), stint: Uint32Array.of(0), floors: Uint8Array.of(2), scaffolded: Uint8Array.of(0), buildingType: Uint8Array.of(0), language: Uint8Array.of(4) };
+    const { languages } = buildTimelines(chunkOf([[12, 0, EVENT_LANGUAGE, 6]], 10, snapshot), 1, Uint8Array.of(0));
+    expect(languageAt(languages[0]!, 0, 10)).toMatchObject({ from: 4, to: 4 });
+    expect(languageAt(languages[0]!, 0, 12)).toEqual({ from: 4, to: 6, share: 0 });
+  });
+
+  it("changes the colour at once when the language before the change is not known", () => {
+    const { languages } = buildTimelines(chunkOf([[3, 0, EVENT_LANGUAGE, 2]]), 1);
+    expect(languages[0]!.map((s) => [s.from, s.to])).toEqual([[2, 2]]);
+  });
+
+  it("eases from the birth language when the file was born before the chunk without a snapshot entry", () => {
+    const { languages } = buildTimelines(chunkOf([[3, 0, EVENT_LANGUAGE, 2]]), 1, Uint8Array.of(5));
+    expect(languages[0]!.map((s) => [s.from, s.to])).toEqual([[5, 2]]);
+  });
+});
+
+describe("Relocation and Renovation", () => {
+  // File 0 is built at commit 2 with three Floors as Stint 0. It moves at commit 10 as Stint 1.
+  const moved = (kind: number, value: number) =>
+    buildTimelines(
+      staged([
+        [2, 0, EVENT_ADD, 3, 0],
+        [10, 0, kind, value, 1],
+      ]),
+      2,
+    );
+
+  it("takes the old Stint down on its old Lot as the new one is built, starting together", () => {
+    const { buildings } = moved(EVENT_RELOCATE, 4);
+    const old = buildingPose(buildings[0]!, 10);
+    expect(old.kind).toBe(KIND_DEMOLISH);
+    expect(buildingPose(buildings[1]!, 10)).toMatchObject({ kind: KIND_BUILD, to: 3, visible: true });
+    // Once the demolition has finished, the old Stint's Lot is empty for good.
+    expect(buildingPose(buildings[0]!, 10 + TRANSITION_COMMITS).visible).toBe(false);
+  });
+
+  it("builds a Renovation as the new type only after the old one is down", () => {
+    const { buildings } = moved(EVENT_RENOVATE, 4);
+    expect(buildingPose(buildings[0]!, 10).kind).toBe(KIND_DEMOLISH);
+    expect(buildingPose(buildings[1]!, 10 + TRANSITION_COMMITS - 1).visible).toBe(false);
+    expect(buildingPose(buildings[1]!, 10 + TRANSITION_COMMITS)).toMatchObject({ kind: KIND_BUILD, to: 3, visible: true });
+  });
+
+  it("applies later events to the file's current Stint", () => {
+    const chunk = staged([
+      [2, 0, EVENT_ADD, 3, 0],
+      [10, 0, EVENT_RELOCATE, 4, 1],
+      [12, 0, EVENT_FLOORS, 5, 1],
+      [20, 0, EVENT_DELETE, 0, 1],
+    ]);
+    const { buildings } = buildTimelines(chunk, 2);
+    expect(buildingPose(buildings[1]!, 13)).toMatchObject({ kind: KIND_CHANGE, to: 5, visible: true });
+    expect(buildingPose(buildings[1]!, 30).visible).toBe(false);
+  });
+
+  it("carries a file's language across a Relocation without a colour change", () => {
+    const chunk = staged([
+      [2, 0, EVENT_ADD, 3, 0],
+      [5, 0, EVENT_LANGUAGE, 2, 0],
+      [10, 0, EVENT_RELOCATE, 4, 1],
+    ]);
+    const { languages } = buildTimelines(chunk, 2, Uint8Array.of(1));
+    expect(languageAt(languages[1]!, 1, 10)).toMatchObject({ from: 2, to: 2 });
+  });
+});
+
+describe("Block owners and Roads over time", () => {
+  /** A chunk with the given layout events; each event's stint carries the owner (Blocks) or the parent (Districts). */
+  const layoutChunk = (events: [commit: number, id: number, kind: number, value: number, stint: number][], snapshot = EMPTY_SNAPSHOT): Chunk => ({
+    formatVersion: 7,
+    firstCommit: 0,
+    snapshot,
+    eventCommit: Uint32Array.from(events, (e) => e[0]),
+    eventFile: Uint32Array.from(events, (e) => e[1]),
+    eventStint: Uint32Array.from(events, (e) => e[4]),
+    eventKind: Uint8Array.from(events, (e) => e[2]),
+    eventValue: Uint8Array.from(events, (e) => e[3]),
+  });
+
+  it("gives each Block its owner from the claim, and each owner change after it", () => {
+    const { owners } = buildTimelines(
+      layoutChunk([
+        [3, 7, EVENT_BLOCK_OWNER, 0, 0],
+        [9, 7, EVENT_BLOCK_OWNER, 1, 1],
+      ]),
+      0,
+    );
+    expect(owners.get(7)).toEqual([
+      { start: 3, owner: 0, from: -1 },
+      { start: 9, owner: 1, from: 0 },
+    ]);
+  });
+
+  it("carries the owners and Roads of a chunk's snapshot as its first segments", () => {
+    const snapshot: ChunkSnapshot = {
+      ...EMPTY_SNAPSHOT,
+      blockIds: Uint32Array.of(4),
+      blockDistricts: Uint32Array.of(2),
+      roadIds: Uint32Array.of(1),
+      roadBuilt: Uint32Array.of(50),
+      roadForward: Uint8Array.of(2),
+      roadBackward: Uint8Array.of(1),
+    };
+    const { owners, roads } = buildTimelines(layoutChunk([], snapshot), 0);
+    expect(owners.get(4)).toEqual([{ start: 0, owner: 2, from: 2 }]);
+    expect(roads.get(1)).toEqual({ built: 50, lanes: [{ start: 0, fromForward: 2, fromBackward: 1, forward: 2, backward: 1 }] });
+  });
+
+  it("builds a Road at its first event and eases its Lanes from the ones before", () => {
+    const { roads } = buildTimelines(
+      layoutChunk([
+        [5, 0, EVENT_ROAD_BUILT, 0, 0],
+        [5, 0, EVENT_ROAD_LANES, 2, 1],
+        [9, 0, EVENT_ROAD_LANES, 3, 1],
+      ]),
+      0,
+    );
+    const road = roads.get(0)!;
+    expect(road.built).toBe(5);
+    expect(road.lanes.map((l) => [l.fromForward, l.forward, l.backward])).toEqual([
+      [0, 2, 1],
+      [2, 3, 1],
+    ]);
   });
 });

@@ -140,10 +140,15 @@ export interface BlockRecord {
   /** World position in Block widths: the village centre plus the Block's grid offset, turned by the village angle. */
   x: number;
   z: number;
+  /** Birth index (see `DistrictRecord.index`) of the District that owns the Block now, or NO_DISTRICT. */
+  district: number;
 }
 
-/** A Block as the layout keeps it: its world position is worked out when the result is read. */
-type StoredBlock = Omit<BlockRecord, "x" | "z">;
+/** Marks a Block whose owner is no District in the result. */
+export const NO_DISTRICT = 0xffffffff;
+
+/** A Block as the layout keeps it: its world position and owner are worked out when the result is read. */
+type StoredBlock = Omit<BlockRecord, "x" | "z" | "district">;
 
 /**
  * A Lot a Building stood on. A Building that is relocated gets a new record under the same file id;
@@ -208,6 +213,14 @@ export interface LayoutSnapshot {
   currentLot: [number, number][];
 }
 
+/**
+ * What one commit did to Districts and Blocks, in the order it happened. A split or merge comes before the owner
+ * changes it causes. Birth indices name Districts, since they are never reused.
+ */
+export type LayoutEvent =
+  | { kind: "split" | "merge"; district: number; parent: number }
+  | { kind: "owner"; block: number; district: number };
+
 /** Whether a directory is `dir` itself or lies below it. */
 function within(path: string, dir: string): boolean {
   return path === dir || path.startsWith(dir + "/");
@@ -237,6 +250,8 @@ export class LayoutBuilder {
   private readonly ownedBlocks = new Map<string, number[]>();
   /** Changes applied so far: the sequence number of the next one. */
   private applied = 0;
+  /** What the change being applied has done so far (see `LayoutEvent`). */
+  private events: LayoutEvent[] = [];
   /** The sequence number of the change being applied. */
   private sequence = 0;
   /** Per file: the width step it has now. */
@@ -255,8 +270,10 @@ export class LayoutBuilder {
     this.terrain = options.terrain ?? countryside(options.seed);
   }
 
-  apply(change: LayoutChange): void {
+  /** Applies one commit's change and returns what it did to Districts and Blocks. */
+  apply(change: LayoutChange): LayoutEvent[] {
     this.sequence = this.applied++;
+    this.events = [];
     const moved = change.moved ?? [];
     const whole = wholeDirectoryMoves(moved, (dir) => this.standingDirs.get(dir) ?? 0);
     for (const { path } of change.deleted) this.unstand(path);
@@ -277,6 +294,7 @@ export class LayoutBuilder {
       if (whole.covered.has(i) || splitPath(from).dir === splitPath(to).dir) return;
       this.build(file, to);
     });
+    return this.events;
   }
 
   result(): LayoutResult {
@@ -290,12 +308,25 @@ export class LayoutBuilder {
         role: d.role,
         paving: paving(this.options.seed, d.index, d.role, this.options.hueOf, d.lightnessOffset),
       }));
+    // A Block belongs to the District its Neighbourhood is in now, which whole-directory moves and renames can change.
+    const birth = new Map(districts.map((d) => [d.key, d.index] as const));
+    const blockDistricts = new Map<number, number>();
+    for (const [owner, ids] of this.ownedBlocks) {
+      const [key] = JSON.parse(owner) as [string, string];
+      const index = birth.get(key);
+      if (index !== undefined) for (const id of ids) blockDistricts.set(id, index);
+    }
     return {
       districts,
       villages: this.villages.map((v) => ({ ...v })),
-      blocks: this.blocks.map((b) => ({ ...b, ...this.worldPosition(b) })),
+      blocks: this.blocks.map((b) => ({ ...b, ...this.worldPosition(b), district: blockDistricts.get(b.id) ?? NO_DISTRICT })),
       lots: this.lots.map((l) => ({ ...l })),
     };
+  }
+
+  /** How many villages have been founded so far. */
+  villageCount(): number {
+    return this.villages.length;
   }
 
   /** A file's width step now (0 when it has none). */
@@ -476,6 +507,11 @@ export class LayoutBuilder {
       const newDistrict = this.districtOf(renamed.split("/"));
       const target = ownerKey(newDistrict, renamed);
       this.ownedBlocks.set(target, [...(this.ownedBlocks.get(target) ?? []), ...blocks]);
+      if (newDistrict !== district) {
+        // The blocks change District only when the directory's new name lies in another District.
+        const receiver = this.districts.get(newDistrict);
+        for (const id of blocks) this.events.push({ kind: "owner", block: id, district: receiver?.index ?? -1 });
+      }
       this.districts.get(district)?.neighbourhoods.delete(neighbourhood);
       const village = this.blocks[blocks[0]!]!.village;
       this.districtFor(newDistrict, village).neighbourhoods.add(renamed);
@@ -514,7 +550,10 @@ export class LayoutBuilder {
     };
     this.districts.set(key, district);
     // Its Neighbourhoods were drawn in the parent District; they now belong to this one, with the same Blocks.
-    if (parent) this.moveOwners(parent, district, (nb) => within(nb, key));
+    if (parent) {
+      this.events.push({ kind: "split", district: index, parent: parent.index });
+      this.moveOwners(parent, district, (nb) => within(nb, key));
+    }
     return district;
   }
 
@@ -536,6 +575,7 @@ export class LayoutBuilder {
     const next = this.districtOf(key.split("/"));
     if (next === key) return;
     const target = this.districtFor(next, district.village);
+    this.events.push({ kind: "merge", district: district.index, parent: target.index });
     this.moveOwners(district, target, () => true);
     this.districts.delete(key);
   }
@@ -546,7 +586,9 @@ export class LayoutBuilder {
       const [district, neighbourhood] = JSON.parse(owner) as [string, string];
       if (district !== from.key || !scope(neighbourhood)) continue;
       const target = ownerKey(to.key, neighbourhood);
-      this.ownedBlocks.set(target, [...(this.ownedBlocks.get(target) ?? []), ...this.ownedBlocks.get(owner)!]);
+      const moved = this.ownedBlocks.get(owner)!;
+      for (const id of moved) this.events.push({ kind: "owner", block: id, district: to.index });
+      this.ownedBlocks.set(target, [...(this.ownedBlocks.get(target) ?? []), ...moved]);
       this.ownedBlocks.delete(owner);
       from.neighbourhoods.delete(neighbourhood);
       to.neighbourhoods.add(neighbourhood);
@@ -618,6 +660,8 @@ export class LayoutBuilder {
     this.blockSlots.push(Array.from({ length: BLOCK_ROWS * BLOCK_SLOTS_PER_ROW }, () => false));
     own.push(id);
     this.ownedBlocks.set(owner, own);
+    const [key] = JSON.parse(owner) as [string, string];
+    this.events.push({ kind: "owner", block: id, district: this.districts.get(key)?.index ?? -1 });
     return id;
   }
 

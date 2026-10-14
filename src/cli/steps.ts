@@ -151,6 +151,7 @@ export function groupTimeline(data: TimelineData, plan: StepPlan): TimelineData 
     stepCommits: Uint32Array.from(plan.stepCommits),
     eventCommit: Uint32Array.from(keep, (i) => stepOfEvent(i)),
     eventFile: Uint32Array.from(keep, (i) => data.eventFile[i]!),
+    eventStint: Uint32Array.from(keep, (i) => data.eventStint[i]!),
     eventKind: Uint8Array.from(keep, (i) => data.eventKind[i]!),
     eventValue: Uint8Array.from(keep, (i) => data.eventValue[i]!),
   };

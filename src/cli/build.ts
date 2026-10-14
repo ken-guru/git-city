@@ -6,17 +6,17 @@ import { loadConfig } from "./config.js";
 import { gitMaybe, git } from "./git.js";
 import { isShallowRepository, resolveTimelineHead } from "./history.js";
 import { categoryOf } from "./model.js";
-import { type LayoutResult } from "./layout.js";
+import { NO_DISTRICT, type LayoutResult, type LotRecord } from "./layout.js";
 import { type NearMiss, nameFiles, namePlaces, type PlaceInput, type Revealed } from "./naming.js";
 import { seedNumber } from "./namer.js";
 import { type PipelineOptions } from "./pipeline.js";
 import { PrivacyError, scanOutput } from "./privacy.js";
 import { readPipeline, type PipelineRead } from "./resume.js";
 import { planChunks, type SizeReport, sizeReport } from "./chunks.js";
-import { type RoadNetwork, buildRoadNetwork } from "./imports/roads.js";
+import type { RoadTable } from "./roadhistory.js";
 import { DEFAULT_THEME, hueFor, loadTheme, type Theme } from "./theme.js";
 import { type StepEra, type StepLevel, chooseStepLevel, groupTimeline, PEAK_BUILDINGS_WARNING, peakStanding, planSteps, recentFromFor, stepEras } from "./steps.js";
-import type { WorldLayout } from "../shared/format.js";
+import type { StintTable, WorldLayout } from "../shared/format.js";
 import { encodeSiteWorld, writeSite } from "./write.js";
 
 /** The pre-built page, shipped at `dist/page/` next to the CLI. */
@@ -107,6 +107,8 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
       read.missingBlobs,
       read.scope,
     );
+    // After the checkpoint: a checkpoint holds only the scheduled Road samples, so every run resumes from the same state.
+    read.pipeline.finish();
   } finally {
     await cache.close();
   }
@@ -125,7 +127,8 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   }
 
   const layout = pipeline.layout.result();
-  const roads = roadsOf(layout, pipeline.graph.districtLinks((path) => pipeline.layout.districtForPath(path)));
+  const roads = pipeline.roads.table();
+  const streets = pipeline.roadNetwork?.streets ?? new Map<string, number>();
   const widthStep = Uint8Array.from({ length: rawTimeline.fileCount }, (_, file) => pipeline.layout.stepOf(file));
   const places = namePlaces(placeInputs(layout), config, {
     theme,
@@ -135,11 +138,13 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   });
 
   // Steps: the smallest grouping that fits the budget (or the pinned one). Only the output's commits move.
+  // Everything keyed by commit (claims, events, Road build dates) is renumbered with the same plan.
+  const worldFor = (stepOf: Uint32Array) => worldLayout(claimsAtSteps(layout, stepOf), roads, streets, seed, widthStep, rawTimeline.stints);
   const sizeAt = (level: StepLevel) => {
     const plan = planSteps(rawTimeline.commitDays, level, recentFromFor(commits));
     const timeline = groupTimeline(rawTimeline, plan);
     const plans = planChunks(timeline);
-    const worldBytes = encodeSiteWorld(timeline, plans, worldLayout(claimsAtSteps(layout, plan.stepOf), roads, seed, widthStep));
+    const worldBytes = encodeSiteWorld(timeline, plans, worldFor(plan.stepOf));
     return sizeReport(worldBytes, plans);
   };
   const choice = chooseStepLevel(config.scale.timeline ?? "auto", commits, sizeAt);
@@ -158,7 +163,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     outDir,
     options.pageDir ?? DEFAULT_PAGE_DIR,
     timeline,
-    worldLayout(claimsAtSteps(layout, plan.stepOf), roads, seed, widthStep),
+    worldFor(plan.stepOf),
     names.table,
     places,
     (staging) => scanOutput(staging, names.hidden),
@@ -210,19 +215,18 @@ export async function rootCommit(repoDir: string, head: string): Promise<string>
   return roots?.[0] ?? head;
 }
 
-/** The Road network between the villages, from the file-to-file links between their Districts. */
-export function roadsOf(layout: LayoutResult, links: { from: string; to: string; strength: number }[]): RoadNetwork {
-  const villageOf = new Map(layout.districts.map((d) => [d.key, d.village] as const));
-  return buildRoadNetwork(
-    layout.villages.map((v) => ({ id: v.id, col: v.col, row: v.row })),
-    links,
-    (district) => villageOf.get(district),
-  );
-}
-
 /** The layout as the world file holds it: villages, Blocks, Lots, Roads and per-file width steps. */
-export function worldLayout(layout: LayoutResult, roads: RoadNetwork, citySeed: number, widthStep: Uint8Array): WorldLayout {
+export function worldLayout(
+  layout: LayoutResult,
+  roads: RoadTable,
+  streets: ReadonlyMap<string, number>,
+  citySeed: number,
+  widthStep: Uint8Array,
+  stints: StintSource,
+): WorldLayout {
+  const positionOf = new Map(layout.districts.map((d, position) => [d.index, position] as const));
   return {
+    stints: stintTable(layout.lots, stints),
     citySeed,
     widthStep,
     villages: {
@@ -236,6 +240,8 @@ export function worldLayout(layout: LayoutResult, roads: RoadNetwork, citySeed: 
       z: Float32Array.from(layout.blocks, (b) => b.z),
       claimed: Uint32Array.from(layout.blocks, (b) => b.claimedAt),
       brick: Uint8Array.from(layout.blocks, (b) => (b.brickOffset > 0 ? 1 : 0)),
+      // The places file numbers Districts by their position in the layout's list, so Blocks name that position.
+      district: Uint32Array.from(layout.blocks, (b) => positionOf.get(b.district) ?? NO_DISTRICT),
     },
     lots: {
       file: Uint32Array.from(layout.lots, (l) => l.file),
@@ -244,13 +250,54 @@ export function worldLayout(layout: LayoutResult, roads: RoadNetwork, citySeed: 
       slots: Uint8Array.from(layout.lots, (l) => l.slots),
     },
     roads: {
-      a: Uint32Array.from(roads.roads, (r) => r.a),
-      b: Uint32Array.from(roads.roads, (r) => r.b),
-      forward: Uint8Array.from(roads.roads, (r) => r.lanes.forward),
-      backward: Uint8Array.from(roads.roads, (r) => r.lanes.backward),
-      track: Uint8Array.from(roads.roads, (r) => (r.track ? 1 : 0)),
+      a: Uint32Array.from(roads.a),
+      b: Uint32Array.from(roads.b),
+      forward: Uint8Array.from(roads.forward),
+      backward: Uint8Array.from(roads.backward),
+      // A Road with no Lanes either way is an unpaved track.
+      track: Uint8Array.from(roads.forward, (forward, i) => (forward === 0 && roads.backward[i] === 0 ? 1 : 0)),
+    },
+    districts: {
+      index: Uint32Array.from(layout.districts, (d) => d.index),
+      street: Uint8Array.from(layout.districts, (d) => Math.round(100 * (streets.get(d.key) ?? 1))),
     },
   };
+}
+
+/** The Timeline's Stints, as the page needs them: each one's file, Building type at creation, and the Stint it replaces. */
+export interface StintSource {
+  file: Uint32Array;
+  buildingType: Uint8Array;
+  from: Int32Array;
+}
+
+/**
+ * Gives every Stint the Lot it stands on. A Stint born with its file (ADD) or a Relocation takes the next Lot the
+ * layout handed that file, in order; a Renovation stands on the Lot of the Stint it replaces. Throws when the two
+ * disagree, since the page would otherwise draw a Building on the wrong Lot.
+ */
+export function stintTable(lots: readonly LotRecord[], stints: StintSource): StintTable {
+  const queues = new Map<number, number[]>();
+  lots.forEach((lot, index) => {
+    const queue = queues.get(lot.file) ?? [];
+    queue.push(index);
+    queues.set(lot.file, queue);
+  });
+  const lotOf = new Uint32Array(stints.file.length);
+  for (let s = 0; s < stints.file.length; s++) {
+    const from = stints.from[s]!;
+    if (from >= 0) {
+      lotOf[s] = lotOf[from]!;
+      continue;
+    }
+    const lot = queues.get(stints.file[s]!)?.shift();
+    if (lot === undefined) throw new Error(`the layout gives file ${stints.file[s]} no Lot for Stint ${s}`);
+    lotOf[s] = lot;
+  }
+  for (const [file, queue] of queues) {
+    if (queue.length > 0) throw new Error(`the layout gives file ${file} Lots that no Stint stands on`);
+  }
+  return { file: stints.file, lot: lotOf, buildingType: stints.buildingType };
 }
 
 /** What the naming step needs about each District: structure only. */

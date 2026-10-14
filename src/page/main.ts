@@ -3,24 +3,24 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
 import { type PlacesFile, parsePlaces } from "../shared/places.js";
 import { CityBuildings } from "./buildings.js";
-import { addCountryside } from "./countryside.js";
+import { addCountryside, type CountrysideHandle } from "./countryside.js";
+import { BlockLayer, blockPaving } from "./blocks.js";
 import { ChunkStream } from "./chunks.js";
+import { BLOCK_WORLD, cityExtent, lotBlock, placeLot } from "./lots.js";
 import { cityTitle, createDistrictLabels } from "./labels.js";
-import { LodController, settingsFor } from "./lod.js";
-import { appendTimelines, buildTimelines, gridColumns, gridSlot, TRANSITION_COMMITS, type Timelines } from "./state.js";
+import { LodController, type LodSettings, settingsFor } from "./lod.js";
+import { RoadLayer } from "./roads.js";
+import { appendTimelines, buildTimelines, durationFor, TRANSITION_COMMITS, type Timelines } from "./state.js";
 
 /** Tuning values for the City. The player and camera tickets replace the rest. */
 const TUNING = {
   commitsPerSecond: 2,
-  lotSpacing: 1.5,
-  /** World distance between Block-grid cells, where District labels are anchored. */
-  blockSpacing: 6,
   /** District labels are hidden beyond this many City extents from the camera, at a height of `labelHeight`. */
   labelDistance: 1.5,
   labelHeight: 3,
   groundMargin: 4,
   cameraFov: 45,
-  /** Camera offset from the grid centre, as a multiple of the grid's extent plus a fixed distance. */
+  /** Camera offset from the City's centre, as a multiple of its extent plus a fixed distance. */
   cameraOffset: { x: [0.9, 4], y: [0.8, 4], z: [1.1, 6] },
   skyLight: 1.6,
   sunLight: 1.4,
@@ -78,7 +78,7 @@ async function main() {
   // The first chunk is needed to play at all; the rest stream in behind it, in order.
   let timelines: Timelines;
   try {
-    timelines = buildTimelines(await stream.load(0), world.fileCount);
+    timelines = buildTimelines(await stream.load(0), world.stints.file.length, world.language);
   } catch (e) {
     if (e instanceof FormatVersionError) return showVersionNotice();
     throw e;
@@ -93,7 +93,7 @@ async function main() {
   play(world, timelines, stream, places);
   stream
     .loadAll((index, chunk) => {
-      if (index > 0) appendTimelines(timelines, chunk);
+      if (index > 0) appendTimelines(timelines, chunk, world.language);
     })
     .catch((e: unknown) => {
       if (e instanceof FormatVersionError) return showVersionNotice();
@@ -104,8 +104,9 @@ async function main() {
 function play(world: World, timelines: Timelines, stream: ChunkStream, places?: PlacesFile) {
   const commitCount = world.commitDays.length;
   const endTime = commitCount - 1 + TRANSITION_COMMITS;
-  const columns = gridColumns(world.fileCount);
-  const extent = columns * TUNING.lotSpacing;
+  // The City's extent is set by its Blocks: the layout places them all, so the page frames what it has.
+  const extent = cityExtent(world);
+  const theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 
   const renderer = new WebGLRenderer({ antialias: true });
   document.body.prepend(renderer.domElement);
@@ -121,30 +122,54 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   const ground = new Mesh(new PlaneGeometry(extent + TUNING.groundMargin, extent + TUNING.groundMargin), new MeshLambertMaterial({ color: colours.ground }));
   ground.rotation.x = -Math.PI / 2;
   scene.add(ground);
-  addCountryside(scene, {
+  // The Blocks are where the layout put them, so the scenery fades out next to each claimed Block.
+  const blocks = blockSites(world);
+  const duration = durationFor(TUNING.commitsPerSecond);
+  const countryside: CountrysideHandle = addCountryside(scene, {
     // The City seed the CLI wrote into the world file: the same seed the layout used.
     seed: world.citySeed,
-    theme: colours === PALETTE.dark ? "dark" : "light",
-    keepOut: extent / 2 + TUNING.groundMargin,
+    theme,
+    keepOut: 0,
+    claimed: blocks.map((b) => ({ col: Math.round(b.x), row: Math.round(b.z) })),
   });
-
-  const origin = ((columns - 1) * TUNING.lotSpacing) / 2;
-  const place = (file: number) => {
-    const { column, row } = gridSlot(file, columns);
-    return { x: column * TUNING.lotSpacing - origin, z: row * TUNING.lotSpacing - origin };
+  // A District's paving is found from its birth index: the world file lists the places in order, with their indices.
+  const districts = places?.districts;
+  const positionOf = new Map(Array.from(world.districts.index, (index, position) => [index, position] as const));
+  const paving = new Map<number, Color>();
+  const colourOf = (birth: number): Color => {
+    let colour = paving.get(birth);
+    if (!colour) {
+      colour = blockPaving(positionOf.get(birth) ?? -1, districts, theme);
+      paving.set(birth, colour);
+    }
+    return colour;
   };
+  const blockLayer = new BlockLayer(scene, blocks, countryside.land, timelines.owners, colourOf);
+  const roadLayer = new RoadLayer(
+    scene,
+    roadInputs(world),
+    villageSites(world),
+    blocks,
+    countryside.land,
+    world.citySeed,
+    theme,
+    timelines.roads,
+  );
+
   const city = new CityBuildings(
     scene,
     {
-      fileCount: world.fileCount,
-      buildingType: world.buildingType,
-      language: world.language,
-      seed: world.seed,
+      stintCount: world.stints.file.length,
+      buildingType: world.stints.buildingType,
+      language: Uint8Array.from(world.stints.file, (f) => world.language[f]!),
+      seed: Uint32Array.from(world.stints.file, (f) => world.seed[f]!),
       buildings: timelines.buildings,
       scaffolds: timelines.scaffolds,
-      place,
+      languages: timelines.languages,
+      place: (stint) => placeLot(world, world.stints.lot[stint]!),
+      block: (stint) => lotBlock(world, world.stints.lot[stint]!),
     },
-    matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+    theme,
   );
 
   const camera = new PerspectiveCamera(TUNING.cameraFov, 1, 0.1, extent * 20 + 100);
@@ -154,14 +179,7 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   controls.enableDamping = true;
 
   const labels = places
-    ? createDistrictLabels(
-        scene,
-        places,
-        TUNING.blockSpacing,
-        extent * TUNING.labelDistance,
-        TUNING.labelHeight,
-        colours === PALETTE.dark ? "dark" : "light",
-      )
+    ? createDistrictLabels(scene, places, BLOCK_WORLD, extent * TUNING.labelDistance, TUNING.labelHeight, theme)
     : undefined;
   if (labels) document.body.append(labels.element);
   if (places) document.title = cityTitle(places);
@@ -176,9 +194,12 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
 
   // Level of detail follows the measured frame rate. A new level changes what is drawn, not the data.
   const lod = new LodController();
+  let detail: LodSettings = settingsFor(lod.level);
   function applyDetail() {
-    const detail = settingsFor(lod.level);
+    detail = settingsFor(lod.level);
     city.setDetail(detail);
+    countryside.setDetail(detail);
+    labels?.setMaxDistance(Math.min(extent * TUNING.labelDistance, detail.labelFar));
     renderer.setPixelRatio(Math.min(devicePixelRatio, detail.pixelRatioCap));
     resize();
   }
@@ -198,7 +219,9 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   player.hidden = false;
 
   function draw(t: number) {
-    city.update(t, TUNING.commitsPerSecond);
+    city.update(t, TUNING.commitsPerSecond, camera.position);
+    blockLayer.update(t, duration, camera.position, detail.massFar);
+    roadLayer.update(t, duration);
     const commit = Math.min(commitCount - 1, Math.max(0, Math.floor(t)));
     const day = new Date(world.commitDays[commit]! * SECONDS_PER_DAY * 1000).toISOString().slice(0, 10);
     status.textContent = Math.floor(t) > stream.loadedThrough()
@@ -223,6 +246,25 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
     labels?.update(camera);
     labels?.render(scene, camera);
   });
+}
+
+/** The Blocks in world-file form: each with its position in Block widths, its village, and the commit that claimed it. */
+function blockSites(world: World) {
+  return Array.from({ length: world.blocks.x.length }, (_, i) => ({
+    village: world.blocks.village[i]!,
+    x: world.blocks.x[i]!,
+    z: world.blocks.z[i]!,
+    claimed: world.blocks.claimed[i]!,
+  }));
+}
+
+function villageSites(world: World) {
+  return Array.from({ length: world.villages.x.length }, (_, i) => ({ x: world.villages.x[i]!, z: world.villages.z[i]! }));
+}
+
+/** The Roads by id: their two villages, the older one first. */
+function roadInputs(world: World) {
+  return Array.from({ length: world.roads.a.length }, (_, i) => ({ a: world.roads.a[i]!, b: world.roads.b[i]! }));
 }
 
 main().catch((e: unknown) => {

@@ -3,7 +3,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { build, type BuildSummary } from "../src/cli/build.js";
-import { decodeWorld, type World } from "../src/shared/format.js";
+import {
+  decodeChunk,
+  decodeWorld,
+  EVENT_ADD,
+  EVENT_BLOCK_OWNER,
+  EVENT_DELETE,
+  EVENT_DISTRICT_MERGE,
+  EVENT_DISTRICT_SPLIT,
+  EVENT_RELOCATE,
+  EVENT_RENOVATE,
+  EVENT_ROAD_BUILT,
+  EVENT_ROAD_LANES,
+  type World,
+} from "../src/shared/format.js";
 import { FixtureRepo } from "./fixture.js";
 
 /**
@@ -109,5 +122,68 @@ describe("build with Steps", () => {
     const again = await run(repo, `{ "exclude": ["src/f1*.ts"] }`);
     expect(again.summary.warnings.some((w) => w.includes("exclude rules changed"))).toBe(false);
     expect(again.world.fileCount).toBe(9);
+  });
+});
+
+/** Two Modules that import each other, a file that moves between them (a Relocation), and one renamed to another type (a Renovation). */
+function modules(commits: number): FixtureRepo {
+  const repo = new FixtureRepo();
+  cleanups.push(() => repo.remove());
+  repo.write("packages/a/package.json", "{}").write("packages/b/package.json", "{}").write("packages/b/y0.ts", "export const y = 0;\n");
+  for (let i = 0; i < commits; i++) {
+    repo.write(`packages/a/f${i}.ts`, `import "../b/y0";\nexport const v${i} = ${i};\n`);
+    if (i === 3) repo.write("packages/a/mover.ts", "export const m = 1;\n");
+    if (i === 6) repo.git("mv", "packages/a/mover.ts", "packages/b/mover.ts");
+    if (i === 4) repo.write("packages/b/notes.ts", "export const n = 1;\n");
+    if (i === 8) repo.git("mv", "packages/b/notes.ts", "packages/b/notes.md");
+    repo.commit(`commit ${i}`, 20);
+  }
+  return repo;
+}
+
+/** Every event of a built site, in chunk order, with the commit it names. */
+function eventsOf(outDir: string, world: World): { commit: number; file: number; kind: number; stint: number; value: number }[] {
+  return world.chunks.flatMap((ref) => {
+    const chunk = decodeChunk(readFileSync(join(outDir, "chunks", ref.name)));
+    return [...chunk.eventCommit].map((commit, i) => ({
+      commit,
+      file: chunk.eventFile[i]!,
+      kind: chunk.eventKind[i]!,
+      stint: chunk.eventStint[i]!,
+      value: chunk.eventValue[i]!,
+    }));
+  });
+}
+
+describe("Steps and the events that name commits", () => {
+  // The events Steps never merge: they all survive grouping, so they must land on the same Steps as per commit.
+  const KEPT = [EVENT_ADD, EVENT_DELETE, EVENT_RELOCATE, EVENT_RENOVATE, EVENT_DISTRICT_SPLIT, EVENT_DISTRICT_MERGE, EVENT_BLOCK_OWNER, EVENT_ROAD_BUILT, EVENT_ROAD_LANES];
+
+  it("maps the Stint, District, Block and Road events onto the Step their commit belongs to", async () => {
+    const repo = modules(40);
+    const perCommit = await run(repo, `{ "scale": { "timeline": "commit" } }`);
+    const grouped = await run(repo, `{ "scale": { "timeline": "month" } }`);
+
+    // The comparison only means something if grouping happened, and if there are roads, stints and Block events.
+    expect(grouped.world.commitDays.length).toBeLessThan(perCommit.world.commitDays.length);
+    expect(grouped.world.roads.a.length).toBeGreaterThan(0);
+    expect(grouped.world.stints.file.length).toBeGreaterThan(perCommit.world.fileCount);
+
+    const days = [...perCommit.world.commitDays];
+    const stepOfCommit = (c: number) => new Set(days.slice(0, c + 1).map(monthOf)).size - 1;
+    const kept = (events: ReturnType<typeof eventsOf>) => events.filter((e) => KEPT.includes(e.kind));
+    const expected = kept(eventsOf(perCommit.outDir, perCommit.world)).map((e) => ({ ...e, commit: stepOfCommit(e.commit) }));
+    const actual = kept(eventsOf(grouped.outDir, grouped.world));
+    expect(actual).toEqual(expected);
+    expect(actual.some((e) => e.kind === EVENT_ROAD_BUILT)).toBe(true);
+    expect(actual.some((e) => e.kind === EVENT_RELOCATE)).toBe(true);
+  });
+
+  it("never names a commit past the Step count, in any event or claim", async () => {
+    const repo = modules(40);
+    const grouped = await run(repo, `{ "scale": { "timeline": "month" } }`);
+    const steps = grouped.world.commitDays.length;
+    for (const e of eventsOf(grouped.outDir, grouped.world)) expect(e.commit).toBeLessThan(steps);
+    for (const c of grouped.world.blocks.claimed) expect(c).toBeLessThan(steps);
   });
 });

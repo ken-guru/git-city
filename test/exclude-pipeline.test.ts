@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { CommitRecord } from "../src/cli/history.js";
 import { Pipeline, type PipelineOptions } from "../src/cli/pipeline.js";
-import { EVENT_ADD, EVENT_DELETE } from "../src/shared/format.js";
+import { EVENT_ADD, EVENT_DELETE, EVENT_DISTRICT_SPLIT } from "../src/shared/format.js";
+
+/** The kinds of the Building events in a timeline (add, delete, Floors, scaffolding, identity), not the layout's or the Roads'. */
+function buildingKinds(result: { eventKind: Uint8Array }): number[] {
+  return [...result.eventKind].filter((kind) => kind < EVENT_DISTRICT_SPLIT);
+}
 
 /**
  * Seam under test: `Pipeline` with `exclude` globs. Excluded paths never reach the Timeline; a rename across the
@@ -58,7 +63,8 @@ describe("Pipeline with exclude globs", () => {
         },
       ],
     );
-    expect([...result.eventKind]).toEqual([EVENT_ADD, EVENT_DELETE]);
+    // Only the Building events: the layout also records the Blocks it claims.
+    expect(buildingKinds(result)).toEqual([EVENT_ADD, EVENT_DELETE]);
   });
 
   it("treats a rename out of an excluded folder as an add", async () => {
@@ -77,7 +83,7 @@ describe("Pipeline with exclude globs", () => {
       ],
     );
     expect(result.filePaths).toEqual(["src/a.ts"]);
-    expect([...result.eventKind]).toEqual([EVENT_ADD]);
+    expect(buildingKinds(result)).toEqual([EVENT_ADD]);
   });
 
   it("keeps everything when no globs are given", async () => {

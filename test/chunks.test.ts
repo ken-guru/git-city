@@ -18,6 +18,8 @@ function input(commits: number, events: [commit: number, file: number, kind: Eve
     language: new Uint8Array(fileCount),
     eventCommit: Uint32Array.from(events, (e) => e[0]),
     eventFile: Uint32Array.from(events, (e) => e[1]),
+    // Every file is one Stint here: no event in these timelines relocates or renovates.
+    eventStint: Uint32Array.from(events, (e) => e[1]),
     eventKind: Uint8Array.from(events, (e) => e[2]),
     eventValue: Uint8Array.from(events, (e) => e[3]),
   };

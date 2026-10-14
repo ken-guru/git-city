@@ -37,6 +37,8 @@ export function cityTitle(places: PlacesFile): string {
 export interface DistrictLabels {
   /** Hides or shows each label by its distance from the camera. */
   update(camera: Object3D): void;
+  /** Sets the distance beyond which labels are hidden (the level of detail decides it). */
+  setMaxDistance(distance: number): void;
   /** Renders the label layer over the WebGL canvas. */
   render(scene: Scene, camera: PerspectiveCamera): void;
   setSize(width: number, pixelHeight: number): void;
@@ -58,6 +60,7 @@ export function createDistrictLabels(
   const renderer = new CSS2DRenderer();
   renderer.domElement.classList.add("labels");
   const objects: { object: CSS2DObject; model: LabelModel }[] = [];
+  let limit = maxDistance;
   for (const place of places.districts) {
     const model = labelModel(place, spacing, pageTheme);
     const element = document.createElement("div");
@@ -80,9 +83,12 @@ export function createDistrictLabels(
     element: renderer.domElement,
     update(camera) {
       for (const { object } of objects) {
-        const visible = isLabelVisible(object.position.distanceTo(camera.position), maxDistance);
+        const visible = isLabelVisible(object.position.distanceTo(camera.position), limit);
         object.element.style.display = visible ? "" : "none";
       }
+    },
+    setMaxDistance(distance) {
+      limit = distance;
     },
     render(scene, camera) {
       renderer.render(scene, camera);
