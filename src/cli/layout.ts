@@ -1,4 +1,5 @@
 import { type Countryside, countryside, mix } from "../shared/countryside.js";
+import type { PavingColour } from "../shared/places.js";
 
 /**
  * Layout: decides where every Building's Lot stands, as a fold over the Timeline in history order.
@@ -50,10 +51,10 @@ interface Cell {
 /**
  * Paving: medium-low saturation and a fixed lightness, with seeded offsets of 15 and 6 points.
  * All values are fractions of the full 0 to 1 range (absolute points, not relative percentages).
- * Known limit, for later tickets: a District that splits off in place does not yet take the opposite lightness offset.
+ * Lightness is fixed per page theme (light and dark pages each get their own base value).
  */
 const PAVING_SATURATION = 0.42;
-const PAVING_LIGHTNESS = 0.55;
+const PAVING_LIGHTNESS = { light: 0.55, dark: 0.34 } as const;
 const SATURATION_OFFSET = 0.15;
 const LIGHTNESS_OFFSET = 0.06;
 const STONE = { hue: 40, saturation: 0.08 } as const;
@@ -113,7 +114,7 @@ export interface DistrictRecord {
   /** Neighbourhood names: the District's own root and each first-level directory under it. */
   neighbourhoods: string[];
   role: Role | null;
-  paving: { hue: number; saturation: number; lightness: number };
+  paving: PavingColour;
 }
 
 export interface VillageRecord {
@@ -181,6 +182,8 @@ interface DistrictState {
   neighbourhoods: Set<string>;
   scores: Map<Role, number>;
   role: Role | null;
+  /** Signed lightness offset of the paving. A District split off in place takes the opposite side from its parent's. */
+  lightnessOffset: number;
 }
 
 /** A JSON-safe copy of a LayoutBuilder, for the cache's layout layer. */
@@ -191,7 +194,7 @@ export interface LayoutSnapshot {
   manifestPaths: string[];
   standingDirs: [string, number][];
   inPlace: string[];
-  districts: [string, { key: string; index: number; village: number; neighbourhoods: string[]; scores: [Role, number][]; role: Role | null }][];
+  districts: [string, { key: string; index: number; village: number; neighbourhoods: string[]; scores: [Role, number][]; role: Role | null; lightnessOffset: number }][];
   vanishedManifests: string[];
   nextDistrictIndex: number;
   villages: VillageRecord[];
@@ -285,7 +288,7 @@ export class LayoutBuilder {
         village: d.village,
         neighbourhoods: [...d.neighbourhoods],
         role: d.role,
-        paving: paving(this.options.seed, d.index, d.role, this.options.hueOf),
+        paving: paving(this.options.seed, d.index, d.role, this.options.hueOf, d.lightnessOffset),
       }));
     return {
       districts,
@@ -317,7 +320,15 @@ export class LayoutBuilder {
       inPlace: [...this.inPlace],
       districts: [...this.districts].map(([key, d]) => [
         key,
-        { key: d.key, index: d.index, village: d.village, neighbourhoods: [...d.neighbourhoods], scores: [...d.scores], role: d.role },
+        {
+          key: d.key,
+          index: d.index,
+          village: d.village,
+          neighbourhoods: [...d.neighbourhoods],
+          scores: [...d.scores],
+          role: d.role,
+          lightnessOffset: d.lightnessOffset,
+        },
       ]),
       vanishedManifests: [...this.vanishedManifests],
       nextDistrictIndex: this.nextDistrictIndex,
@@ -489,13 +500,17 @@ export class LayoutBuilder {
     if (existing) return existing;
     const parent = villageHint === undefined && this.inPlace.has(key) ? this.parentDistrict(key) : undefined;
     const village = villageHint ?? parent?.village ?? this.foundVillage(key);
+    const index = this.nextDistrictIndex++;
+    const own = lightnessOffsetOf(this.options.seed, index);
     const district: DistrictState = {
       key,
-      index: this.nextDistrictIndex++,
+      index,
       village,
       neighbourhoods: new Set(),
       scores: new Map(),
       role: null,
+      // A split takes the opposite side of its parent's offset, keeping its own magnitude.
+      lightnessOffset: parent ? (parent.lightnessOffset < 0 ? 1 : -1) * Math.abs(own) : own,
     };
     this.districts.set(key, district);
     // Its Neighbourhoods were drawn in the parent District; they now belong to this one, with the same Blocks.
@@ -795,14 +810,23 @@ export function layoutHistory(changes: Iterable<LayoutChange>, options: LayoutOp
   return builder.result();
 }
 
-/** Paving for a District: its Role's hue, or stone, with seeded offsets that stay for the District's life. */
+/** The seeded lightness offset of a District, in points of the full range. Its sign is the District's side. */
+export function lightnessOffsetOf(seed: number, index: number): number {
+  return (seeded(seed, index, 2) * 2 - 1) * LIGHTNESS_OFFSET;
+}
+
+/**
+ * Paving for a District: its Role's hue, or stone, with a lightness offset that stays for the District's life.
+ * Lightness is fixed per page theme, so the result carries one value for the light page and one for the dark.
+ */
 export function paving(
   seed: number,
   index: number,
   role: Role | null,
   hueOf: (role: Role) => number = (r) => ROLE_HUE[r],
-): LayoutResult["districts"][number]["paving"] {
-  const lightness = PAVING_LIGHTNESS + (seeded(seed, index, 2) * 2 - 1) * LIGHTNESS_OFFSET;
+  lightnessOffset: number = lightnessOffsetOf(seed, index),
+): PavingColour {
+  const lightness = { light: PAVING_LIGHTNESS.light + lightnessOffset, dark: PAVING_LIGHTNESS.dark + lightnessOffset };
   if (role === null) return { hue: STONE.hue, saturation: STONE.saturation, lightness };
   const saturation = PAVING_SATURATION + (seeded(seed, index, 1) * 2 - 1) * SATURATION_OFFSET;
   return { hue: avoidGreen(hueOf(role)), saturation, lightness };

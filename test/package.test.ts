@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Language, Parser } from "web-tree-sitter";
 import { describe, expect, it } from "vitest";
 
@@ -62,7 +63,7 @@ describe("npm pack contents (needs `npm run build` first)", () => {
   const files = (() => {
     const out = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
       encoding: "utf8",
-      cwd: new URL("..", import.meta.url).pathname,
+      cwd: fileURLToPath(new URL("..", import.meta.url)),
     });
     // npm 7-10 print an array, npm 11+ print an object keyed by package name.
     const parsed = JSON.parse(out) as unknown;
@@ -94,7 +95,7 @@ describe("npm pack contents (needs `npm run build` first)", () => {
     };
     for (const grammar of GRAMMARS) {
       const name = grammar.split("/")[1] as string;
-      const lang = await Language.load(new URL(`../node_modules/${grammar}`, import.meta.url).pathname);
+      const lang = await Language.load(fileURLToPath(new URL(`../node_modules/${grammar}`, import.meta.url)));
       const parser = new Parser();
       parser.setLanguage(lang);
       expect(parser.parse(sources[name] as string)?.rootNode.hasError, name).toBe(false);

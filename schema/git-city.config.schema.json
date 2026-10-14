@@ -32,29 +32,41 @@
     "rule": {
       "type": "object",
       "required": ["action"],
+      "description": "Exactly one target: a path, module, concept, contributor or external.",
+      "allOf": [
+        {
+          "oneOf": [
+            { "required": ["path"] },
+            { "required": ["module"] },
+            { "required": ["concept"] },
+            { "required": ["contributor"] },
+            { "required": ["external"] }
+          ]
+        }
+      ],
       "oneOf": [
         {
           "description": "Replace the name with a Pseudonym.",
           "required": ["action", "as"],
           "properties": {
-            "path": { "type": "string", "minLength": 1 },
-            "module": { "type": "string", "minLength": 1 },
-            "concept": { "type": "string", "minLength": 1 },
-            "contributor": { "type": "string", "minLength": 1 },
-            "external": { "type": "string", "minLength": 1 },
+            "path": { "type": "string", "pattern": "\\S" },
+            "module": { "type": "string", "pattern": "\\S" },
+            "concept": { "type": "string", "pattern": "\\S" },
+            "contributor": { "type": "string", "pattern": "\\S" },
+            "external": { "type": "string", "pattern": "\\S" },
             "action": { "const": "pseudonym" },
-            "as": { "type": "string", "minLength": 1 }
+            "as": { "type": "string", "pattern": "\\S" }
           },
           "additionalProperties": false
         },
         {
           "description": "Show the Real name (never with --private).",
           "properties": {
-            "path": { "type": "string", "minLength": 1 },
-            "module": { "type": "string", "minLength": 1 },
-            "concept": { "type": "string", "minLength": 1 },
-            "contributor": { "type": "string", "minLength": 1 },
-            "external": { "type": "string", "minLength": 1 },
+            "path": { "type": "string", "pattern": "\\S" },
+            "module": { "type": "string", "pattern": "\\S" },
+            "concept": { "type": "string", "pattern": "\\S" },
+            "contributor": { "type": "string", "pattern": "\\S" },
+            "external": { "type": "string", "pattern": "\\S" },
             "action": { "const": "reveal" }
           },
           "additionalProperties": false
@@ -62,11 +74,11 @@
         {
           "description": "A deliberate near-miss: do not warn about this name.",
           "properties": {
-            "path": { "type": "string", "minLength": 1 },
-            "module": { "type": "string", "minLength": 1 },
-            "concept": { "type": "string", "minLength": 1 },
-            "contributor": { "type": "string", "minLength": 1 },
-            "external": { "type": "string", "minLength": 1 },
+            "path": { "type": "string", "pattern": "\\S" },
+            "module": { "type": "string", "pattern": "\\S" },
+            "concept": { "type": "string", "pattern": "\\S" },
+            "contributor": { "type": "string", "pattern": "\\S" },
+            "external": { "type": "string", "pattern": "\\S" },
             "action": { "const": "allow" }
           },
           "additionalProperties": false
@@ -75,13 +87,13 @@
           "description": "Set the Category of the matched items (used by Buildings).",
           "required": ["action", "category"],
           "properties": {
-            "path": { "type": "string", "minLength": 1 },
-            "module": { "type": "string", "minLength": 1 },
-            "concept": { "type": "string", "minLength": 1 },
-            "contributor": { "type": "string", "minLength": 1 },
-            "external": { "type": "string", "minLength": 1 },
+            "path": { "type": "string", "pattern": "\\S" },
+            "module": { "type": "string", "pattern": "\\S" },
+            "concept": { "type": "string", "pattern": "\\S" },
+            "contributor": { "type": "string", "pattern": "\\S" },
+            "external": { "type": "string", "pattern": "\\S" },
             "action": { "const": "category" },
-            "category": { "type": "string", "minLength": 1 }
+            "category": { "type": "string", "pattern": "\\S" }
           },
           "additionalProperties": false
         }

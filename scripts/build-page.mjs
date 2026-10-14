@@ -3,13 +3,20 @@
 import { build } from "esbuild";
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const outDir = new URL("../dist/page/", import.meta.url);
+// Paths go through fileURLToPath: a URL's path form on Windows is "/D:/...", which esbuild cannot resolve.
+const outDir = fileURLToPath(new URL("../dist/page/", import.meta.url));
+const assetsDir = fileURLToPath(new URL("../dist/page/assets/", import.meta.url));
+const entry = fileURLToPath(new URL("../src/page/main.ts", import.meta.url));
+const template = fileURLToPath(new URL("../src/page/index.html", import.meta.url));
+const indexPath = fileURLToPath(new URL("../dist/page/index.html", import.meta.url));
+
 await rm(outDir, { recursive: true, force: true });
 
 const result = await build({
-  entryPoints: [new URL("../src/page/main.ts", import.meta.url).pathname],
-  outdir: new URL("assets/", outDir).pathname,
+  entryPoints: [entry],
+  outdir: assetsDir,
   entryNames: "page.[hash]",
   bundle: true,
   format: "esm",
@@ -21,5 +28,5 @@ const result = await build({
 });
 
 const [script] = Object.keys(result.metafile.outputs).filter((path) => path.endsWith(".js"));
-const html = await readFile(new URL("../src/page/index.html", import.meta.url), "utf8");
-await writeFile(new URL("index.html", outDir), html.replace("%PAGE_SCRIPT%", `assets/${basename(script)}`));
+const html = await readFile(template, "utf8");
+await writeFile(indexPath, html.replace("%PAGE_SCRIPT%", `assets/${basename(script)}`));

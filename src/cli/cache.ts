@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { type FileFacts, MISSING_FACTS } from "./facts.js";
@@ -12,25 +12,86 @@ import type { RunState } from "./pipeline.js";
 export const CACHE_FOLDER = "git-city";
 
 /**
- * One version stamp per layer. Bump a layer's stamp when its contents would mean something different.
- * Each layer feeds the next (facts, commits, run, layout), so a changed stamp also clears the layers after it.
+ * The one place that says what each layer is made of. Each layer names the modules (relative to this folder,
+ * without extension) whose code decides its contents, the packages whose declared versions do too, the folders it
+ * owns, and the layers built from it. Layer 1 feeds layer 2, layer 2 feeds layer 3, and so on.
  */
-export const LAYER_STAMPS = {
-  facts: "facts-2",
-  commits: "commits-3",
-  run: "run-3",
-  layout: "layout-1",
-} as const;
-export type Layer = keyof typeof LAYER_STAMPS;
-const LAYERS = Object.keys(LAYER_STAMPS) as Layer[];
+const LAYER_DEFINITIONS = {
+  // The facts depend on the parser runtime and the grammars, so their declared versions are part of the stamp.
+  facts: {
+    sources: ["facts", "imports/extract"],
+    packages: ["web-tree-sitter", "tree-sitter-typescript", "tree-sitter-javascript", "tree-sitter-python"],
+    dirs: ["facts"],
+    dependents: ["commits"],
+  },
+  commits: { sources: ["history", "git"], packages: [], dirs: ["commits"], dependents: ["run"] },
+  // The run state is the Timeline and the import graph, so changing their code clears it.
+  run: {
+    sources: ["pipeline", "timeline", "model", "imports/graph", "imports/resolve", "../shared/buildings", "../shared/format"],
+    packages: [],
+    dirs: ["runs", "states"],
+    dependents: ["layout"],
+  },
+  // The layout is laid out from the Timeline's changes and the Categories it reads, so changing those clears it.
+  layout: { sources: ["layout", "model"], packages: [], dirs: ["layouts"], dependents: [] },
+} as const satisfies Record<
+  string,
+  { sources: readonly string[]; packages: readonly string[]; dirs: readonly string[]; dependents: readonly string[] }
+>;
+export type Layer = keyof typeof LAYER_DEFINITIONS;
+const LAYERS = Object.keys(LAYER_DEFINITIONS) as Layer[];
 
 /** The folders each layer owns, relative to the cache folder. */
-const LAYER_DIRS: Record<Layer, string[]> = {
-  facts: ["facts"],
-  commits: ["commits"],
-  run: ["runs", "states"],
-  layout: ["layouts"],
+const LAYER_DIRS: Record<Layer, readonly string[]> = {
+  facts: LAYER_DEFINITIONS.facts.dirs,
+  commits: LAYER_DEFINITIONS.commits.dirs,
+  run: LAYER_DEFINITIONS.run.dirs,
+  layout: LAYER_DEFINITIONS.layout.dirs,
 };
+
+/** The code of a module beside this one, in the form this file is running from (.ts under tests, .js when built). */
+function sourceText(name: string): Buffer {
+  const ext = import.meta.url.endsWith(".ts") ? ".ts" : ".js";
+  return readFileSync(new URL(`./${name}${ext}`, import.meta.url));
+}
+
+/** The package manifest that ships with the CLI (the repository root, or the installed package root). */
+const MANIFEST = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+};
+
+/** The version range a package is declared with. A bump in the manifest changes the stamp. */
+function declaredVersion(name: string): string {
+  return MANIFEST.dependencies?.[name] ?? MANIFEST.devDependencies?.[name] ?? "undeclared";
+}
+
+/**
+ * A layer's version stamp, derived from the code it is built from: a hash of its modules' source, this file's, and
+ * the declared versions of the packages it depends on. Changing any of them changes the stamp, so no stamp is set by hand.
+ */
+function stampOf(layer: Layer): string {
+  const hash = createHash("sha256");
+  for (const name of ["cache", ...LAYER_DEFINITIONS[layer].sources]) hash.update(name).update("\0").update(sourceText(name));
+  for (const name of LAYER_DEFINITIONS[layer].packages) hash.update(name).update("\0").update(declaredVersion(name)).update("\0");
+  return `${layer}-${hash.digest("hex").slice(0, 12)}`;
+}
+
+/** The current stamp of every layer. Derived from code, never hand-set. */
+export const LAYER_STAMPS: Readonly<Record<Layer, string>> = Object.fromEntries(LAYERS.map((l) => [l, stampOf(l)])) as Record<Layer, string>;
+
+/** Every layer built, directly or through others, from `layer`: clearing it clears these too. */
+function dependentsOf(layer: Layer): Layer[] {
+  const out = new Set<Layer>();
+  const pending: Layer[] = [...LAYER_DEFINITIONS[layer].dependents] as Layer[];
+  while (pending.length > 0) {
+    const next = pending.pop()!;
+    if (out.has(next)) continue;
+    out.add(next);
+    pending.push(...(LAYER_DEFINITIONS[next].dependents as readonly Layer[]));
+  }
+  return [...out];
+}
 
 /** Checkpoints kept per branch. Older ones roll back less after a rewrite, but cost disk. */
 export const MAX_CHECKPOINTS = 3;
@@ -281,9 +342,7 @@ async function reconcileStamps(dir: string, fresh: boolean): Promise<void> {
   const stored = (await readJson<Partial<Record<Layer, string>>>(join(dir, "stamps.json"))) ?? {};
   const clear = new Set<Layer>(fresh ? LAYERS : []);
   for (const layer of LAYERS) if (stored[layer] !== LAYER_STAMPS[layer]) clear.add(layer);
-  if (clear.has("facts")) clear.add("commits");
-  if (clear.has("commits")) clear.add("run");
-  if (clear.has("run")) clear.add("layout");
+  for (const layer of [...clear]) for (const dependent of dependentsOf(layer)) clear.add(dependent);
   for (const layer of clear) {
     for (const d of LAYER_DIRS[layer]) await rm(join(dir, d), { recursive: true, force: true });
   }

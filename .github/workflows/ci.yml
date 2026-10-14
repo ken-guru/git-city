@@ -20,7 +20,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm run build
+      # npm test builds once itself (test/global-setup.ts) before any test file runs.
       - run: npm test
 
   # Installs the packed tarball globally and runs `git city` from Git Bash, which is how Windows users run it.
@@ -37,6 +37,7 @@ jobs:
       - name: Pack and install globally
         shell: bash
         run: |
+          mkdir -p "$RUNNER_TEMP/pack"
           npm pack --pack-destination "$RUNNER_TEMP/pack"
           npm install -g --prefix "$RUNNER_TEMP/prefix" "$RUNNER_TEMP"/pack/git-city-*.tgz
           # npm on Windows writes an extensionless sh shim next to git-city.cmd; git city needs it.

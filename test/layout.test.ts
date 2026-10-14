@@ -230,9 +230,29 @@ describe("Roles and paving", () => {
     expect(sets[0]).toEqual(layoutHistory(history.list, { seed: 1 }).districts.map((d) => d.paving));
     expect(sets[0]).not.toEqual(sets[1]);
     const sats = sets[0]!.map((p) => p.saturation);
-    const lights = sets[0]!.map((p) => p.lightness);
+    const lights = sets[0]!.map((p) => p.lightness.light);
     expect(Math.max(...sats) - Math.min(...sats)).toBeLessThanOrEqual(0.3);
     expect(Math.max(...lights) - Math.min(...lights)).toBeLessThanOrEqual(0.12);
+  });
+
+  it("fixes lightness per page theme, so the dark page paves darker than the light one", () => {
+    const { districts } = layoutHistory(new Changes().commit(["src/a.ts"]).list, { seed: 1 });
+    const [district] = districts;
+    expect(district!.paving.lightness.dark).toBeLessThan(district!.paving.lightness.light);
+  });
+
+  it("gives a District split off in place the opposite lightness offset from its parent's", () => {
+    const history = new Changes()
+      .commit(["packages/web/a.ts", "packages/x/b.ts"])
+      .commit(["packages/web/package.json", "packages/web/c.ts"]);
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const { districts } = layoutHistory(history.list, { seed });
+      const parent = districts.find((d) => d.key === "packages");
+      const child = districts.find((d) => d.key === "packages/web");
+      expect(child, `seed ${seed}`).toBeDefined();
+      const offset = (d: typeof parent) => d!.paving.lightness.light - 0.55;
+      expect(Math.sign(offset(child)), `seed ${seed}`).toBe(-Math.sign(offset(parent)));
+    }
   });
 });
 
@@ -276,10 +296,35 @@ describe("Cut points and re-runs", () => {
     }
   });
 
-  it("a re-run equals a fresh run", () => {
+  it("a run resumed from a saved snapshot equals a fresh run, Roles included", () => {
     const list = generated();
     const options = { seed: 99 };
-    expect(layoutHistory(list, options)).toEqual(layoutHistory(list, options));
+    const fresh = layoutHistory(list, options);
+    for (const cut of [1, 17, 40, 59]) {
+      const head = new LayoutBuilder(options);
+      for (const change of list.slice(0, cut)) head.apply(change);
+      // Through JSON, as the cache stores it.
+      const saved = JSON.parse(JSON.stringify(head.snapshot())) as LayoutSnapshot;
+      const resumed = LayoutBuilder.restore(options, saved)!;
+      for (const change of list.slice(cut)) resumed.apply(change);
+      expect(resumed.result(), `cut ${cut}`).toEqual(fresh);
+    }
+  });
+
+  it("keeps a District's Role when resumed, so one more file does not flip it", () => {
+    const options = { seed: 1 };
+    const history = new Changes().commit(["src/auth/a.ts", "src/auth/b.ts"]);
+    const head = new LayoutBuilder(options);
+    for (const change of history.list) head.apply(change);
+    const resumed = LayoutBuilder.restore(options, JSON.parse(JSON.stringify(head.snapshot())))!;
+    // Tests score 3 against auth's 2: more, but not past the 1.5 switch ratio, so the Role stays.
+    resumed.apply(new Changes().commit(["src/tests/unit/spec.ts"]).list[0]!);
+    expect(resumed.result().districts.find((d) => d.key === "src")?.role).toBe("auth");
+  });
+
+  it("refuses a snapshot made under another seed", () => {
+    const builder = new LayoutBuilder({ seed: 1 });
+    expect(LayoutBuilder.restore({ seed: 2 }, builder.snapshot())).toBeUndefined();
   });
 });
 

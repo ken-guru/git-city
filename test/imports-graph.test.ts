@@ -149,3 +149,33 @@ describe("incremental resolution", () => {
     expect(links).toHaveLength(2);
   });
 });
+
+describe("config text", () => {
+  it("reads only the manifests and the configs they extend, never other JSON", async () => {
+    const reads: string[] = [];
+    const blobs = new Map<string, string>([
+      ["data", '{"rows": [1, 2]}'],
+      ["manifest", '{"name": "app"}'],
+      ["base", '{"compilerOptions": {"baseUrl": "."}}'],
+      ["tsconfig", '{"extends": "./configs/base.json"}'],
+    ]);
+    const graph = new ImportGraph({
+      readText: async (blob) => {
+        reads.push(blob);
+        return blobs.get(blob) ?? "";
+      },
+    });
+    await graph.apply({
+      writes: [
+        { path: "data/rows.json", blob: "data" },
+        { path: "package.json", blob: "manifest" },
+        { path: "configs/base.json", blob: "base" },
+        { path: "tsconfig.json", blob: "tsconfig" },
+      ],
+      deleted: [],
+    });
+
+    expect(reads).not.toContain("data");
+    expect(reads).toEqual(expect.arrayContaining(["manifest", "base", "tsconfig"]));
+  });
+});

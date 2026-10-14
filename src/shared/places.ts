@@ -5,7 +5,14 @@
  * Only the names are text. Everything else is a number, so structural words (a source, a Role) can never
  * collide with a hidden folder name in the final privacy scan.
  */
-export const PLACES_FORMAT_VERSION = 1;
+export const PLACES_FORMAT_VERSION = 2;
+
+/** Paving colour: hue in degrees, saturation as a fraction, and lightness per page theme (light and dark). */
+export interface PavingColour {
+  hue: number;
+  saturation: number;
+  lightness: { light: number; dark: number };
+}
 
 /** Where a display name came from. Stored as an index into this list. */
 export const NAME_SOURCES = ["generated", "real", "pseudonym"] as const;
@@ -26,8 +33,7 @@ export interface DistrictPlace extends PlaceName {
   id: number;
   /** The Generated name, always present: a revealed District keeps it as a subtitle. */
   generated: string;
-  /** Paving colour: hue in degrees, saturation and lightness as fractions. */
-  colour: { hue: number; saturation: number; lightness: number };
+  colour: PavingColour;
   /** Where the District's village is anchored, in Block-grid cells. */
   anchor: { col: number; row: number };
   neighbourhoods: NeighbourhoodPlace[];
