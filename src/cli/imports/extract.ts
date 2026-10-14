@@ -234,8 +234,8 @@ function insideTypeQuery(node: Node): boolean {
 function walkPython(node: Node, out: RawImport[], typeOnly: boolean): void {
   switch (node.type) {
     case "import_statement": {
-      for (const named of node.namedChildren) {
-        const name = named.type === "aliased_import" ? named.childForFieldName("name") : named;
+      for (const item of node.namedChildren) {
+        const name = importedName(item);
         if (name?.type === "dotted_name") out.push({ specifier: compact(name.text), kind: typeOnly ? "type" : "static" });
       }
       return;
@@ -246,13 +246,13 @@ function walkPython(node: Node, out: RawImport[], typeOnly: boolean): void {
       const specifier = compact(module.text);
       if (specifier === "__future__") return;
       const kind: ImportKind = typeOnly ? "type" : "static";
-      const names = rest.filter((c) => c.type === "dotted_name" || c.type === "aliased_import");
-      if (names.length === 0) {
+      const items = rest.filter((c) => c.type === "dotted_name" || c.type === "aliased_import");
+      if (items.length === 0) {
         out.push({ specifier, kind });
         return;
       }
-      for (const named of names) {
-        const name = named.type === "aliased_import" ? named.childForFieldName("name") : named;
+      for (const item of items) {
+        const name = importedName(item);
         if (name) out.push({ specifier, member: compact(name.text), kind });
       }
       return;
@@ -270,14 +270,20 @@ function walkPython(node: Node, out: RawImport[], typeOnly: boolean): void {
       break;
     }
     case "if_statement": {
-      const typeChecking = isTypeChecking(node.childForFieldName("condition"));
-      for (const child of node.children) walkPython(child, out, typeOnly || typeChecking);
+      // Only the block under `if TYPE_CHECKING:` is type-only; its else and elif branches run at runtime.
+      const block = isTypeChecking(node.childForFieldName("condition")) ? node.childForFieldName("consequence") : null;
+      for (const child of node.children) walkPython(child, out, typeOnly || child.id === block?.id);
       return;
     }
     default:
       break;
   }
   for (const child of node.children) walkPython(child, out, typeOnly);
+}
+
+/** The dotted name an import item brings in: the item itself, or the `name` of an `x as y` alias. */
+function importedName(item: Node): Node | null {
+  return item.type === "aliased_import" ? item.childForFieldName("name") : item;
 }
 
 function isTypeChecking(condition: Node | null): boolean {

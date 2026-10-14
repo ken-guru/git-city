@@ -109,6 +109,10 @@ describe("Python imports that are not Roads", () => {
     expect(resolveIn(files, "app/main.py", "requests.adapters").target).toEqual({ kind: "package", name: "requests" });
   });
 
+  it("drops a relative import that climbs above the repository root", () => {
+    expect(resolveIn({ "x.py": "" }, "x.py", "..x").target).toBeUndefined();
+  });
+
   it("drops a relative import that names nothing in the commit", () => {
     expect(resolveIn({ "app/main.py": "" }, "app/main.py", ".missing").target).toBeUndefined();
   });

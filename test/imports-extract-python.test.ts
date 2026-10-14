@@ -69,6 +69,17 @@ describe("Python import extraction", () => {
     );
   });
 
+  it("keeps the else branch of a TYPE_CHECKING block at runtime", async () => {
+    const source = ["if TYPE_CHECKING:", "    import heavy", "else:", "    import fallback"].join("\n");
+
+    expect(sorted(await extractImports("app/main.py", source))).toEqual(
+      sorted([
+        { specifier: "heavy", kind: "type" },
+        { specifier: "fallback", kind: "static" },
+      ]),
+    );
+  });
+
   it("finds literal importlib.import_module and __import__ calls as dynamic, skipping non-literal ones", async () => {
     const source = [`m = importlib.import_module("foo.bar")`, `n = __import__("baz")`, `p = importlib.import_module(name)`].join("\n");
 

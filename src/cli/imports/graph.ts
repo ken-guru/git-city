@@ -1,5 +1,6 @@
 import { parseJsonc } from "../jsonc.js";
 import type { RawImport } from "./extract.js";
+import { isPyproject } from "./python.js";
 import { extendsTarget, ImportResolver, MAX_EXTENDS_DEPTH, type Resolution, type Snapshot } from "./resolve.js";
 
 /**
@@ -34,7 +35,7 @@ export interface ImportGraphOptions {
 }
 
 /** Files whose text is kept for config: JSON (manifests, tsconfigs) and pyproject.toml (Python source roots). */
-const CONFIG_TEXT_FILE = /\.jsonc?$|(^|\/)pyproject\.toml$/;
+const CONFIG_TEXT_FILE = /\.jsonc?$/;
 /** The `extends` value of a tsconfig text, or undefined when it has none or does not parse. */
 function extendsValue(text: string): string | undefined {
   try {
@@ -48,7 +49,7 @@ function extendsValue(text: string): string | undefined {
 /** Config files whose content changes how any import resolves. */
 function isConfig(path: string): boolean {
   const name = path.slice(path.lastIndexOf("/") + 1);
-  return name === "package.json" || name === "pyproject.toml" || /^(tsconfig|jsconfig)(\..+)?\.json$/.test(name);
+  return name === "package.json" || isPyproject(path) || /^(tsconfig|jsconfig)(\..+)?\.json$/.test(name);
 }
 
 interface FileRecord {
@@ -121,7 +122,7 @@ export class ImportGraph {
     for (const { path, blob, specifiers } of commit.writes) {
       this.paths.add(path);
       changed.add(path);
-      if (CONFIG_TEXT_FILE.test(path)) {
+      if (CONFIG_TEXT_FILE.test(path) || isPyproject(path)) {
         // Only the manifests and tsconfigs (and the files they extend) keep their text; other JSON is never read.
         this.jsonBlobs.set(path, blob);
         jsonWritten.push(path);

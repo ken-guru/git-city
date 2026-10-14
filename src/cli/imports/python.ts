@@ -21,7 +21,7 @@ export function pythonSourceRoots(paths: ReadonlySet<string>, read: (path: strin
   return [...roots];
 }
 
-export interface PythonContext {
+interface PythonContext {
   /** Whether a path is in the commit. Records the probe. */
   exists(path: string): boolean;
   /** Source roots from `pythonSourceRoots`. */
@@ -35,7 +35,11 @@ export function resolvePythonImport(ctx: PythonContext, fromPath: string, specif
   if (dots > 0) {
     // One dot is the importer's own package; each further dot climbs one package.
     let base = dirnameOf(fromPath);
-    for (let i = 1; i < dots; i++) base = dirnameOf(base);
+    for (let i = 1; i < dots; i++) {
+      // Climbing above the repository root names nothing.
+      if (base === "") return undefined;
+      base = dirnameOf(base);
+    }
     return moduleIn(ctx, base, parts, member);
   }
   for (const root of orderRoots(ctx.roots, dirnameOf(fromPath))) {
@@ -77,7 +81,13 @@ function orderRoots(roots: readonly string[], fromDir: string): string[] {
   return [...roots].sort((a, b) => Number(!enclosing(a)) - Number(!enclosing(b)) || depth(b) - depth(a));
 }
 
-function isPyproject(path: string): boolean {
+/** Whether a path is a Python source file, whose imports follow Python's rules. */
+export function isPythonFile(path: string): boolean {
+  return /\.py$/i.test(path);
+}
+
+/** Whether a path is a pyproject.toml, which declares Python source roots. */
+export function isPyproject(path: string): boolean {
   return path === "pyproject.toml" || path.endsWith("/pyproject.toml");
 }
 
@@ -85,7 +95,7 @@ function isPyproject(path: string): boolean {
  * Source roots a pyproject.toml declares (relative to its directory): pytest's `pythonpath`, pyright's `extraPaths`,
  * mypy's `mypy_path`, and setuptools' `packages.find.where`. Read with a small line scanner, not a full TOML parser.
  */
-export function declaredSourceRoots(text: string): string[] {
+function declaredSourceRoots(text: string): string[] {
   const wanted: [string, string][] = [
     ["tool.pytest.ini_options", "pythonpath"],
     ["tool.pyright", "extraPaths"],

@@ -1,6 +1,6 @@
 import { builtinModules } from "node:module";
 import { parseJsonc } from "../jsonc.js";
-import { pythonSourceRoots, resolvePythonImport } from "./python.js";
+import { isPythonFile, pythonSourceRoots, resolvePythonImport } from "./python.js";
 
 /**
  * Import resolution (SPEC §4, Resolve), for TS/JS. A specifier is resolved against one commit's path set
@@ -37,8 +37,6 @@ const SOURCE_EXTENSIONS = [".ts", ".tsx", ".d.ts", ".mts", ".cts", ".js", ".jsx"
 /** A JS-family extension in a specifier maps to the TypeScript source that builds it. */
 const JS_EXTENSION = /\.(js|jsx|mjs|cjs)$/;
 const DECLARATION = /\.d\.ts$/;
-/** A Python source file, whose imports follow Python's rules rather than TypeScript's. */
-const PYTHON_FILE = /\.py$/i;
 const TS_FOR_JS = [".ts", ".tsx", ".d.ts", ".mts", ".cts"];
 /** Output folders that map back to source (`dist/x.js` → `src/x.ts`). */
 const BUILD_DIRS = new Set(["dist", "build", "lib", "out"]);
@@ -103,7 +101,7 @@ class Resolver {
 
   resolveWithProbes(fromPath: string, specifier: string, member?: string): Resolved {
     this.probes = [];
-    const target = PYTHON_FILE.test(fromPath) ? this.python(fromPath, specifier, member) : this.resolve(fromPath, specifier);
+    const target = isPythonFile(fromPath) ? this.python(fromPath, specifier, member) : this.resolve(fromPath, specifier);
     return { target, probes: this.probes };
   }
 
