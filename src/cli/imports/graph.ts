@@ -172,6 +172,11 @@ export class ImportGraph {
     return [...(this.packages.get(path) ?? [])].sort();
   }
 
+  /** Every importing file with the bare package names it imports, sorted by file. Matching them to declarations is up to the caller. */
+  importedPackages(): [string, string[]][] {
+    return [...this.packages].map(([path, names]) => [path, [...names].sort()] as [string, string[]]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  }
+
   /**
    * File-to-file edges summed per District pair. `districtOf` maps a path to its District key.
    * A link with equal keys is internal to one District and runs along its Block streets.

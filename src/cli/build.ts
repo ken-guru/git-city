@@ -18,6 +18,8 @@ import { DEFAULT_THEME, hueFor, loadTheme, type Theme } from "./theme.js";
 import { type StepEra, type StepLevel, chooseStepLevel, groupTimeline, PEAK_BUILDINGS_WARNING, peakStanding, planSteps, recentFromFor, stepEras } from "./steps.js";
 import type { StintTable, WorldLayout } from "../shared/format.js";
 import { encodeSiteWorld, writeSite } from "./write.js";
+import { declarationIndex, declarationsOf, externalReport, importerKey, isManifestPath, type Declaration, type ExternalReport } from "./imports/externals.js";
+import { isPythonFile } from "./imports/python.js";
 
 /** The pre-built page, shipped at `dist/page/` next to the CLI. */
 export const DEFAULT_PAGE_DIR = fileURLToPath(new URL("../page/", import.meta.url));
@@ -73,6 +75,8 @@ export interface BuildSummary {
   theme: string;
   /** The Steps used, per era of history (SPEC §9). */
   steps: StepEra[];
+  /** The External Dependencies declared at HEAD, with their External City or the Outskirts, and their Highway Lanes (SPEC §4, §7). */
+  externals: ExternalReport;
 }
 
 export async function build(options: BuildOptions): Promise<BuildSummary> {
@@ -116,6 +120,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     warnings.push(`${read.missingBlobs} file versions could not be read and were counted as empty (missing objects; is this a partial clone?)`);
   }
   const { pipeline } = read;
+  const externals = await externalsReport(options.repoDir, head, pipeline.graph);
   const rawTimeline = pipeline.timeline.result();
   const commits = rawTimeline.commitDays.length;
   options.onPhase?.("Naming");
@@ -176,6 +181,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     commits,
     files: rawTimeline.fileCount,
     steps: stepEras(plan, commits, choice.recentFrom),
+    externals,
     outDir,
     configSources: config.sources,
     revealed: names.revealed,
@@ -202,6 +208,31 @@ function pipelineOptions(repoDir: string, seed: number, theme: Theme, exclude: s
     categoryOf: (path) => categoryOf(path),
     hueOf: (role) => hueFor(theme, role),
   };
+}
+
+/**
+ * The External Dependencies declared by the manifests at `head`, matched to the packages the import graph holds. An
+ * import that no declaration matches is dropped; a declaration with no import still counts, with one Lane.
+ */
+export async function externalsReport(repoDir: string, head: string, graph: { importedPackages(): [string, string[]][] }): Promise<ExternalReport> {
+  const listed = (await gitMaybe(repoDir, ["ls-tree", "-r", "--name-only", head])) ?? "";
+  const declarations: Declaration[] = [];
+  for (const path of listed.split("\n")) {
+    if (path === "" || !isManifestPath(path)) continue;
+    declarations.push(...declarationsOf(path, await git(repoDir, ["show", `${head}:${path}`])));
+  }
+  const match = declarationIndex(declarations);
+  const importers = new Map<string, number>();
+  for (const [file, names] of graph.importedPackages()) {
+    const ecosystem = isPythonFile(file) ? "python" : "npm";
+    for (const name of names) {
+      const hit = match(ecosystem, name);
+      if (hit === undefined) continue;
+      const key = importerKey(hit.ecosystem, hit.name);
+      importers.set(key, (importers.get(key) ?? 0) + 1);
+    }
+  }
+  return externalReport(declarations, importers);
 }
 
 /** Reads a blob's text from the object database, for the import graph's config files. */
