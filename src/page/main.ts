@@ -1,4 +1,22 @@
-import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, PerspectiveCamera, PlaneGeometry, Scene, WebGLRenderer } from "three";
+import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, PerspectiveCamera, PlaneGeometry, Scene, Vector3, WebGLRenderer } from "three";
+import {
+  buildingFacts,
+  CameraDirector,
+  type ClusterSummary,
+  chooseFocus,
+  easeToward,
+  establishingFrame,
+  FOLLOW_WINDOW,
+  type Frame,
+  frameFor,
+  landCentreOf,
+  SHOWCASE_WINDOW,
+  type StintInput,
+  showcasePlan,
+  shotAt,
+  shotPose,
+  summarise,
+} from "./camera.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { type Chunk, decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
 import { type ExternalCitiesFile, parseExternalCities } from "../shared/externals.js";
@@ -15,7 +33,7 @@ import { LodController, type LodSettings, settingsFor } from "./lod.js";
 import { RibbonData } from "./ribbon-data.js";
 import { Ribbon } from "./ribbon.js";
 import { RoadLayer } from "./roads.js";
-import { appendTimelines, buildTimelines, durationFor, type Timelines } from "./state.js";
+import { appendTimelines, buildTimelines, durationFor, latestAt, type Timelines } from "./state.js";
 import { Player, Timescale } from "./timescale.js";
 
 /** Tuning values for the City. */
@@ -41,6 +59,8 @@ const PALETTE = {
 
 const notice = document.getElementById("notice")!;
 const playerBar = document.getElementById("player")!;
+const followButton = document.getElementById("follow") as HTMLButtonElement;
+const postcard = document.getElementById("postcard")!;
 
 function showNotice(...parts: (string | Node)[]) {
   notice.replaceChildren(...parts);
@@ -265,6 +285,100 @@ function play(
       : `Commit ${commit + 1} of ${commitCount} · ${when}`;
   }
 
+  // The camera's automatic moves: following the changes during playback, and the postcard showcase at the latest commit.
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const director = new CameraDirector(true);
+  const stints: StintInput[] = Array.from({ length: world.stints.file.length }, (_, stint) => {
+    const lot = world.stints.lot[stint]!;
+    return { segments: timelines.buildings[stint]!, spot: placeLot(world, lot), block: world.lots.block[lot]! };
+  });
+  const ownerOf = (block: number, t: number) => latestAt(timelines.owners.get(block) ?? [], t)?.owner;
+  const nameOf = (cluster: number) => {
+    const position = positionOf.get(cluster);
+    return position === undefined ? undefined : districts?.[position]?.name;
+  };
+  // Input on the City, and the ribbon's jump to latest and scrubbing, hand the camera to the viewer. Its play keys do not.
+  const handOver = () => director.noteInput(performance.now() / 1000);
+  for (const type of ["pointerdown", "wheel", "touchstart"] as const) {
+    renderer.domElement.addEventListener(type, handOver, { passive: true });
+  }
+  const ribbonKeys = new Set([" ", "ArrowLeft", "ArrowRight", "Home", "End", "r", "R"]);
+  addEventListener("keydown", (event) => {
+    if (playerBar.contains(event.target as Node) || ribbonKeys.has(event.key)) return;
+    handOver();
+  });
+  document.getElementById("latest")!.addEventListener("click", handOver);
+  document.getElementById("scrubber")!.addEventListener("input", handOver);
+  followButton.setAttribute("aria-pressed", "true");
+  followButton.addEventListener("click", () => {
+    director.followOn = !director.followOn;
+    followButton.setAttribute("aria-pressed", String(director.followOn));
+    followButton.textContent = director.followOn ? "Follow changes: on" : "Follow changes: off";
+  });
+  let focus: number | undefined;
+  let focusedCommit = -1;
+  let focusSummaries = new Map<number, ClusterSummary>();
+  let shots: { frames: Frame[]; names: (string | undefined)[] } | undefined;
+  let caption: string | undefined;
+  function setCaption(name: string | undefined) {
+    if (name === caption) return;
+    caption = name;
+    postcard.textContent = name ?? "";
+    postcard.hidden = name === undefined;
+  }
+  /** Moves the aim towards the focused cluster, carrying the camera with it so the viewer's angle and distance hold. */
+  function followChanges(commit: number, dt: number) {
+    if (commit !== focusedCommit) {
+      focusedCommit = commit;
+      const facts = buildingFacts(stints, ownerOf, commit, durationFor(player.stepsPerSecond()), FOLLOW_WINDOW);
+      focusSummaries = summarise(facts);
+      // Only clusters with standing Buildings have a centre to aim at.
+      focus = chooseFocus(
+        [...focusSummaries.values()].filter((s) => s.standing > 0),
+        focus,
+      );
+    }
+    const goal = focus === undefined ? undefined : focusSummaries.get(focus);
+    if (!goal) return;
+    const from = controls.target;
+    const to = new Vector3(
+      easeToward(from.x, goal.x, dt, reducedMotion),
+      easeToward(from.y, goal.aimY, dt, reducedMotion),
+      easeToward(from.z, goal.z, dt, reducedMotion),
+    );
+    camera.position.add(to.clone().sub(from));
+    controls.target.copy(to);
+  }
+  /**
+   * The shots: the establishing shot over the standing Buildings, then the busiest Districts, planned once history is
+   * complete. The land's centre is the middle of the layout's Blocks and villages (the standing Buildings if there is none).
+   */
+  function showcaseShots() {
+    if (!shots) {
+      const latest = buildingFacts(stints, ownerOf, commitCount - 1, durationFor(player.stepsPerSecond()), SHOWCASE_WINDOW);
+      const layout = [...blockSites(world), ...villageSites(world)].map((p) => ({ x: p.x * BLOCK_WORLD, z: p.z * BLOCK_WORLD }));
+      const land = landCentreOf(layout) ?? landCentreOf(latest.filter((f) => f.standing)) ?? { x: 0, z: 0 };
+      const plan = showcasePlan([...summarise(latest).values()], nameOf);
+      const establishing = establishingFrame(latest, land).frame;
+      shots = {
+        frames: [establishing, ...plan.map((p) => frameFor(p.summary, land))],
+        names: [undefined, ...plan.map((p) => p.name)],
+      };
+    }
+    return shots;
+  }
+  function showcaseCamera(now: number) {
+    const { frames, names } = showcaseShots();
+    const { shot, progress } = shotAt(director.showcaseTime(now), frames.length, reducedMotion);
+    const frame = frames[shot]!;
+    // The establishing shot holds still; each postcard pushes in.
+    const position = shotPose(frame, shot === 0 ? 0 : progress, reducedMotion);
+    camera.position.set(position.x, position.y, position.z);
+    controls.target.set(frame.aim.x, frame.aim.y, frame.aim.z);
+    setCaption(names[shot]);
+    camera.lookAt(controls.target);
+  }
+
   let last = performance.now();
   renderer.setAnimationLoop((now) => {
     if (lod.frame(now)) applyDetail();
@@ -272,8 +386,17 @@ function play(
     last = now;
     // Playback holds at the last loaded commit, and carries on when the next chunk arrives.
     player.advance(seconds, stream.loadedThrough());
-    draw(player.buffer(stream.loadedThrough()).displayed);
+    const shown = player.buffer(stream.loadedThrough()).displayed;
+    draw(shown);
     ribbon.update();
+    const mode = director.mode(now / 1000, {
+      playing: player.playing,
+      atLatest: player.t >= player.endTime,
+      loaded: stream.loadedThrough() >= commitCount - 1,
+    });
+    if (mode === "follow") followChanges(Math.floor(shown), seconds);
+    if (mode === "showcase") showcaseCamera(now / 1000);
+    else setCaption(undefined);
     controls.update();
     renderer.render(scene, camera);
     labels?.update(camera);
