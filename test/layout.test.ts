@@ -273,6 +273,47 @@ describe("Block ownership", () => {
   });
 });
 
+describe("District and Block events", () => {
+  /** Applies each change in order and returns what each one did. */
+  function eventsOf(history: Changes, seed = 1) {
+    const builder = new LayoutBuilder({ seed });
+    return history.list.map((change) => builder.apply(change));
+  }
+
+  it("reports a split, then the owner change of each Block that moves to the new District", () => {
+    const history = new Changes()
+      .commit(["packages/web/a.ts", "packages/x/b.ts"])
+      .commit(["packages/web/package.json", "packages/web/c.ts"]);
+    const [first, second] = eventsOf(history);
+    const { districts } = layoutHistory(history.list, { seed: 1 });
+    const parent = districts.find((d) => d.key === "packages")!;
+    const child = districts.find((d) => d.key === "packages/web")!;
+
+    expect(first!.every((e) => e.kind === "owner")).toBe(true);
+    const split = second!.find((e) => e.kind === "split");
+    expect(split).toEqual({ kind: "split", district: child.index, parent: parent.index });
+    const moved = second!.filter((e) => e.kind === "owner");
+    expect(moved.length).toBeGreaterThan(0);
+    for (const e of moved) expect(e).toMatchObject({ district: child.index });
+    // The split comes before the owner changes it causes.
+    expect(second!.indexOf(split!)).toBeLessThan(second!.indexOf(moved[0]!));
+  });
+
+  it("reports a merge when the manifest goes, and the Blocks going back to the parent", () => {
+    const history = new Changes()
+      .commit(["packages/web/a.ts", "packages/x/b.ts"])
+      .commit(["packages/web/package.json", "packages/web/c.ts"])
+      .commit([], ["packages/web/package.json"]);
+    const third = eventsOf(history)[2]!;
+    const { districts } = layoutHistory(history.list.slice(0, 2), { seed: 1 });
+    const parent = districts.find((d) => d.key === "packages")!;
+    const child = districts.find((d) => d.key === "packages/web")!;
+
+    expect(third).toContainEqual({ kind: "merge", district: child.index, parent: parent.index });
+    for (const e of third.filter((e) => e.kind === "owner")) expect(e).toMatchObject({ district: parent.index });
+  });
+});
+
 describe("Cut points and re-runs", () => {
   /** A deterministic history with manifests appearing and vanishing partway through. */
   function generated(): LayoutChange[] {

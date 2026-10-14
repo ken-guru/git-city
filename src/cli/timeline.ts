@@ -125,6 +125,19 @@ export class TimelineBuilder {
     return this.standing.get(path);
   }
 
+  /** The number of commits added so far. The last one is `commits() - 1`. */
+  commits(): number {
+    return this.days.length;
+  }
+
+  /**
+   * Records an event from the layout or the Road history at the last commit added. `file` and `stint` carry the ids
+   * the event kind documents in format.ts (a Block, a District, a Road); `value` is only used by the Road Lanes kind.
+   */
+  recordEvent(kind: EventKind, file: number, stint: number, value = 0): void {
+    this.event(this.days.length - 1, file, kind, value, stint);
+  }
+
   /** Everything the builder holds, as JSON-safe values, so a run can resume from it exactly. */
   snapshot(): TimelineSnapshot {
     return {

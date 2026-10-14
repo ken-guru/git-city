@@ -3,7 +3,15 @@ import { existsSync } from "node:fs";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { deflateSync } from "node:zlib";
-import { type ChunkSnapshot, CHUNK_HASH_BYTES, chunkName, encodeChunk } from "../shared/format.js";
+import {
+  type ChunkSnapshot,
+  CHUNK_HASH_BYTES,
+  chunkName,
+  encodeChunk,
+  EVENT_BLOCK_OWNER,
+  EVENT_ROAD_BUILT,
+  EVENT_ROAD_LANES,
+} from "../shared/format.js";
 import { applyEvent, birthStates, type FileStates } from "../shared/replay.js";
 import type { TimelineData } from "./timeline.js";
 
@@ -50,11 +58,12 @@ export function planChunks(timeline: ChunkInput, limits: ChunkLimits = {}): Plan
   const commits = timeline.commitDays.length;
   const firstEvent = firstEventIndex(timeline.eventCommit, commits);
   const state = birthStates(timeline.buildingType, timeline.language);
+  const carried: Carried = { owners: new Map(), roads: new Map() };
 
   const plans: PlannedChunk[] = [];
   let start = 0;
   do {
-    const snapshot = snapshotOf(state);
+    const snapshot = snapshotOf(state, carried);
     const chunk = chunkFrom(timeline, snapshot, start, { commits, chunkCommits, chunkBytes, checkEvery }, firstEvent);
     plans.push({
       firstCommit: start,
@@ -62,7 +71,7 @@ export function planChunks(timeline: ChunkInput, limits: ChunkLimits = {}): Plan
       hash: createHash("sha256").update(chunk.bytes).digest().subarray(0, CHUNK_HASH_BYTES),
       compressedBytes: chunk.compressedBytes,
     });
-    applyEvents(state, timeline, firstEvent[start]!, firstEvent[chunk.end]!);
+    applyEvents(state, carried, timeline, firstEvent[start]!, firstEvent[chunk.end]!);
     start = chunk.end;
   } while (start < commits);
   return plans;
@@ -169,9 +178,17 @@ function firstEventIndex(eventCommit: Uint32Array, commits: number): Uint32Array
   return out;
 }
 
-function snapshotOf(state: FileStates): ChunkSnapshot {
+/** What the chunks carry beyond the files: each claimed Block's owning District, and each built Road's state. */
+interface Carried {
+  owners: Map<number, number>;
+  roads: Map<number, { built: number; forward: number; backward: number }>;
+}
+
+function snapshotOf(state: FileStates, carried: Carried): ChunkSnapshot {
   const standing: number[] = [];
   for (let file = 0; file < state.standing.length; file++) if (state.standing[file]) standing.push(file);
+  const blocks = [...carried.owners].sort((a, b) => a[0] - b[0]);
+  const roads = [...carried.roads].sort((a, b) => a[0] - b[0]);
   return {
     file: Uint32Array.from(standing),
     stint: Uint32Array.from(standing, (f) => state.stint[f]!),
@@ -179,12 +196,33 @@ function snapshotOf(state: FileStates): ChunkSnapshot {
     scaffolded: Uint8Array.from(standing, (f) => state.scaffolded[f]!),
     buildingType: Uint8Array.from(standing, (f) => state.buildingType[f]!),
     language: Uint8Array.from(standing, (f) => state.language[f]!),
+    blockIds: Uint32Array.from(blocks, (b) => b[0]),
+    blockDistricts: Uint32Array.from(blocks, (b) => b[1]),
+    roadIds: Uint32Array.from(roads, (r) => r[0]),
+    roadBuilt: Uint32Array.from(roads, (r) => r[1].built),
+    roadForward: Uint8Array.from(roads, (r) => r[1].forward),
+    roadBackward: Uint8Array.from(roads, (r) => r[1].backward),
   };
 }
 
 /** Advances the state through the events from index `from` up to `to`. */
-function applyEvents(state: FileStates, timeline: ChunkInput, from: number, to: number): void {
-  for (let i = from; i < to; i++) applyEvent(state, timeline.eventKind[i]!, timeline.eventFile[i]!, timeline.eventValue[i]!, timeline.eventStint[i]!);
+function applyEvents(state: FileStates, carried: Carried, timeline: ChunkInput, from: number, to: number): void {
+  for (let i = from; i < to; i++) {
+    const kind = timeline.eventKind[i]!;
+    const id = timeline.eventFile[i]!;
+    const value = timeline.eventValue[i]!;
+    const stint = timeline.eventStint[i]!;
+    if (kind === EVENT_BLOCK_OWNER) {
+      carried.owners.set(id, stint);
+    } else if (kind === EVENT_ROAD_BUILT) {
+      if (!carried.roads.has(id)) carried.roads.set(id, { built: timeline.eventCommit[i]!, forward: 0, backward: 0 });
+    } else if (kind === EVENT_ROAD_LANES) {
+      const road = carried.roads.get(id);
+      if (road) Object.assign(road, { forward: value, backward: stint });
+    } else {
+      applyEvent(state, kind, id, value, stint);
+    }
+  }
 }
 
 function encodeRange(

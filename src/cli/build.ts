@@ -13,7 +13,7 @@ import { type PipelineOptions } from "./pipeline.js";
 import { PrivacyError, scanOutput } from "./privacy.js";
 import { readPipeline, type PipelineRead } from "./resume.js";
 import type { SizeReport } from "./chunks.js";
-import { type RoadNetwork, buildRoadNetwork } from "./imports/roads.js";
+import type { RoadTable } from "./roadhistory.js";
 import { DEFAULT_THEME, hueFor, loadTheme, type Theme } from "./theme.js";
 import type { StintTable, WorldLayout } from "../shared/format.js";
 import { writeSite } from "./write.js";
@@ -85,6 +85,8 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   try {
     read = await readPipeline(options.repoDir, head, branch, cache, pipelineOptions(options.repoDir, seed, theme));
     await cache.checkpoint(branch, head, read.pipeline.runState(), read.pipeline.layout.snapshot(), new Set(read.chain), read.missingBlobs);
+    // After the checkpoint: a checkpoint holds only the scheduled Road samples, so every run resumes from the same state.
+    read.pipeline.finish();
   } finally {
     await cache.close();
   }
@@ -101,7 +103,8 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   }
 
   const layout = pipeline.layout.result();
-  const roads = roadsOf(layout, pipeline.graph.districtLinks((path) => pipeline.layout.districtForPath(path)));
+  const roads = pipeline.roads.table();
+  const streets = pipeline.roadNetwork?.streets ?? new Map<string, number>();
   const widthStep = Uint8Array.from({ length: data.fileCount }, (_, file) => pipeline.layout.stepOf(file));
   const places = namePlaces(placeInputs(layout), config, {
     theme,
@@ -110,7 +113,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     private: options.private,
   });
 
-  const sizes = await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, worldLayout(layout, roads, seed, widthStep, data.stints), names.table, places, (staging) =>
+  const sizes = await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, worldLayout(layout, roads, streets, seed, widthStep, data.stints), names.table, places, (staging) =>
     scanOutput(staging, names.hidden),
   );
   return {
@@ -148,20 +151,11 @@ export async function rootCommit(repoDir: string, head: string): Promise<string>
   return roots?.[0] ?? head;
 }
 
-/** The Road network between the villages, from the file-to-file links between their Districts. */
-export function roadsOf(layout: LayoutResult, links: { from: string; to: string; strength: number }[]): RoadNetwork {
-  const villageOf = new Map(layout.districts.map((d) => [d.key, d.village] as const));
-  return buildRoadNetwork(
-    layout.villages.map((v) => ({ id: v.id, col: v.col, row: v.row })),
-    links,
-    (district) => villageOf.get(district),
-  );
-}
-
 /** The layout as the world file holds it: villages, Blocks, Lots, Roads and per-file width steps. */
 export function worldLayout(
   layout: LayoutResult,
-  roads: RoadNetwork,
+  roads: RoadTable,
+  streets: ReadonlyMap<string, number>,
   citySeed: number,
   widthStep: Uint8Array,
   stints: StintSource,
@@ -192,11 +186,16 @@ export function worldLayout(
       slots: Uint8Array.from(layout.lots, (l) => l.slots),
     },
     roads: {
-      a: Uint32Array.from(roads.roads, (r) => r.a),
-      b: Uint32Array.from(roads.roads, (r) => r.b),
-      forward: Uint8Array.from(roads.roads, (r) => r.lanes.forward),
-      backward: Uint8Array.from(roads.roads, (r) => r.lanes.backward),
-      track: Uint8Array.from(roads.roads, (r) => (r.track ? 1 : 0)),
+      a: Uint32Array.from(roads.a),
+      b: Uint32Array.from(roads.b),
+      forward: Uint8Array.from(roads.forward),
+      backward: Uint8Array.from(roads.backward),
+      // A Road with no Lanes either way is an unpaved track.
+      track: Uint8Array.from(roads.forward, (forward, i) => (forward === 0 && roads.backward[i] === 0 ? 1 : 0)),
+    },
+    districts: {
+      index: Uint32Array.from(layout.districts, (d) => d.index),
+      street: Uint8Array.from(layout.districts, (d) => Math.round(100 * (streets.get(d.key) ?? 1))),
     },
   };
 }

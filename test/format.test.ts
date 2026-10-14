@@ -16,6 +16,12 @@ function emptySnapshot() {
   return {
     file: new Uint32Array(0),
     stint: new Uint32Array(0),
+    blockIds: new Uint32Array(0),
+    blockDistricts: new Uint32Array(0),
+    roadIds: new Uint32Array(0),
+    roadBuilt: new Uint32Array(0),
+    roadForward: new Uint8Array(0),
+    roadBackward: new Uint8Array(0),
     floors: new Uint8Array(0),
     scaffolded: new Uint8Array(0),
     buildingType: new Uint8Array(0),
@@ -31,6 +37,7 @@ const emptyLayout = {
   lots: { file: new Uint32Array(0), block: new Uint32Array(0), slot: new Uint8Array(0), slots: new Uint8Array(0) },
   roads: { a: new Uint32Array(0), b: new Uint32Array(0), forward: new Uint8Array(0), backward: new Uint8Array(0), track: new Uint8Array(0) },
   stints: { file: new Uint32Array(0), lot: new Uint32Array(0), buildingType: new Uint8Array(0) },
+  districts: { index: new Uint32Array(0), street: new Uint8Array(0) },
 };
 
 describe("binary format", () => {
@@ -59,6 +66,12 @@ describe("binary format", () => {
       snapshot: {
         file: Uint32Array.of(3, 9),
         stint: Uint32Array.of(30, 90),
+      blockIds: Uint32Array.of(4, 5),
+      blockDistricts: Uint32Array.of(1, 0),
+      roadIds: Uint32Array.of(2),
+      roadBuilt: Uint32Array.of(1500),
+      roadForward: Uint8Array.of(3),
+      roadBackward: Uint8Array.of(0),
         floors: Uint8Array.of(4, 31),
         scaffolded: Uint8Array.of(0, 1),
         buildingType: Uint8Array.of(2, 5),
@@ -76,6 +89,12 @@ describe("binary format", () => {
     expect(chunk.firstCommit).toBe(2000);
     expect([...chunk.snapshot.file]).toEqual([3, 9]);
     expect([...chunk.snapshot.stint]).toEqual([30, 90]);
+    expect([...chunk.snapshot.blockIds]).toEqual([4, 5]);
+    expect([...chunk.snapshot.blockDistricts]).toEqual([1, 0]);
+    expect([...chunk.snapshot.roadIds]).toEqual([2]);
+    expect([...chunk.snapshot.roadBuilt]).toEqual([1500]);
+    expect([...chunk.snapshot.roadForward]).toEqual([3]);
+    expect([...chunk.snapshot.roadBackward]).toEqual([0]);
     expect([...chunk.snapshot.floors]).toEqual([4, 31]);
     expect([...chunk.snapshot.scaffolded]).toEqual([0, 1]);
     expect([...chunk.snapshot.buildingType]).toEqual([2, 5]);
@@ -118,6 +137,7 @@ describe("layout section of the world file", () => {
     lots: { file: Uint32Array.of(0, 1), block: Uint32Array.of(0, 2), slot: Uint8Array.of(0, 4), slots: Uint8Array.of(2, 4) },
     roads: { a: Uint32Array.of(0), b: Uint32Array.of(1), forward: Uint8Array.of(2), backward: Uint8Array.of(0), track: Uint8Array.of(0) },
     stints: { file: Uint32Array.of(0, 1, 1), lot: Uint32Array.of(0, 1, 2), buildingType: Uint8Array.of(3, 4, 5) },
+    districts: { index: Uint32Array.of(7, 2), street: Uint8Array.of(100, 180) },
   };
 
   it("round-trips the city seed, width steps, villages, Blocks, Lots and Roads", () => {
@@ -149,5 +169,7 @@ describe("layout section of the world file", () => {
     expect([...world.stints.file]).toEqual([0, 1, 1]);
     expect([...world.stints.lot]).toEqual([0, 1, 2]);
     expect([...world.stints.buildingType]).toEqual([3, 4, 5]);
+    expect([...world.districts.index]).toEqual([7, 2]);
+    expect([...world.districts.street]).toEqual([100, 180]);
   });
 });
