@@ -35,6 +35,7 @@ const THEME_CASES: [string, (pack: Record<string, any>) => void, boolean][] = [
   ["the medieval pack as shipped", () => {}, true],
   ["a missing Role noun", (p) => delete p.roleNouns.fallback, false],
   ["a missing palette swatch", (p) => delete p.palette.ui, false],
+  ["no palette at all, which falls back to the built-in one", (p) => delete p.palette, true],
   ["an unknown top-level key", (p) => (p.extra = 1), false],
   ["a Role noun with a hyphen", (p) => (p.roleNouns.docs = "Bad-Noun"), false],
   ["a Role noun longer than 24 characters", (p) => (p.roleNouns.docs = "A".repeat(25)), false],

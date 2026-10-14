@@ -2,10 +2,10 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/ken-guru/git-city/main/schema/theme.schema.json",
   "title": "git-city theme",
-  "description": "A Theme pack: data only, executes no code. Every Role, plus a fallback, needs a noun and a palette hue.",
+  "description": "A Theme pack: data only, executes no code. Every Role, plus a fallback, needs a noun. The palette is optional: without one, the built-in palette gives the hues. A palette that is given must cover every Role and the fallback.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["name", "display", "wordPieces", "streetSuffixes", "roleNouns", "palette"],
+  "required": ["name", "display", "wordPieces", "streetSuffixes", "roleNouns"],
   "properties": {
     "$schema": { "type": "string" },
     "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },

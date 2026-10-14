@@ -24,14 +24,15 @@ read them. Until then, a new Theme is a change to this package.
 | `wordPieces.suffixes` | One or more lower-case words, such as `ford`. |
 | `streetSuffixes` | One or more words of letters and spaces, such as `Lane`. |
 | `roleNouns` | A noun for every key in the coverage list below. Letters and single spaces, at most 24 characters. |
-| `palette` | A `hue` from 0 to 360 for every key in the coverage list below. |
+| `palette` | Optional. When given, a `hue` from 0 to 360 for every key in the coverage list below. When left out, the built-in palette gives the hues (the modern Theme's). |
 
 No other keys are allowed at any level.
 
 ## Coverage rules
 
-Every Role needs a noun and a palette hue, and the fallback needs both too. The fallback is used for anything with no
-detected Role. These are the keys, which must appear in both `roleNouns` and `palette`:
+Every Role needs a noun, and the fallback needs one too. The fallback is used for anything with no detected Role. A
+palette is optional. If you give one, it needs a hue for every key too. These are the keys, which must appear in
+`roleNouns`, and in `palette` when you give one:
 
 - Roles: `tests`, `docs`, `api`, `ui`, `auth`, `data`, `cli`, `infra`, `utils`, `core`, `config`, `build`
 - Fallback: `fallback`
