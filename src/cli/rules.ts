@@ -93,6 +93,12 @@ function targetMatches(target: Target, item: RuleItem): boolean {
   }
 }
 
+/** A matcher for the `exclude` globs: true for a path that is left out of the City. Globs compile once. */
+export function pathExcluder(globs: readonly string[]): (path: string) => boolean {
+  const patterns = globs.map(globToRegExp);
+  return (path) => patterns.some((pattern) => pattern.test(path));
+}
+
 /** Converts a path glob: `**` crosses folders, `*` stays in one folder, `?` is one character. */
 export function globToRegExp(glob: string): RegExp {
   let source = "";

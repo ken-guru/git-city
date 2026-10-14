@@ -44,6 +44,7 @@ describe("binary format", () => {
   it("round-trips a world's per-file Building attributes", () => {
     const bytes = encodeWorld({
       commitDays: Int32Array.of(19000, 19001),
+      stepCommits: Uint32Array.of(1, 1),
       fileCount: 3,
       buildingType: Uint8Array.of(0, 4, 8),
       language: Uint8Array.of(1, 0, 10),
@@ -144,6 +145,7 @@ describe("layout section of the world file", () => {
     const world = decodeWorld(
       encodeWorld({
         commitDays: Int32Array.of(19000),
+        stepCommits: Uint32Array.of(1),
         fileCount: 2,
         buildingType: Uint8Array.of(0, 0),
         language: Uint8Array.of(0, 0),

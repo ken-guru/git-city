@@ -25,7 +25,13 @@
     "theme": { "type": "string" },
     "externals": { "type": "object" },
     "exclude": { "type": "array", "items": { "type": "string" } },
-    "scale": { "type": "object" },
+    "scale": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "timeline": { "enum": ["auto", "commit", "day", "week", "month"] }
+      }
+    },
     "tuning": { "type": "object" }
   },
   "$defs": {

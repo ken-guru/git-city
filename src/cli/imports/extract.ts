@@ -18,6 +18,11 @@ export type ImportKind = "static" | "dynamic" | "type" | "reexport" | "require";
 export interface RawImport {
   specifier: string;
   kind: ImportKind;
+  /**
+   * Python `from a import b`: the name `b` taken from module `a`, one entry per name. Absent for every other
+   * import, and for a wildcard import (`from a import *`), which names the module alone.
+   */
+  member?: string;
 }
 
 export interface ImportExtractor {
@@ -43,7 +48,7 @@ const GRAMMAR_DIR =
     .map((url) => fileURLToPath(url))
     .find((dir) => existsSync(dir)) ?? fileURLToPath(new URL("../../grammars/", import.meta.url));
 
-type GrammarName = "typescript" | "tsx" | "javascript";
+type GrammarName = "typescript" | "tsx" | "javascript" | "python";
 
 const GRAMMAR_OF_EXTENSION: Record<string, GrammarName> = {
   ".ts": "typescript", ".mts": "typescript", ".cts": "typescript",
@@ -89,8 +94,30 @@ export const tsJsExtractor: ImportExtractor = {
   },
 };
 
+/** Version of the Python extractor. Bump when the grammar or the extraction logic changes its output. */
+export const PYTHON_EXTRACTOR_VERSION = 1;
+
+/** The Python extractor: web-tree-sitter with the Python grammar. Relative specifiers keep their leading dots. */
+export const pythonExtractor: ImportExtractor = {
+  name: "python",
+  version: PYTHON_EXTRACTOR_VERSION,
+  handles: (path) => extname(path).toLowerCase() === ".py",
+  async extract(_path, source) {
+    const language = await grammar("python");
+    const parser = new Parser();
+    parser.setLanguage(language);
+    const tree = parser.parse(source);
+    if (!tree) return [];
+    const found: RawImport[] = [];
+    walkPython(tree.rootNode, found, false);
+    tree.delete();
+    parser.delete();
+    return found;
+  },
+};
+
 /** Every extractor, in the order they are consulted. */
-export const EXTRACTORS: readonly ImportExtractor[] = [tsJsExtractor];
+export const EXTRACTORS: readonly ImportExtractor[] = [tsJsExtractor, pythonExtractor];
 
 /** The extractor that handles `path`, or undefined when no extractor reads it. */
 export function extractorFor(path: string): ImportExtractor | undefined {
@@ -197,4 +224,82 @@ function insideTypeQuery(node: Node): boolean {
     if (p.type === "type_query" || p.type === "import_type") return true;
   }
   return false;
+}
+
+/**
+ * Python imports. `import a.b` names the module `a.b`. `from a import b, c` gives one entry per name, each with
+ * `member`; `from a import *` gives the module alone. Imports under `if TYPE_CHECKING:` are type-only.
+ * `importlib.import_module("x")` and `__import__("x")` with a literal absolute name are dynamic.
+ */
+function walkPython(node: Node, out: RawImport[], typeOnly: boolean): void {
+  switch (node.type) {
+    case "import_statement": {
+      for (const item of node.namedChildren) {
+        const name = importedName(item);
+        if (name?.type === "dotted_name") out.push({ specifier: compact(name.text), kind: typeOnly ? "type" : "static" });
+      }
+      return;
+    }
+    case "import_from_statement": {
+      const [module, ...rest] = node.namedChildren;
+      if (!module) return;
+      const specifier = compact(module.text);
+      if (specifier === "__future__") return;
+      const kind: ImportKind = typeOnly ? "type" : "static";
+      const items = rest.filter((c) => c.type === "dotted_name" || c.type === "aliased_import");
+      if (items.length === 0) {
+        out.push({ specifier, kind });
+        return;
+      }
+      for (const item of items) {
+        const name = importedName(item);
+        if (name) out.push({ specifier, member: compact(name.text), kind });
+      }
+      return;
+    }
+    case "call": {
+      const callee = node.childForFieldName("function");
+      const isImportCall =
+        (callee?.type === "identifier" && callee.text === "__import__") ||
+        (callee?.type === "attribute" && callee.text === "importlib.import_module");
+      const first = node.childForFieldName("arguments")?.namedChildren[0];
+      if (isImportCall && first?.type === "string") {
+        const specifier = pythonStringValue(first);
+        if (specifier !== undefined && !specifier.startsWith(".")) out.push({ specifier, kind: "dynamic" });
+      }
+      break;
+    }
+    case "if_statement": {
+      // Only the block under `if TYPE_CHECKING:` is type-only; its else and elif branches run at runtime.
+      const block = isTypeChecking(node.childForFieldName("condition")) ? node.childForFieldName("consequence") : null;
+      for (const child of node.children) walkPython(child, out, typeOnly || child.id === block?.id);
+      return;
+    }
+    default:
+      break;
+  }
+  for (const child of node.children) walkPython(child, out, typeOnly);
+}
+
+/** The dotted name an import item brings in: the item itself, or the `name` of an `x as y` alias. */
+function importedName(item: Node): Node | null {
+  return item.type === "aliased_import" ? item.childForFieldName("name") : item;
+}
+
+function isTypeChecking(condition: Node | null): boolean {
+  if (!condition) return false;
+  return condition.type === "identifier"
+    ? condition.text === "TYPE_CHECKING"
+    : condition.type === "attribute" && condition.text === "typing.TYPE_CHECKING";
+}
+
+/** A dotted name or module with its whitespace removed (a parenthesised import can break a line). */
+function compact(text: string): string {
+  return text.replace(/\s+/g, "");
+}
+
+/** The text of a plain Python string literal, or undefined when it is empty or not a literal. */
+function pythonStringValue(node: Node): string | undefined {
+  const content = node.namedChildren.find((c) => c.type === "string_content");
+  return content && content.text !== "" ? content.text : undefined;
 }

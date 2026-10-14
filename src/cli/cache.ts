@@ -27,7 +27,7 @@ const LAYER_DEFINITIONS = {
   commits: { sources: ["history", "git"], packages: [], dirs: ["commits"], dependents: ["run"] },
   // The run state is the Timeline and the import graph, so changing their code clears it.
   run: {
-    sources: ["pipeline", "timeline", "model", "imports/graph", "imports/resolve", "../shared/buildings", "../shared/format"],
+    sources: ["pipeline", "timeline", "model", "imports/graph", "imports/resolve", "imports/python", "../shared/buildings", "../shared/format"],
     packages: [],
     dirs: ["runs", "states"],
     dependents: ["layout"],
@@ -96,6 +96,20 @@ function dependentsOf(layer: Layer): Layer[] {
 /** Checkpoints kept per branch. Older ones roll back less after a rewrite, but cost disk. */
 export const MAX_CHECKPOINTS = 3;
 
+/**
+ * The scope a run's run state and layout belong to: a hash of the `exclude` globs, or "" when there are none.
+ * A checkpoint is only resumed from in the same scope, so changing `exclude` rebuilds the City from the start.
+ */
+export function scopeOf(exclude: readonly string[] | undefined): string {
+  if (exclude === undefined || exclude.length === 0) return "";
+  return createHash("sha256").update(JSON.stringify([...exclude].sort())).digest("hex").slice(0, 16);
+}
+
+/** The scope a checkpoint was saved in. Checkpoints from before scopes existed have the empty scope. */
+export function scopeOfCheckpoint(checkpoint: Checkpoint | undefined): string {
+  return checkpoint?.scope ?? "";
+}
+
 const LOCK_FILE = "lock";
 const LOCK_POLL_MS = 200;
 
@@ -109,6 +123,8 @@ export interface Checkpoint {
   commit: string;
   /** Blobs unreadable up to this checkpoint, carried forward so the build summary stays right. */
   missingBlobs: number;
+  /** The exclude scope the run used (see scopeOf). Older checkpoints have none, which is the empty scope. */
+  scope?: string;
 }
 
 interface SerializedCommit extends Omit<CommitRecord, "lines"> {
@@ -244,13 +260,14 @@ export class CacheSession {
     layout: LayoutSnapshot,
     chain: ReadonlySet<string>,
     missingBlobs: number,
+    scope: string,
   ): Promise<void> {
     const existing = await this.checkpoints(branch);
-    if (existing.at(-1)?.commit === head && existsSync(stateFile(this.dir, branch, head)) && existsSync(layoutFile(this.dir, branch, head))) {
+    if (existing.at(-1)?.commit === head && scopeOfCheckpoint(existing.at(-1)) === scope && existsSync(stateFile(this.dir, branch, head)) && existsSync(layoutFile(this.dir, branch, head))) {
       return;
     }
     const live = existing.filter((c) => chain.has(c.commit) && c.commit !== head);
-    const all = [...live, { commit: head, missingBlobs }];
+    const all: Checkpoint[] = [...live, { commit: head, missingBlobs, scope }];
     const keep = all.slice(-MAX_CHECKPOINTS);
 
     await writeAtomic(stateFile(this.dir, branch, head), JSON.stringify(state));

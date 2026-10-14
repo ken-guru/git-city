@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CacheSession } from "./cache.js";
+import { CacheSession, scopeOf, scopeOfCheckpoint } from "./cache.js";
 import { loadConfig } from "./config.js";
 import { gitMaybe, git } from "./git.js";
 import { isShallowRepository, resolveTimelineHead } from "./history.js";
@@ -12,11 +12,12 @@ import { seedNumber } from "./namer.js";
 import { type PipelineOptions } from "./pipeline.js";
 import { PrivacyError, scanOutput } from "./privacy.js";
 import { readPipeline, type PipelineRead } from "./resume.js";
-import type { SizeReport } from "./chunks.js";
+import { planChunks, type SizeReport, sizeReport } from "./chunks.js";
 import type { RoadTable } from "./roadhistory.js";
 import { DEFAULT_THEME, hueFor, loadTheme, type Theme } from "./theme.js";
+import { type StepEra, type StepLevel, chooseStepLevel, groupTimeline, PEAK_BUILDINGS_WARNING, peakStanding, planSteps, recentFromFor, stepEras } from "./steps.js";
 import type { StintTable, WorldLayout } from "../shared/format.js";
-import { writeSite } from "./write.js";
+import { encodeSiteWorld, writeSite } from "./write.js";
 
 /** The pre-built page, shipped at `dist/page/` next to the CLI. */
 export const DEFAULT_PAGE_DIR = fileURLToPath(new URL("../page/", import.meta.url));
@@ -45,6 +46,8 @@ export interface BuildOptions {
   fresh?: boolean;
   /** `--wait`: wait for another run to finish instead of failing. */
   wait?: boolean;
+  /** Called as each phase starts, for the interactive progress display. */
+  onPhase?: (phase: string) => void;
 }
 
 export interface BuildSummary {
@@ -62,8 +65,14 @@ export interface BuildSummary {
   warnings: string[];
   /** Compressed sizes of the site's data, against the budget. */
   sizes: SizeReport;
+  /** Whether git ignores the output folder; undefined when it lies outside the repository. */
+  outputIgnored?: boolean;
+  /** The output folder relative to the repository, with a trailing slash, for the .gitignore hint. */
+  outputIgnoreEntry?: string;
   /** The Theme the names and colours came from. */
   theme: string;
+  /** The Steps used, per era of history (SPEC §9). */
+  steps: StepEra[];
 }
 
 export async function build(options: BuildOptions): Promise<BuildSummary> {
@@ -80,11 +89,24 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   const seedText = options.seed ?? config.naming.seed ?? (await rootCommit(options.repoDir, head));
   const seed = seedNumber(seedText);
 
+  options.onPhase?.("Reading history");
   const cache = await CacheSession.open(options.repoDir, { fresh: options.fresh, wait: options.wait });
   let read: PipelineRead;
   try {
-    read = await readPipeline(options.repoDir, head, branch, cache, pipelineOptions(options.repoDir, seed, theme));
-    await cache.checkpoint(branch, head, read.pipeline.runState(), read.pipeline.layout.snapshot(), new Set(read.chain), read.missingBlobs);
+    const previous = (await cache.checkpoints(branch)).at(-1);
+    if (previous !== undefined && scopeOfCheckpoint(previous) !== scopeOf(config.exclude)) {
+      warnings.push("the exclude rules changed since the last build, so the City is rebuilt in full and its layout changes");
+    }
+    read = await readPipeline(options.repoDir, head, branch, cache, pipelineOptions(options.repoDir, seed, theme, config.exclude));
+    await cache.checkpoint(
+      branch,
+      head,
+      read.pipeline.runState(),
+      read.pipeline.layout.snapshot(),
+      new Set(read.chain),
+      read.missingBlobs,
+      read.scope,
+    );
     // After the checkpoint: a checkpoint holds only the scheduled Road samples, so every run resumes from the same state.
     read.pipeline.finish();
   } finally {
@@ -94,8 +116,10 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     warnings.push(`${read.missingBlobs} file versions could not be read and were counted as empty (missing objects; is this a partial clone?)`);
   }
   const { pipeline } = read;
-  const data = pipeline.timeline.result();
-  const names = nameFiles(data.filePaths, config, { private: options.private });
+  const rawTimeline = pipeline.timeline.result();
+  const commits = rawTimeline.commitDays.length;
+  options.onPhase?.("Naming");
+  const names = nameFiles(rawTimeline.filePaths, config, { private: options.private });
   if (options.strict && names.nearMisses.length > 0) {
     throw new PrivacyError(
       `${names.nearMisses.length} near-miss${names.nearMisses.length === 1 ? "" : "es"} found; --strict fails the build`,
@@ -105,7 +129,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   const layout = pipeline.layout.result();
   const roads = pipeline.roads.table();
   const streets = pipeline.roadNetwork?.streets ?? new Map<string, number>();
-  const widthStep = Uint8Array.from({ length: data.fileCount }, (_, file) => pipeline.layout.stepOf(file));
+  const widthStep = Uint8Array.from({ length: rawTimeline.fileCount }, (_, file) => pipeline.layout.stepOf(file));
   const places = namePlaces(placeInputs(layout), config, {
     theme,
     seed: seedText,
@@ -113,13 +137,45 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     private: options.private,
   });
 
-  const sizes = await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, worldLayout(layout, roads, streets, seed, widthStep, data.stints), names.table, places, (staging) =>
-    scanOutput(staging, names.hidden),
+  // Steps: the smallest grouping that fits the budget (or the pinned one). Only the output's commits move.
+  // Everything keyed by commit (claims, events, Road build dates) is renumbered with the same plan.
+  const worldFor = (stepOf: Uint32Array) => worldLayout(claimsAtSteps(layout, stepOf), roads, streets, seed, widthStep, rawTimeline.stints);
+  const sizeAt = (level: StepLevel) => {
+    const plan = planSteps(rawTimeline.commitDays, level, recentFromFor(commits));
+    const timeline = groupTimeline(rawTimeline, plan);
+    const plans = planChunks(timeline);
+    const worldBytes = encodeSiteWorld(timeline, plans, worldFor(plan.stepOf));
+    return sizeReport(worldBytes, plans);
+  };
+  const choice = chooseStepLevel(config.scale.timeline ?? "auto", commits, sizeAt);
+  warnings.push(...choice.warnings);
+  const plan = planSteps(rawTimeline.commitDays, choice.level, choice.recentFrom);
+  const timeline = groupTimeline(rawTimeline, plan);
+  const peak = peakStanding(rawTimeline.eventKind);
+  if (peak > PEAK_BUILDINGS_WARNING) {
+    warnings.push(
+      `${peak} Buildings stand at once, above ${PEAK_BUILDINGS_WARNING}: the page will lean on level of detail; consider exclude in the config`,
+    );
+  }
+
+  options.onPhase?.("Writing site");
+  const sizes = await writeSite(
+    outDir,
+    options.pageDir ?? DEFAULT_PAGE_DIR,
+    timeline,
+    worldFor(plan.stepOf),
+    names.table,
+    places,
+    (staging) => scanOutput(staging, names.hidden),
   );
+  const entry = relative(options.repoDir, outDir);
+  const inside = entry !== "" && !entry.startsWith("..") && !isAbsolute(entry);
+  const outputIgnoreEntry = inside ? `${entry.split(sep).join("/")}/` : undefined;
   return {
     branch,
-    commits: data.commitDays.length,
-    files: data.fileCount,
+    commits,
+    files: rawTimeline.fileCount,
+    steps: stepEras(plan, commits, choice.recentFrom),
     outDir,
     configSources: config.sources,
     revealed: names.revealed,
@@ -127,13 +183,21 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     warnings,
     theme: theme.name,
     sizes,
+    outputIgnored: inside ? (await gitMaybe(options.repoDir, ["check-ignore", "-q", "--", entry])) !== undefined : undefined,
+    outputIgnoreEntry,
   };
 }
 
-/** The pipeline's options for one run: the City seed, blob text for config files, and the Category and Theme hues. */
-function pipelineOptions(repoDir: string, seed: number, theme: Theme): PipelineOptions {
+/** The layout with each Block's claim moved to the Step its commit belongs to. Positions and Lots are untouched. */
+export function claimsAtSteps(layout: LayoutResult, stepOf: Uint32Array): LayoutResult {
+  return { ...layout, blocks: layout.blocks.map((block) => ({ ...block, claimedAt: stepOf[block.claimedAt]! })) };
+}
+
+/** The pipeline's options for one run: the City seed, blob text for config files, the exclude globs, and the Category and Theme hues. */
+function pipelineOptions(repoDir: string, seed: number, theme: Theme, exclude: string[]): PipelineOptions {
   return {
     seed,
+    exclude,
     readText: readBlobText(repoDir),
     categoryOf: (path) => categoryOf(path),
     hueOf: (role) => hueFor(theme, role),
