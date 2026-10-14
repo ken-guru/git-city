@@ -1,4 +1,21 @@
-import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, PerspectiveCamera, PlaneGeometry, Scene, WebGLRenderer } from "three";
+import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, PerspectiveCamera, PlaneGeometry, Scene, Vector3, WebGLRenderer } from "three";
+import {
+  buildingFacts,
+  CameraDirector,
+  chooseFocus,
+  easeToward,
+  FOLLOW_WINDOW,
+  type Frame,
+  frameFor,
+  type ClusterSummary,
+  type StintInput,
+  SHOWCASE_WINDOW,
+  showcasePlan,
+  shotAt,
+  shotPose,
+  summarise,
+} from "./camera.js";
+import { latestAt } from "./state.js";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
 import { type ExternalCitiesFile, parseExternalCities } from "../shared/externals.js";
@@ -41,6 +58,8 @@ const notice = document.getElementById("notice")!;
 const player = document.getElementById("player")!;
 const playButton = document.getElementById("play") as HTMLButtonElement;
 const status = document.getElementById("status")!;
+const followButton = document.getElementById("follow") as HTMLButtonElement;
+const postcard = document.getElementById("postcard")!;
 
 function showNotice(...parts: (string | Node)[]) {
   notice.replaceChildren(...parts);
@@ -200,6 +219,89 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
+  // The camera's automatic moves: following the changes during playback, and the postcard showcase at the latest commit.
+  const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const director = new CameraDirector(true);
+  const home = { position: camera.position.clone(), aim: new Vector3(0, 0, 0) };
+  const stints: StintInput[] = Array.from({ length: world.stints.file.length }, (_, stint) => {
+    const lot = world.stints.lot[stint]!;
+    return { segments: timelines.buildings[stint]!, spot: placeLot(world, lot), block: world.lots.block[lot]! };
+  });
+  const ownerOf = (block: number, t: number) => latestAt(timelines.owners.get(block) ?? [], t)?.owner;
+  const nameOf = (cluster: number) => {
+    const position = positionOf.get(cluster);
+    return position === undefined ? undefined : districts?.[position]?.name;
+  };
+  // Any input on the City hands the camera to the viewer; the player's own controls do not count.
+  const handOver = () => director.noteInput(performance.now() / 1000);
+  for (const type of ["pointerdown", "wheel", "touchstart"] as const) {
+    renderer.domElement.addEventListener(type, handOver, { passive: true });
+  }
+  addEventListener("keydown", (event) => {
+    if (!player.contains(event.target as Node)) handOver();
+  });
+  followButton.setAttribute("aria-pressed", "true");
+  followButton.addEventListener("click", () => {
+    director.followOn = !director.followOn;
+    followButton.setAttribute("aria-pressed", String(director.followOn));
+    followButton.textContent = director.followOn ? "Follow changes: on" : "Follow changes: off";
+  });
+  let focus: number | undefined;
+  let focusedCommit = -1;
+  let focusSummaries = new Map<number, ClusterSummary>();
+  let postcards: { frames: Frame[]; names: string[] } | undefined;
+  let caption: string | undefined;
+  function setCaption(name: string | undefined) {
+    if (name === caption) return;
+    caption = name;
+    postcard.textContent = name ?? "";
+    postcard.hidden = name === undefined;
+  }
+  /** Moves the aim towards the focused cluster, carrying the camera with it so the viewer's angle and distance hold. */
+  function followChanges(commit: number, dt: number) {
+    if (commit !== focusedCommit) {
+      focusedCommit = commit;
+      const facts = buildingFacts(stints, ownerOf, commit, durationFor(TUNING.commitsPerSecond), FOLLOW_WINDOW);
+      focusSummaries = summarise(facts);
+      focus = chooseFocus([...focusSummaries.values()], focus);
+    }
+    const goal = focus === undefined ? undefined : focusSummaries.get(focus);
+    if (!goal) return;
+    const from = controls.target;
+    const to = new Vector3(
+      easeToward(from.x, goal.x, dt, reducedMotion),
+      easeToward(from.y, goal.aimY, dt, reducedMotion),
+      easeToward(from.z, goal.z, dt, reducedMotion),
+    );
+    camera.position.add(to.clone().sub(from));
+    controls.target.copy(to);
+  }
+  /** The postcards: the establishing shot, then the busiest Districts' standing Buildings, planned once history is complete. */
+  function showcaseShots() {
+    if (!postcards) {
+      const facts = buildingFacts(stints, ownerOf, commitCount - 1, durationFor(TUNING.commitsPerSecond), SHOWCASE_WINDOW);
+      const plan = showcasePlan([...summarise(facts).values()], nameOf);
+      postcards = { frames: plan.map((p) => frameFor(p.summary, { x: 0, z: 0 })), names: plan.map((p) => p.name) };
+    }
+    return postcards;
+  }
+  function showcaseCamera(now: number) {
+    const { frames, names } = showcaseShots();
+    const { shot, progress } = shotAt(director.showcaseTime(now), frames.length + 1, reducedMotion);
+    if (shot === 0) {
+      camera.position.copy(home.position);
+      controls.target.copy(home.aim);
+      setCaption(undefined);
+    } else {
+      const frame = frames[shot - 1]!;
+      const position = shotPose(frame, progress, reducedMotion);
+      camera.position.set(position.x, position.y, position.z);
+      controls.target.set(frame.aim.x, frame.aim.y, frame.aim.z);
+      setCaption(names[shot - 1]);
+    }
+    camera.lookAt(controls.target);
+  }
+
   const labels = places
     ? createDistrictLabels(scene, places, BLOCK_WORLD, extent * TUNING.labelDistance, TUNING.labelHeight, theme)
     : undefined;
@@ -267,6 +369,14 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
       if (time >= endTime) setPlaying(false);
     }
     draw(time);
+    const mode = director.mode(now / 1000, {
+      playing,
+      atLatest: time >= commitCount - 1,
+      loaded: stream.loadedThrough() >= commitCount - 1,
+    });
+    if (mode === "follow") followChanges(Math.floor(time), seconds);
+    if (mode === "showcase") showcaseCamera(now / 1000);
+    else setCaption(undefined);
     controls.update();
     renderer.render(scene, camera);
     labels?.update(camera);
