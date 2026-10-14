@@ -23,6 +23,8 @@ export class TimelineBuilder {
   private readonly language: number[] = [];
   private readonly seed: number[] = [];
   private nextFile = 0;
+  /** The path each file id was born with, indexed by file id. */
+  private readonly filePaths: string[] = [];
   private readonly eventCommit: number[] = [];
   private readonly eventFile: number[] = [];
   private readonly eventKind: EventKind[] = [];
@@ -45,6 +47,7 @@ export class TimelineBuilder {
       if (previous !== undefined) this.retire(seq, path, previous);
 
       const file = this.nextFile++;
+      this.filePaths.push(path);
       const floors = floorsFor(commit.lines?.get(path) ?? 0);
       this.standing.set(path, file);
       this.alive.push(true);
@@ -78,6 +81,8 @@ export class TimelineBuilder {
     return {
       commitDays: Int32Array.from(this.days),
       fileCount: this.nextFile,
+      /** Names are made from these and never leave the CLI: only the naming step writes text. */
+      filePaths: [...this.filePaths],
       buildingType: Uint8Array.from(this.buildingType),
       language: Uint8Array.from(this.language),
       seed: Uint32Array.from(this.seed),

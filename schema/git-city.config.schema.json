@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/ken-guru/git-city/main/schema/git-city.config.schema.json",
+  "title": "git-city config",
+  "description": "git-city.config.jsonc (shared, at the repo root) and .git/git-city/config.jsonc (personal, whose rules come last). JSONC: comments and trailing commas are allowed.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "rules": {
+      "type": "array",
+      "description": "One ordered list. The last matching rule of each kind wins.",
+      "items": { "$ref": "#/$defs/rule" }
+    },
+    "naming": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "seed": { "type": "string", "description": "Overrides the seed for Generated names." }
+      }
+    },
+    "contributors": { "enum": ["off", "anonymous", "generated", "real"] },
+    "commitMessages": { "type": "boolean" },
+    "exactTimes": { "type": "boolean" },
+    "theme": { "type": "string" },
+    "externals": { "type": "object" },
+    "exclude": { "type": "array", "items": { "type": "string" } },
+    "scale": { "type": "object" },
+    "tuning": { "type": "object" }
+  },
+  "$defs": {
+    "rule": {
+      "type": "object",
+      "required": ["action"],
+      "oneOf": [
+        {
+          "description": "Replace the name with a Pseudonym.",
+          "required": ["action", "as"],
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "module": { "type": "string", "minLength": 1 },
+            "concept": { "type": "string", "minLength": 1 },
+            "contributor": { "type": "string", "minLength": 1 },
+            "external": { "type": "string", "minLength": 1 },
+            "action": { "const": "pseudonym" },
+            "as": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Show the Real name (never with --private).",
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "module": { "type": "string", "minLength": 1 },
+            "concept": { "type": "string", "minLength": 1 },
+            "contributor": { "type": "string", "minLength": 1 },
+            "external": { "type": "string", "minLength": 1 },
+            "action": { "const": "reveal" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "A deliberate near-miss: do not warn about this name.",
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "module": { "type": "string", "minLength": 1 },
+            "concept": { "type": "string", "minLength": 1 },
+            "contributor": { "type": "string", "minLength": 1 },
+            "external": { "type": "string", "minLength": 1 },
+            "action": { "const": "allow" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "description": "Set the Category of the matched items (used by Buildings).",
+          "required": ["action", "category"],
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "module": { "type": "string", "minLength": 1 },
+            "concept": { "type": "string", "minLength": 1 },
+            "contributor": { "type": "string", "minLength": 1 },
+            "external": { "type": "string", "minLength": 1 },
+            "action": { "const": "category" },
+            "category": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

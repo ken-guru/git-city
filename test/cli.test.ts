@@ -1,5 +1,5 @@
 import { execSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { FixtureRepo } from "./fixture.js";
 
 const CLI = new URL("../dist/cli/main.js", import.meta.url).pathname;
 let repo: FixtureRepo;
+const cleanupRepos: FixtureRepo[] = [];
 
 beforeAll(() => {
   // Exercise the CLI as shipped: compiled, with the pre-built page next to it.
@@ -18,7 +19,10 @@ beforeAll(() => {
   repo.commit("second");
 }, 120_000);
 
-afterAll(() => repo.remove());
+afterAll(() => {
+  repo.remove();
+  cleanupRepos.splice(0).forEach((r) => r.remove());
+});
 
 function run(...args: string[]) {
   return spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8" });
@@ -36,7 +40,25 @@ describe("the git-city binary", () => {
     expect(readdirSync(join(site, "assets"))).toEqual([expect.stringMatching(/^page\.\w+\.js$/)]);
     expect(readdirSync(join(site, "chunks"))).toEqual([expect.stringMatching(/^0000\.[0-9a-f]{16}\.bin$/)]);
     expect(decodeWorld(readFileSync(join(site, "world.bin"))).commitDays).toHaveLength(2);
-    expect(readFileSync(join(site, "strings.json"), "utf8").trim()).toBe("[]");
+    expect(JSON.parse(readFileSync(join(site, "strings.json"), "utf8"))).toEqual(["Markdown file 1", "TypeScript file 2"]);
+  });
+
+  it("audit lists every string, and a --strict near-miss exits with the privacy code 2", () => {
+    const site = join(repo.dir, "git-city-site");
+    const audited = run("audit", site);
+    expect(audited.status).toBe(0);
+    expect(audited.stdout).toBe("0\tMarkdown file 1\n1\tTypeScript file 2\n");
+
+    const near = new FixtureRepo().write("src/initec/a.ts").write("secret/platform.ts").commit("first");
+    cleanupRepos.push(near);
+    writeFileSync(
+      join(near.dir, "git-city.config.jsonc"),
+      `{ "rules": [{ "path": "src/**", "action": "reveal" }, { "concept": "Initech", "action": "pseudonym", "as": "Co" }] }`,
+    );
+    const failed = spawnSync(process.execPath, [CLI, "build", "-C", near.dir, "--strict"], { encoding: "utf8" });
+    expect(failed.status).toBe(2);
+    expect(failed.stderr).toContain("--strict fails the build");
+    expect(failed.stderr).not.toContain("Initech");
   });
 
   it("serves the built site on localhost", async () => {

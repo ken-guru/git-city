@@ -108,7 +108,7 @@ describe("git-city build", () => {
   it("writes strings.json and copies the page next to the data", async () => {
     const { outDir } = await buildSite(fixture().write("a.txt").commit("first"));
 
-    expect(JSON.parse(readFileSync(join(outDir, "strings.json"), "utf8"))).toEqual([]);
+    expect(JSON.parse(readFileSync(join(outDir, "strings.json"), "utf8"))).toEqual(["Other file 1"]);
     expect(readFileSync(join(outDir, "index.html"), "utf8")).toContain("stub page");
   });
 

@@ -3,15 +3,23 @@ import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { CHUNK_HASH_BYTES, chunkName, encodeChunk, encodeWorld } from "../shared/format.js";
+import { encodeStrings, type StringTable } from "./naming.js";
 import type { TimelineData } from "./timeline.js";
 
 export class OutputError extends Error {}
 
 /**
  * Writes the site into a staging folder next to `outDir`, then swaps it in,
- * so a failed run never leaves a half-written site behind.
+ * so a failed run never leaves a half-written site behind. `check` runs on the
+ * staged folder before the swap; if it throws, nothing is swapped in.
  */
-export async function writeSite(outDir: string, pageDir: string, timeline: TimelineData): Promise<void> {
+export async function writeSite(
+  outDir: string,
+  pageDir: string,
+  timeline: TimelineData,
+  names: StringTable,
+  check: (stagingDir: string) => Promise<void>,
+): Promise<void> {
   await assertReplaceable(outDir);
   const staging = `${outDir}.staging`;
   await rm(staging, { recursive: true, force: true });
@@ -40,7 +48,14 @@ export async function writeSite(outDir: string, pageDir: string, timeline: Timel
       chunks: [{ firstCommit: 0, hash }],
     }),
   );
-  await writeFile(join(staging, "strings.json"), "[]\n");
+  await writeFile(join(staging, "strings.json"), encodeStrings(names));
+
+  try {
+    await check(staging);
+  } catch (e) {
+    await rm(staging, { recursive: true, force: true });
+    throw e;
+  }
 
   const old = `${outDir}.old`;
   await rm(old, { recursive: true, force: true });

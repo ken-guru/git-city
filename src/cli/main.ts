@@ -2,30 +2,43 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { auditSite, AuditError } from "./audit.js";
 import { build } from "./build.js";
+import { ConfigError } from "./config.js";
 import { HistoryError } from "./history.js";
+import { PrivacyError } from "./privacy.js";
 import { DEFAULT_PORT, DEFAULT_PORT_ATTEMPTS, serve, ServeError } from "./serve.js";
 import { OutputError } from "./write.js";
 
 const DEFAULT_OUT = "git-city-site";
 
+/** Exit code for a failed privacy check (see SPEC §10). */
+const EXIT_PRIVACY = 2;
+
 const HELP = `Usage: git-city [build] [options]
        git-city serve [dir] [--port <n>]
+       git-city audit [dir]
 
 Turns this repository's git history into an animated 3D City.
 
 Commands:
   build          build the site (the default)
   serve [dir]    serve a built site on localhost (default dir: ${DEFAULT_OUT})
+  audit [dir]    list every string in a built site (default dir: ${DEFAULT_OUT})
 
 Options:
   -C <path>        run as if started in <path>
   --branch <name>  read this branch instead of the default branch
   --out <dir>      output folder (default: ${DEFAULT_OUT})
+  --config <path>  read this config file instead of the shared and personal configs
+  --strict         fail the build on near-miss names
+  --private        ignore every reveal in the config
   --port <n>       port for serve, used exactly (default: the first free port
                    from ${DEFAULT_PORT} to ${DEFAULT_PORT + DEFAULT_PORT_ATTEMPTS - 1})
   -h, --help       show this help
   -v, --version    show the version
+
+Exit codes: 0 success, 1 error, 2 privacy check failed, 3 another run holds the lock.
 `;
 
 function version(): string {
@@ -41,6 +54,9 @@ async function main(argv: string[]): Promise<number> {
       directory: { type: "string", short: "C" },
       branch: { type: "string" },
       out: { type: "string" },
+      config: { type: "string" },
+      strict: { type: "boolean" },
+      private: { type: "boolean" },
       port: { type: "string" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
@@ -59,12 +75,32 @@ async function main(argv: string[]): Promise<number> {
   const [command = "build", ...rest] = positionals;
 
   if (command === "build" && rest.length === 0) {
-    const summary = await build({ repoDir: cwd, outDir: resolve(cwd, values.out ?? DEFAULT_OUT), branch: values.branch });
+    const summary = await build({
+      repoDir: cwd,
+      outDir: resolve(cwd, values.out ?? DEFAULT_OUT),
+      branch: values.branch,
+      configPath: values.config === undefined ? undefined : resolve(cwd, values.config),
+      strict: values.strict,
+      private: values.private,
+    });
     for (const warning of summary.warnings) process.stderr.write(`git-city: warning: ${warning}\n`);
-    process.stdout.write(
-      `Built ${summary.commits} commits and ${summary.files} files from ${summary.branch} into ${summary.outDir}\n` +
-        `Run "git-city serve" to watch it.\n`,
-    );
+    const lines =[`Built ${summary.commits} commits and ${summary.files} files from ${summary.branch} into ${summary.outDir}`];
+    if (summary.revealed.length > 0) {
+      lines.push(`Revealed ${summary.revealed.length} name${summary.revealed.length === 1 ? "" : "s"}:`);
+      for (const r of summary.revealed) lines.push(`  ${r.text}`);
+    } else lines.push("Revealed 0 names.");
+    for (const miss of summary.nearMisses) {
+      lines.push(`Near-miss: "${miss.text}" is close to a hidden name or Concept (use --strict to fail on these)`);
+    }
+    if (summary.configSources.length > 0) lines.push(`Config: ${summary.configSources.join(", ")}`);
+    lines.push(`Run "git-city serve" to watch it.`);
+    process.stdout.write(`${lines.join("\n")}\n`);
+    return 0;
+  }
+
+  if (command === "audit" && rest.length <= 1) {
+    const lines = await auditSite(resolve(cwd, rest[0] ?? values.out ?? DEFAULT_OUT));
+    process.stdout.write(lines.length ? `${lines.join("\n")}\n` : "");
     return 0;
   }
 
@@ -90,9 +126,16 @@ main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (e: unknown) => {
     const usage = e instanceof UsageError || (e as { code?: string }).code?.startsWith("ERR_PARSE_ARGS") === true;
-    const expected = usage || e instanceof HistoryError || e instanceof OutputError || e instanceof ServeError;
+    const expected =
+      usage ||
+      e instanceof HistoryError ||
+      e instanceof OutputError ||
+      e instanceof ServeError ||
+      e instanceof ConfigError ||
+      e instanceof AuditError ||
+      e instanceof PrivacyError;
     process.stderr.write(`git-city: ${expected ? (e as Error).message : ((e as Error).stack ?? String(e))}\n`);
     if (usage) process.stderr.write(`Try "git-city --help".\n`);
-    process.exit(1);
+    process.exit(e instanceof PrivacyError ? EXIT_PRIVACY : 1);
   },
 );
