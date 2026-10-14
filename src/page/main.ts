@@ -246,10 +246,13 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
     blockLayer.update(t, duration, camera.position, detail.massFar);
     roadLayer.update(t, duration);
     const commit = Math.min(commitCount - 1, Math.max(0, Math.floor(t)));
-    const day = new Date(world.commitDays[commit]! * SECONDS_PER_DAY * 1000).toISOString().slice(0, 10);
+    // Exact times are opt-in (SPEC §8): with them the label shows the time of day, in UTC, else the day.
+    const when = world.commitSeconds
+      ? `${new Date(world.commitSeconds[commit]! * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC`
+      : new Date(world.commitDays[commit]! * SECONDS_PER_DAY * 1000).toISOString().slice(0, 10);
     status.textContent = Math.floor(t) > stream.loadedThrough()
       ? "Loading this part of history…"
-      : `Commit ${commit + 1} of ${commitCount} · ${day}`;
+      : `Commit ${commit + 1} of ${commitCount} · ${when}`;
   }
 
   renderer.setAnimationLoop((now) => {

@@ -39,6 +39,8 @@ export interface Config {
   /** Path globs of files left out of the City, from every config file. */
   exclude: string[];
   scale: { timeline?: TimelineSetting };
+  /** Whether the output keeps each Step's time of day (SPEC §8). Off by default: dates are to the day. */
+  exactTimes?: boolean;
   /** The `externals` section (SPEC §4): the External City threshold and grouping overrides. */
   externals?: ExternalsSetting;
   /** The files the config was read from, in merge order. */
@@ -80,6 +82,7 @@ export function parseConfig(text: string, source: string): Config {
   const theme = root.theme as string | undefined;
   const exclude = root.exclude === undefined ? [] : (root.exclude as string[]);
   const scale = root.scale === undefined ? {} : parseScale(root.scale, source);
+  const exactTimes = root.exactTimes === undefined ? {} : { exactTimes: root.exactTimes === true };
   const externals = root.externals === undefined ? undefined : parseExternals(root.externals, source);
   return {
     rules,
@@ -87,6 +90,7 @@ export function parseConfig(text: string, source: string): Config {
     exclude,
     scale,
     sources: [source],
+    ...exactTimes,
     ...(theme === undefined ? {} : { theme }),
     ...(externals === undefined ? {} : { externals }),
   };
@@ -136,7 +140,7 @@ function parseScale(value: unknown, source: string): { timeline?: TimelineSettin
  * so a later file's rules win (the personal config comes last).
  */
 export function loadConfig(paths: readonly string[]): Config {
-  const merged: Config = { rules: [], naming: {}, exclude: [], scale: {}, sources: [] };
+  const merged: Config = { rules: [], naming: {}, exclude: [], scale: {}, exactTimes: false, sources: [] };
   for (const path of paths) {
     let text: string;
     try {
@@ -150,6 +154,8 @@ export function loadConfig(paths: readonly string[]): Config {
     if (config.theme !== undefined) merged.theme = config.theme;
     merged.exclude.push(...config.exclude);
     merged.scale = { ...merged.scale, ...config.scale };
+    // The last file that sets it wins, as for the other settings (the personal config comes last).
+    if (config.exactTimes !== undefined) merged.exactTimes = config.exactTimes;
     if (config.externals !== undefined) {
       const groups = { ...merged.externals?.groups, ...config.externals.groups };
       merged.externals = {

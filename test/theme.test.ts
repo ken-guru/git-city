@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { loadTheme, ThemeError, validateTheme } from "../src/cli/theme.js";
+import { DEFAULT_PALETTE, loadTheme, ThemeError, validateTheme } from "../src/cli/theme.js";
 
 function valid(): Record<string, unknown> {
   const roles = ["tests", "docs", "api", "ui", "auth", "data", "cli", "infra", "utils", "core", "config", "build", "fallback"];
@@ -47,6 +47,18 @@ describe("validateTheme", () => {
     const pack = valid();
     delete (pack.roleNouns as Record<string, unknown>).fallback;
     expect(() => validateTheme(pack)).toThrow(/fallback/);
+  });
+
+  it("gives a Theme with no palette the built-in palette", () => {
+    const pack = valid();
+    delete pack.palette;
+    const theme = validateTheme(pack);
+    expect(theme.palette).toEqual(DEFAULT_PALETTE);
+    expect(theme.palette.fallback.hue).toBe(40);
+  });
+
+  it("keeps the built-in palette equal to the modern Theme's, the default", () => {
+    expect(DEFAULT_PALETTE).toEqual(loadTheme("modern").palette);
   });
 
   it("rejects a Role with no palette hue", () => {

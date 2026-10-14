@@ -150,7 +150,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     const plan = planSteps(rawTimeline.commitDays, level, recentFromFor(commits));
     const timeline = groupTimeline(rawTimeline, plan);
     const plans = planChunks(timeline);
-    const worldBytes = encodeSiteWorld(timeline, plans, worldFor(plan.stepOf));
+    const worldBytes = encodeSiteWorld(timeline, plans, worldFor(plan.stepOf), config.exactTimes === true);
     return sizeReport(worldBytes, plans);
   };
   const choice = chooseStepLevel(config.scale.timeline ?? "auto", commits, sizeAt);
@@ -192,6 +192,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     worldFor(plan.stepOf),
     names.table,
     places,
+    config.exactTimes === true,
     (staging) => scanOutput(staging, hidden),
     `${JSON.stringify(cities.file)}\n`,
   );

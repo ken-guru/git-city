@@ -17,6 +17,8 @@ export interface FileWrite {
 export interface CommitRecord {
   /** Days since 1970-01-01 UTC, from the committer date. */
   day: number;
+  /** Whole seconds since 1970-01-01 UTC, from the committer date: the time of day, shown only with `exactTimes`. */
+  seconds: number;
   /** Paths that appear in this commit. A rename appears here under its new path. */
   added: string[];
   /** Paths that disappear in this commit. A rename disappears here under its old path. */
@@ -49,6 +51,7 @@ interface RawWrite {
 interface RawCommit {
   hash: string;
   day: number;
+  seconds: number;
   added: string[];
   deleted: string[];
   modified: string[];
@@ -176,6 +179,7 @@ async function completeBatch(
     hash: commit.hash,
     commit: {
       day: commit.day,
+      seconds: commit.seconds,
       added: commit.added,
       deleted: commit.deleted,
       modified: commit.modified,
@@ -240,7 +244,17 @@ class RawLogParser {
       if (!/^[0-9a-f]+$/.test(hash) || !Number.isFinite(seconds)) {
         throw new HistoryError(`unexpected commit header from git log: ${JSON.stringify(token)}`);
       }
-      this.commit = { hash, day: Math.floor(seconds / SECONDS_PER_DAY), added: [], deleted: [], modified: [], renamed: [], writes: [] };
+      this.commit = {
+        hash,
+        day: Math.floor(seconds / SECONDS_PER_DAY),
+        // Dates before 1970 are clamped: the output stores unsigned seconds.
+        seconds: Math.max(0, Math.floor(seconds)),
+        added: [],
+        deleted: [],
+        modified: [],
+        renamed: [],
+        writes: [],
+      };
       return;
     }
     const header = token.replace(/^\n/, "");

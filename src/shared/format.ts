@@ -4,7 +4,7 @@
  * All integers are little-endian; arrays are stored column by column.
  */
 
-export const FORMAT_VERSION = 8;
+export const FORMAT_VERSION = 9;
 
 const WORLD_MAGIC = 0x57435447; // "GTCW"
 const CHUNK_MAGIC = 0x43435447; // "GTCC"
@@ -86,6 +86,11 @@ export interface World {
   formatVersion: number;
   /** Day of each Step (days since 1970-01-01 UTC), in sequence order: the day of its first commit. */
   commitDays: Int32Array;
+  /**
+   * Per Step: the time of its first commit, in whole seconds since 1970 UTC. Present only with `exactTimes` (SPEC §8);
+   * the page shows it in place of the day.
+   */
+  commitSeconds?: Uint32Array;
   /** Per Step: how many commits it holds (1 for a single commit). Steps are described in SPEC §9. */
   stepCommits: Uint32Array;
   /** Number of files ever standing; file ids run from 0 to fileCount - 1. */
@@ -196,7 +201,7 @@ export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { c
     20 + world.commitDays.length * 8 + n * FILE_ATTRIBUTE_BYTES + world.chunks.length * (4 + CHUNK_HASH_BYTES) +
     4 + n + 4 + villages.x.length * VILLAGE_BYTES + 4 + blocks.x.length * BLOCK_BYTES +
     4 + lots.file.length * LOT_BYTES + 4 + roads.a.length * ROAD_BYTES + 4 + world.stints.file.length * STINT_BYTES +
-    4 + world.districts.index.length * DISTRICT_BYTES;
+    4 + world.districts.index.length * DISTRICT_BYTES + 4 + (world.commitSeconds ? world.commitDays.length * 4 : 0);
   const w = new Writer(size);
   w.u32(WORLD_MAGIC);
   w.u32(FORMAT_VERSION);
@@ -259,6 +264,12 @@ export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { c
     w.u32(districts.index[i]!);
     w.bytes(districts.street.subarray(i, i + 1));
   }
+  // Last, so the sections above keep their place: a flag, then the Steps' times when exact times are on.
+  if (world.commitSeconds && world.commitSeconds.length !== world.commitDays.length) {
+    throw new Error("commitSeconds differs in length from commitDays");
+  }
+  w.u32(world.commitSeconds ? 1 : 0);
+  if (world.commitSeconds) for (const seconds of world.commitSeconds) w.u32(seconds);
   return w.done();
 }
 
@@ -342,10 +353,14 @@ export function decodeWorld(bytes: Uint8Array): World {
     districts.index[i] = r.u32();
     districts.street[i] = r.bytes(1)[0]!;
   }
+  const exact = r.u32() === 1;
+  const commitSeconds = exact ? new Uint32Array(commitCount) : undefined;
+  if (commitSeconds) for (let i = 0; i < commitCount; i++) commitSeconds[i] = r.u32();
 
   return {
     formatVersion: r.formatVersion,
     commitDays,
+    ...(commitSeconds ? { commitSeconds } : {}),
     stepCommits,
     fileCount,
     buildingType,

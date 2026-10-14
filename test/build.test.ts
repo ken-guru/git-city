@@ -36,7 +36,7 @@ function addCommits(repo: FixtureRepo, from: number, count: number): void {
   execFileSync("git", ["-C", repo.dir, "fast-import", "--quiet"], { input: `${stream.join("\n")}\n` });
 }
 
-async function buildSite(repo: FixtureRepo, options: { branch?: string } = {}) {
+async function buildSite(repo: FixtureRepo, options: { branch?: string; configPath?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), "git-city-out-"));
   cleanups.push(() => rmSync(root, { recursive: true, force: true }));
   const pageDir = join(root, "page");
@@ -58,6 +58,23 @@ function eventsOf(chunk: Chunk): [number, string][] {
 }
 
 describe("git-city build", () => {
+  it("keeps each Step's time of day only with exactTimes, and dates to the day otherwise", async () => {
+    // The fixture clock starts at 2024-01-01 00:00 UTC; the second commit comes twelve hours later.
+    const repo = fixture().write("a.txt").commit("first", 0).write("b.txt").commit("second", 0.5);
+    const configDir = mkdtempSync(join(tmpdir(), "git-city-config-"));
+    cleanups.push(() => rmSync(configDir, { recursive: true, force: true }));
+    const configPath = join(configDir, "config.jsonc");
+    writeFileSync(configPath, `{ "exactTimes": true }`);
+    const midnight = Date.UTC(2024, 0, 1) / 1000;
+
+    const plain = await buildSite(repo);
+    expect(plain.world.commitSeconds).toBeUndefined();
+
+    const timed = await buildSite(repo, { configPath });
+    expect([...timed.world.commitSeconds!]).toEqual([midnight, midnight + 43_200]);
+    expect([...timed.world.commitDays]).toEqual([dayOf(2024, 1, 1), dayOf(2024, 1, 1)]);
+  });
+
   it("records a single commit's added files and its day", async () => {
     const repo = fixture().write("a.txt").write("src/b.ts").commit("first", 0);
 

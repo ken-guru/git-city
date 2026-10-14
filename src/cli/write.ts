@@ -21,6 +21,7 @@ export async function writeSite(
   layout: WorldLayout,
   names: StringTable,
   places: PlaceTable,
+  exactTimes: boolean,
   check: (stagingDir: string) => Promise<void>,
   externals?: string,
 ): Promise<SizeReport> {
@@ -32,7 +33,7 @@ export async function writeSite(
 
   const plans = planChunks(timeline);
   await writeChunks(join(staging, "chunks"), plans, outDir);
-  const world = encodeSiteWorld(timeline, plans, layout);
+  const world = encodeSiteWorld(timeline, plans, layout, exactTimes);
   await writeFile(join(staging, "world.bin"), world);
   await writeFile(join(staging, "strings.json"), encodeStrings(names));
   await writeFile(join(staging, "places.json"), encodePlaces(places));
@@ -55,9 +56,15 @@ export async function writeSite(
 }
 
 /** The world file for a Timeline (already grouped into Steps) with its chunk plans and layout. */
-export function encodeSiteWorld(timeline: TimelineData, plans: readonly PlannedChunk[], layout: WorldLayout): Uint8Array {
+export function encodeSiteWorld(
+  timeline: TimelineData,
+  plans: readonly PlannedChunk[],
+  layout: WorldLayout,
+  exactTimes: boolean,
+): Uint8Array {
   return encodeWorld({
     commitDays: timeline.commitDays,
+    commitSeconds: exactTimes ? timeline.commitSeconds : undefined,
     stepCommits: timeline.stepCommits,
     fileCount: timeline.fileCount,
     buildingType: timeline.buildingType,
