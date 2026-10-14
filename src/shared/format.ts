@@ -4,16 +4,23 @@
  * All integers are little-endian; arrays are stored column by column.
  */
 
-export const FORMAT_VERSION = 1;
+export const FORMAT_VERSION = 2;
 
 const WORLD_MAGIC = 0x57435447; // "GTCW"
 const CHUNK_MAGIC = 0x43435447; // "GTCC"
 export const CHUNK_HASH_BYTES = 8;
 export const SECONDS_PER_DAY = 86_400;
 
+/**
+ * Event kinds. A value column carries one number per event:
+ * ADD: the Floors the Building starts with; FLOORS: the new Floors; the others ignore it.
+ */
 export const EVENT_ADD = 1;
 export const EVENT_DELETE = 2;
-export type EventKind = typeof EVENT_ADD | typeof EVENT_DELETE;
+export const EVENT_FLOORS = 3;
+export const EVENT_SCAFFOLD_ON = 4;
+export const EVENT_SCAFFOLD_OFF = 5;
+export type EventKind = typeof EVENT_ADD | typeof EVENT_DELETE | typeof EVENT_FLOORS | typeof EVENT_SCAFFOLD_ON | typeof EVENT_SCAFFOLD_OFF;
 
 export interface ChunkRef {
   /** Sequence number of the chunk's first commit. */
@@ -29,6 +36,12 @@ export interface World {
   commitDays: Int32Array;
   /** Number of files ever standing; file ids run from 0 to fileCount - 1. */
   fileCount: number;
+  /** Per file: its Building type (index into BUILDING_TYPES). */
+  buildingType: Uint8Array;
+  /** Per file: its language index (index into LANGUAGES). */
+  language: Uint8Array;
+  /** Per file: its seed. */
+  seed: Uint32Array;
   chunks: ChunkRef[];
 }
 
@@ -44,6 +57,8 @@ export interface Chunk {
   eventCommit: Uint32Array;
   eventFile: Uint32Array;
   eventKind: Uint8Array;
+  /** One value per event; see the event kinds. */
+  eventValue: Uint8Array;
 }
 
 export class FormatVersionError extends Error {
@@ -57,14 +72,23 @@ export function chunkName(index: number, hash: Uint8Array): string {
   return `${String(index).padStart(4, "0")}.${hex}.bin`;
 }
 
+const FILE_ATTRIBUTE_BYTES = 1 + 1 + 4;
+
 export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { chunks: { firstCommit: number; hash: Uint8Array }[] }): Uint8Array {
-  const w = new Writer(20 + world.commitDays.length * 4 + world.chunks.length * (4 + CHUNK_HASH_BYTES));
+  const n = world.fileCount;
+  if (world.buildingType.length !== n || world.language.length !== n || world.seed.length !== n) {
+    throw new Error("per-file columns differ in length from fileCount");
+  }
+  const w = new Writer(20 + world.commitDays.length * 4 + n * FILE_ATTRIBUTE_BYTES + world.chunks.length * (4 + CHUNK_HASH_BYTES));
   w.u32(WORLD_MAGIC);
   w.u32(FORMAT_VERSION);
   w.u32(world.commitDays.length);
   w.u32(world.fileCount);
   w.u32(world.chunks.length);
   for (const day of world.commitDays) w.i32(day);
+  w.bytes(world.buildingType);
+  w.bytes(world.language);
+  for (const seed of world.seed) w.u32(seed);
   for (const chunk of world.chunks) {
     if (chunk.hash.length !== CHUNK_HASH_BYTES) throw new Error(`chunk hash must be ${CHUNK_HASH_BYTES} bytes`);
     w.u32(chunk.firstCommit);
@@ -80,18 +104,23 @@ export function decodeWorld(bytes: Uint8Array): World {
   const chunkCount = r.u32();
   const commitDays = new Int32Array(commitCount);
   for (let i = 0; i < commitCount; i++) commitDays[i] = r.i32();
+  const buildingType = r.bytes(fileCount);
+  const language = r.bytes(fileCount);
+  const seed = r.u32s(fileCount);
   const chunks: ChunkRef[] = [];
   for (let i = 0; i < chunkCount; i++) {
     const firstCommit = r.u32();
     chunks.push({ firstCommit, name: chunkName(i, r.bytes(CHUNK_HASH_BYTES)) });
   }
-  return { formatVersion: r.formatVersion, commitDays, fileCount, chunks };
+  return { formatVersion: r.formatVersion, commitDays, fileCount, buildingType, language, seed: Uint32Array.from(seed), chunks };
 }
 
 export function encodeChunk(chunk: Omit<Chunk, "formatVersion">): Uint8Array {
   const n = chunk.eventCommit.length;
-  if (chunk.eventFile.length !== n || chunk.eventKind.length !== n) throw new Error("event columns differ in length");
-  const w = new Writer(20 + chunk.snapshot.length * 4 + n * 9);
+  if (chunk.eventFile.length !== n || chunk.eventKind.length !== n || chunk.eventValue.length !== n) {
+    throw new Error("event columns differ in length");
+  }
+  const w = new Writer(20 + chunk.snapshot.length * 4 + n * 10);
   w.u32(CHUNK_MAGIC);
   w.u32(FORMAT_VERSION);
   w.u32(chunk.firstCommit);
@@ -101,6 +130,7 @@ export function encodeChunk(chunk: Omit<Chunk, "formatVersion">): Uint8Array {
   for (const c of chunk.eventCommit) w.u32(c);
   for (const f of chunk.eventFile) w.u32(f);
   w.bytes(chunk.eventKind);
+  w.bytes(chunk.eventValue);
   return w.done();
 }
 
@@ -113,7 +143,8 @@ export function decodeChunk(bytes: Uint8Array): Chunk {
   const eventCommit = r.u32s(n);
   const eventFile = r.u32s(n);
   const eventKind = r.bytes(n);
-  return { formatVersion: r.formatVersion, firstCommit, snapshot, eventCommit, eventFile, eventKind };
+  const eventValue = r.bytes(n);
+  return { formatVersion: r.formatVersion, firstCommit, snapshot, eventCommit, eventFile, eventKind, eventValue };
 }
 
 class Writer {
