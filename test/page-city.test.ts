@@ -41,7 +41,7 @@ function syntheticCity(fileCount: number): CityData {
 }
 
 describe("CityBuildings headless smoke test with 20k Buildings", () => {
-  it("builds one instanced mesh per Building type and updates at every level of detail", () => {
+  it("builds one instanced mesh per Building type and runs updates at every level of detail without error", () => {
     const fileCount = 20_000;
     const data = syntheticCity(fileCount);
     const scene = new Scene();
