@@ -154,6 +154,15 @@ describe("the registry", () => {
   });
 });
 
+describe("config overrides", () => {
+  it("moves a dependency into the group the config names, in place of the grouping rules", () => {
+    const declared = [decl("npm", "@babel/core"), decl("npm", "@babel/cli"), decl("npm", "left-pad")];
+    const plan = planExternals(declared, { threshold: 3, groups: { "left-pad": "babel" } });
+    expect(plan.cities).toEqual([expect.objectContaining({ key: "babel", members: ["@babel/cli", "@babel/core", "left-pad"] })]);
+    expect(plan.outskirts).toEqual([]);
+  });
+});
+
 describe("@types folding", () => {
   it("counts @types/x and x as one member, shown under the name that is not @types", () => {
     const declared = [decl("npm", "@types/react"), decl("npm", "react"), decl("npm", "react-dom"), decl("npm", "react-router")];

@@ -44,7 +44,7 @@ export async function readPipeline(
   let missingBlobs = 0;
   let start = 0;
   let resumedFrom: string | undefined;
-  const scope = scopeOf(options.exclude);
+  const scope = scopeOf(options.exclude, options.externals);
   const checkpoints = await cache.checkpoints(branch);
   for (let i = checkpoints.length - 1; i >= 0; i--) {
     const checkpoint = checkpoints[i]!;

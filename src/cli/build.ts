@@ -98,10 +98,10 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   let read: PipelineRead;
   try {
     const previous = (await cache.checkpoints(branch)).at(-1);
-    if (previous !== undefined && scopeOfCheckpoint(previous) !== scopeOf(config.exclude)) {
+    if (previous !== undefined && scopeOfCheckpoint(previous) !== scopeOf(config.exclude, config.externals)) {
       warnings.push("the exclude rules changed since the last build, so the City is rebuilt in full and its layout changes");
     }
-    read = await readPipeline(options.repoDir, head, branch, cache, pipelineOptions(options.repoDir, seed, theme, config.exclude));
+    read = await readPipeline(options.repoDir, head, branch, cache, pipelineOptions(options.repoDir, seed, theme, config.exclude, config.externals));
     await cache.checkpoint(
       branch,
       head,
@@ -120,7 +120,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     warnings.push(`${read.missingBlobs} file versions could not be read and were counted as empty (missing objects; is this a partial clone?)`);
   }
   const { pipeline } = read;
-  const externals = externalsReport(pipeline.externals, pipeline.graph);
+  const externals = externalsReport(pipeline.externals, pipeline.graph, config.externals);
   const rawTimeline = pipeline.timeline.result();
   const commits = rawTimeline.commitDays.length;
   options.onPhase?.("Naming");
@@ -200,10 +200,11 @@ export function claimsAtSteps(layout: LayoutResult, stepOf: Uint32Array): Layout
 }
 
 /** The pipeline's options for one run: the City seed, blob text for config files, the exclude globs, and the Category and Theme hues. */
-function pipelineOptions(repoDir: string, seed: number, theme: Theme, exclude: string[]): PipelineOptions {
+function pipelineOptions(repoDir: string, seed: number, theme: Theme, exclude: string[], externals?: PlanOptions): PipelineOptions {
   return {
     seed,
     exclude,
+    ...(externals === undefined ? {} : { externals }),
     readText: readBlobText(repoDir),
     categoryOf: (path) => categoryOf(path),
     hueOf: (role) => hueFor(theme, role),

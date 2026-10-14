@@ -39,6 +39,8 @@ export interface Config {
   /** Path globs of files left out of the City, from every config file. */
   exclude: string[];
   scale: { timeline?: TimelineSetting };
+  /** The `externals` section (SPEC §4): the External City threshold and grouping overrides. */
+  externals?: ExternalsSetting;
   /** The files the config was read from, in merge order. */
   sources: string[];
 }
@@ -78,7 +80,43 @@ export function parseConfig(text: string, source: string): Config {
   const theme = root.theme as string | undefined;
   const exclude = root.exclude === undefined ? [] : (root.exclude as string[]);
   const scale = root.scale === undefined ? {} : parseScale(root.scale, source);
-  return { rules, naming, exclude, scale, sources: [source], ...(theme === undefined ? {} : { theme }) };
+  const externals = root.externals === undefined ? undefined : parseExternals(root.externals, source);
+  return {
+    rules,
+    naming,
+    exclude,
+    scale,
+    sources: [source],
+    ...(theme === undefined ? {} : { theme }),
+    ...(externals === undefined ? {} : { externals }),
+  };
+}
+
+/** The `externals` section: `threshold` (3 to 5) and `groups`, a map from a dependency's name to the group it joins. */
+export interface ExternalsSetting {
+  threshold?: number;
+  groups?: Record<string, string>;
+}
+
+function parseExternals(value: unknown, source: string): ExternalsSetting {
+  if (!isObject(value)) throw new ConfigError(`${source}: "externals" must be an object`);
+  for (const key of Object.keys(value)) {
+    if (key !== "threshold" && key !== "groups") throw new ConfigError(`${source}: unknown key "externals.${key}"`);
+  }
+  const setting: ExternalsSetting = {};
+  if (value.threshold !== undefined) {
+    if (typeof value.threshold !== "number" || !Number.isInteger(value.threshold) || value.threshold < 3 || value.threshold > 5) {
+      throw new ConfigError(`${source}: "externals.threshold" must be a whole number from 3 to 5`);
+    }
+    setting.threshold = value.threshold;
+  }
+  if (value.groups !== undefined) {
+    if (!isObject(value.groups) || !Object.values(value.groups).every((g) => typeof g === "string" && g.trim() !== "")) {
+      throw new ConfigError(`${source}: "externals.groups" must map dependency names to group names`);
+    }
+    setting.groups = value.groups as Record<string, string>;
+  }
+  return setting;
 }
 
 function parseScale(value: unknown, source: string): { timeline?: TimelineSetting } {
@@ -112,6 +150,14 @@ export function loadConfig(paths: readonly string[]): Config {
     if (config.theme !== undefined) merged.theme = config.theme;
     merged.exclude.push(...config.exclude);
     merged.scale = { ...merged.scale, ...config.scale };
+    if (config.externals !== undefined) {
+      const groups = { ...merged.externals?.groups, ...config.externals.groups };
+      merged.externals = {
+        ...merged.externals,
+        ...config.externals,
+        ...(Object.keys(groups).length > 0 ? { groups } : {}),
+      };
+    }
     merged.sources.push(path);
   }
   return merged;
@@ -181,7 +227,7 @@ function checkSections(root: Record<string, unknown>, source: string): void {
   if (exclude !== undefined && !(Array.isArray(exclude) && exclude.every((item) => typeof item === "string"))) {
     throw new ConfigError(`${source}: "exclude" must be a list of strings`);
   }
-  for (const key of ["externals", "tuning"] as const) {
+  for (const key of ["tuning"] as const) {
     if (root[key] !== undefined && !isObject(root[key])) throw new ConfigError(`${source}: "${key}" must be an object`);
   }
 }
