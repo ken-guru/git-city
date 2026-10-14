@@ -1,4 +1,7 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
+
+/** git's default for diff.renameLimit, pinned so a user's config cannot change which moves are renames. */
+export const RENAME_LIMIT = 1000;
 
 /**
  * Settings that pin git's output format regardless of the user's config.
@@ -9,6 +12,7 @@ const PINNED_CONFIG = [
   "-c", "log.showSignature=false",
   "-c", "color.ui=never",
   "-c", "core.quotePath=false",
+  "-c", `diff.renameLimit=${RENAME_LIMIT}`,
 ];
 
 const GIT_ENV = { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" };
@@ -19,22 +23,32 @@ export class GitError extends Error {
   }
 }
 
+/** Starts git in `repoDir` with the pinned format and environment; the caller owns stdio. */
+export function spawnGit(repoDir: string, args: readonly string[], stdio: ["pipe" | "ignore", "pipe", "pipe"]): ChildProcess {
+  return spawn("git", ["-C", repoDir, ...PINNED_CONFIG, ...args], { env: GIT_ENV, stdio });
+}
+
+/** Waits for a spawned git to finish, throwing a GitError on a non-zero exit. */
+export function finishGit(child: ChildProcess, args: readonly string[], stderr: () => string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code) => (code === 0 ? resolve() : reject(new GitError(args, code, stderr()))));
+  });
+}
+
 /** Runs git in `repoDir` and yields its stdout as it arrives. */
 export async function* gitStream(repoDir: string, args: readonly string[]): AsyncGenerator<Buffer> {
-  const child = spawn("git", ["-C", repoDir, ...PINNED_CONFIG, ...args], { env: GIT_ENV, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawnGit(repoDir, args, ["ignore", "pipe", "pipe"]);
   let stderr = "";
-  child.stderr.setEncoding("utf8").on("data", (d: string) => (stderr += d));
-  const exited = new Promise<number | null>((resolve, reject) => {
-    child.on("error", reject);
-    child.on("close", resolve);
-  });
+  child.stderr!.setEncoding("utf8").on("data", (d: string) => (stderr += d));
+  const finished = finishGit(child, args, () => stderr);
+  finished.catch(() => {});
   try {
-    for await (const chunk of child.stdout) yield chunk as Buffer;
+    for await (const chunk of child.stdout!) yield chunk as Buffer;
   } finally {
     if (child.exitCode === null) child.kill();
   }
-  const code = await exited;
-  if (code !== 0) throw new GitError(args, code, stderr);
+  await finished;
 }
 
 /** Runs git in `repoDir` and returns its trimmed stdout. */
