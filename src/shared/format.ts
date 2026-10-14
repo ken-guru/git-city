@@ -4,7 +4,7 @@
  * All integers are little-endian; arrays are stored column by column.
  */
 
-export const FORMAT_VERSION = 2;
+export const FORMAT_VERSION = 3;
 
 const WORLD_MAGIC = 0x57435447; // "GTCW"
 const CHUNK_MAGIC = 0x43435447; // "GTCC"
@@ -60,15 +60,27 @@ export interface World {
   chunks: ChunkRef[];
 }
 
+/**
+ * The state of every standing file as the chunk's first commit begins, before its own events. Columns run
+ * in step: entry i describes file `file[i]`. Replaying the events from here reaches any commit in the chunk.
+ */
+export interface ChunkSnapshot {
+  file: Uint32Array;
+  /** Floors on screen once the commit before has settled. */
+  floors: Uint8Array;
+  /** 1 when the scaffolding is up, else 0. */
+  scaffolded: Uint8Array;
+  /** Building type index (see BUILDING_TYPES) right now. */
+  buildingType: Uint8Array;
+  /** Language index (see LANGUAGES) right now. */
+  language: Uint8Array;
+}
+
 /** A snapshot at the chunk's first commit plus the events inside the chunk. */
 export interface Chunk {
   formatVersion: number;
   firstCommit: number;
-  /**
-   * The snapshot at the chunk's first commit: files standing as that commit begins, before its own events.
-   * Replaying the events from there reaches any commit in the chunk.
-   */
-  snapshot: Uint32Array;
+  snapshot: ChunkSnapshot;
   eventCommit: Uint32Array;
   eventFile: Uint32Array;
   eventKind: Uint8Array;
@@ -135,13 +147,22 @@ export function encodeChunk(chunk: Omit<Chunk, "formatVersion">): Uint8Array {
   if (chunk.eventFile.length !== n || chunk.eventKind.length !== n || chunk.eventValue.length !== n) {
     throw new Error("event columns differ in length");
   }
-  const w = new Writer(20 + chunk.snapshot.length * 4 + n * 10);
+  const s = chunk.snapshot;
+  const m = s.file.length;
+  if (s.floors.length !== m || s.scaffolded.length !== m || s.buildingType.length !== m || s.language.length !== m) {
+    throw new Error("snapshot columns differ in length");
+  }
+  const w = new Writer(20 + m * (4 + 4) + n * 10);
   w.u32(CHUNK_MAGIC);
   w.u32(FORMAT_VERSION);
   w.u32(chunk.firstCommit);
-  w.u32(chunk.snapshot.length);
+  w.u32(m);
   w.u32(n);
-  for (const id of chunk.snapshot) w.u32(id);
+  for (const id of s.file) w.u32(id);
+  w.bytes(s.floors);
+  w.bytes(s.scaffolded);
+  w.bytes(s.buildingType);
+  w.bytes(s.language);
   for (const c of chunk.eventCommit) w.u32(c);
   for (const f of chunk.eventFile) w.u32(f);
   w.bytes(chunk.eventKind);
@@ -154,7 +175,13 @@ export function decodeChunk(bytes: Uint8Array): Chunk {
   const firstCommit = r.u32();
   const snapshotCount = r.u32();
   const n = r.u32();
-  const snapshot = r.u32s(snapshotCount);
+  const snapshot: ChunkSnapshot = {
+    file: r.u32s(snapshotCount),
+    floors: r.bytes(snapshotCount),
+    scaffolded: r.bytes(snapshotCount),
+    buildingType: r.bytes(snapshotCount),
+    language: r.bytes(snapshotCount),
+  };
   const eventCommit = r.u32s(n);
   const eventFile = r.u32s(n);
   const eventKind = r.bytes(n);

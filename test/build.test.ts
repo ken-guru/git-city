@@ -104,6 +104,22 @@ describe("git-city build", () => {
     await expect(buildSite(repo, { branch: "nope" })).rejects.toThrow("no such branch: nope");
   });
 
+  it("reports the world file and first chunk's sizes against the budget", async () => {
+    const repo = fixture().write("a.txt").commit("first");
+    const root = mkdtempSync(join(tmpdir(), "git-city-out-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const pageDir = join(root, "page");
+    mkdirSync(pageDir);
+    writeFileSync(join(pageDir, "index.html"), "<!doctype html>stub page");
+
+    const summary = await build({ repoDir: repo.dir, outDir: join(root, "site"), pageDir });
+
+    expect(summary.sizes.chunks).toBe(1);
+    expect(summary.sizes.firstPlayBytes).toBeGreaterThan(0);
+    expect(summary.sizes.firstPlayBytes).toBeLessThan(1024 * 1024);
+    expect(summary.sizes.totalBytes).toBeGreaterThanOrEqual(summary.sizes.firstPlayBytes);
+  });
+
   it("writes strings.json and copies the page next to the data", async () => {
     const { outDir } = await buildSite(fixture().write("a.txt").commit("first"));
 

@@ -14,6 +14,7 @@ import { readTimeline, type TimelineRead } from "./resume.js";
 import { DEFAULT_THEME, hueFor, loadTheme } from "./theme.js";
 import { TimelineBuilder, type TimelineData } from "./timeline.js";
 import { EVENT_ADD, EVENT_DELETE } from "../shared/format.js";
+import type { SizeReport } from "./chunks.js";
 import { writeSite } from "./write.js";
 
 /** The pre-built page, shipped at `dist/page/` next to the CLI. */
@@ -60,6 +61,8 @@ export interface BuildSummary {
   warnings: string[];
   /** The Theme the names and colours came from. */
   theme: string;
+  /** Compressed sizes of the data, against the budget. */
+  sizes: SizeReport;
 }
 
 export async function build(options: BuildOptions): Promise<BuildSummary> {
@@ -104,7 +107,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     private: options.private,
   });
 
-  await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, names.table, places, (staging) =>
+  const sizes = await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, names.table, places, (staging) =>
     scanOutput(staging, names.hidden),
   );
   return {
@@ -117,6 +120,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     nearMisses: names.nearMisses,
     warnings,
     theme: theme.name,
+    sizes,
   };
 }
 

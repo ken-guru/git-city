@@ -96,14 +96,36 @@ function latestAt<T extends { start: number }>(list: readonly T[], t: number): T
  * Builds the segments of every file from one chunk: a build on add, a change on each Floors event,
  * a demolition on delete, and scaffolding up and down. Each change starts from the Floors on screen at that commit.
  */
-export function buildTimelines(
-  chunk: Chunk,
-  fileCount: number,
-): { buildings: BuildingSegment[][]; scaffolds: ScaffoldSegment[][] } {
+export interface Timelines {
+  buildings: BuildingSegment[][];
+  scaffolds: ScaffoldSegment[][];
+}
+
+/**
+ * Adds a chunk's segments after the ones already held. Chunks must come in commit order, so each file's
+ * segments stay sorted for `latestAt`.
+ */
+export function appendTimelines(target: Timelines, chunk: Chunk): void {
+  const part = buildTimelines(chunk, target.buildings.length);
+  part.buildings.forEach((segments, file) => {
+    for (const segment of segments) target.buildings[file]!.push(segment);
+  });
+  part.scaffolds.forEach((segments, file) => {
+    for (const segment of segments) target.scaffolds[file]!.push(segment);
+  });
+}
+
+export function buildTimelines(chunk: Chunk, fileCount: number): Timelines {
   const buildings: BuildingSegment[][] = Array.from({ length: fileCount }, () => []);
   const scaffolds: ScaffoldSegment[][] = Array.from({ length: fileCount }, () => []);
-  // Files standing at the chunk's start: their Floors are not carried in the chunk, so they start at one.
-  for (const file of chunk.snapshot) buildings[file]!.push({ start: -Infinity, kind: KIND_CHANGE, from: 1, to: 1 });
+  // Files standing at the chunk's start hold their snapshot Floors and scaffolding from its first commit.
+  // A chunk loads on its own, so these segments start where the chunk does and sort ahead of its events.
+  const { snapshot } = chunk;
+  snapshot.file.forEach((file, i) => {
+    const floors = snapshot.floors[i]!;
+    buildings[file]!.push({ start: chunk.firstCommit, kind: KIND_CHANGE, from: floors, to: floors });
+    if (snapshot.scaffolded[i]) scaffolds[file]!.push({ start: chunk.firstCommit, up: true });
+  });
 
   chunk.eventFile.forEach((file, i) => {
     const start = chunk.eventCommit[i]!;
