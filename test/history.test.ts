@@ -201,3 +201,29 @@ function writeBuffer(repo: FixtureRepo, path: string, content: Buffer): void {
   mkdirSync(join(full, ".."), { recursive: true });
   writeFileSync(full, content);
 }
+
+describe("commit lines and import specifiers", () => {
+  it("fills CommitRecord.lines with each written file's line-equivalent, keyed by path", async () => {
+    const repo = fixture().write("two.txt", "one\ntwo\n").write("blob.bin", "\0\0\0").commit("first");
+
+    const [commit] = await history(repo.dir);
+
+    expect(commit!.lines?.get("two.txt")).toBe(2);
+    expect(commit!.lines?.get("blob.bin")).toBe(0);
+  });
+
+  it("records the raw import specifiers of a TS file in its facts, and none for other files", async () => {
+    const source = "import a from './util';\nexport { b } from '../lib/b.js';\nconst c = require('left-pad');\n";
+    const repo = fixture().write("src/app.ts", source).write("notes.txt", "import x from './y';\n").commit("first");
+
+    const [commit] = await history(repo.dir);
+
+    const byPath = Object.fromEntries(commit!.writes.map((w) => [w.path, w.facts]));
+    expect(byPath["src/app.ts"]!.imports).toEqual([
+      { specifier: "./util", kind: "static" },
+      { specifier: "../lib/b.js", kind: "reexport" },
+      { specifier: "left-pad", kind: "require" },
+    ]);
+    expect(byPath["notes.txt"]!.imports).toBeUndefined();
+  });
+});

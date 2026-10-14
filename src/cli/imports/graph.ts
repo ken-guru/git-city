@@ -1,4 +1,4 @@
-import { extractorFor, ImportCache, type RawImport } from "./extract.js";
+import type { RawImport } from "./extract.js";
 import { type Resolution, resolveImport, type Snapshot } from "./resolve.js";
 
 /**
@@ -6,7 +6,8 @@ import { type Resolution, resolveImport, type Snapshot } from "./resolve.js";
  * every file's resolved internal targets, its bare package imports, and the fan-in of every file.
  *
  * Incremental: a commit re-resolves only the importers that probed a path the commit added or deleted,
- * the files it wrote, and, when a config file changed, every importer.
+ * the files it wrote, and, when a config file changed, every importer. Specifiers come from the facts layer,
+ * so the graph never parses a file itself.
  */
 
 /** Fan-in thresholds for Building width steps (SPEC §5): fan-in 3, 10 and 30 each add one step. */
@@ -17,30 +18,41 @@ export function widthStepFor(fanIn: number): number {
   return WIDTH_STEP_FAN_IN.filter((threshold) => fanIn >= threshold).length;
 }
 
-/** The writes and deletions one commit makes against its first parent. `blob` is the new content. */
+/**
+ * The writes and deletions one commit makes against its first parent. `blob` is the new content.
+ * `specifiers` is set for a file an import extractor reads (its raw imports, from the facts layer), and absent otherwise.
+ */
 export interface GraphCommit {
-  writes: { path: string; blob: string }[];
+  writes: { path: string; blob: string; specifiers?: RawImport[] }[];
   deleted: string[];
 }
 
 export interface ImportGraphOptions {
-  /** Reads a blob's text. Called only for TS/JS files and config files. */
+  /** Reads a blob's text. Called only for config files (package.json, tsconfig and jsconfig). */
   readText: (blob: string) => Promise<string>;
-  /** Shared extraction cache. A fresh one is made when omitted. */
-  cache?: ImportCache;
 }
-
-const JSON_FILE = /\.jsonc?$/;
 
 /** Config files whose content changes how any import resolves. */
 function isConfig(path: string): boolean {
   const name = path.slice(path.lastIndexOf("/") + 1);
-  return name === "package.json" || /^tsconfig(\..+)?\.json$/.test(name);
+  return name === "package.json" || /^(tsconfig|jsconfig)(\..+)?\.json$/.test(name);
 }
 
 interface FileRecord {
   blob: string;
   specifiers: RawImport[];
+}
+
+/** A JSON-safe copy of an ImportGraph, written into a cache checkpoint so a run can resume from it. */
+export interface GraphSnapshot {
+  paths: string[];
+  configText: [string, string][];
+  files: [string, FileRecord][];
+  targets: [string, string[]][];
+  importers: [string, string[]][];
+  packages: [string, string[]][];
+  probesOf: [string, string[]][];
+  importersOfProbe: [string, string[]][];
 }
 
 export class ImportGraph {
@@ -56,17 +68,18 @@ export class ImportGraph {
   /** Every path each importer's resolution probed, and the reverse index from probe to importer. */
   private readonly probesOf = new Map<string, Set<string>>();
   private readonly importersOfProbe = new Map<string, Set<string>>();
-  private readonly cache: ImportCache;
-  private readonly snapshot: Snapshot = {
+  /** Targets whose importer set changed during the current `apply`. */
+  private touched = new Set<string>();
+  private readonly snapshotView: Snapshot = {
     paths: this.paths,
     read: (path) => this.configText.get(path),
   };
 
-  constructor(private readonly options: ImportGraphOptions) {
-    this.cache = options.cache ?? new ImportCache();
-  }
+  constructor(private readonly options: ImportGraphOptions) {}
 
-  async apply(commit: GraphCommit): Promise<void> {
+  /** Feeds one commit. Returns the targets whose fan-in this commit changed, so the layout can re-width them. */
+  async apply(commit: GraphCommit): Promise<Set<string>> {
+    this.touched = new Set();
     const changed = new Set<string>();
     let configChanged = false;
     for (const path of commit.deleted) {
@@ -78,24 +91,21 @@ export class ImportGraph {
       configChanged ||= isConfig(path);
     }
 
-    const extracting: string[] = [];
-    for (const { path, blob } of commit.writes) {
+    const extracted: string[] = [];
+    for (const { path, blob, specifiers } of commit.writes) {
       this.paths.add(path);
       changed.add(path);
-      // JSON files are read too, since a tsconfig may extend any of them. Only config changes re-resolve everything.
-      if (isConfig(path) || JSON_FILE.test(path)) {
+      if (isConfig(path)) {
         this.configText.set(path, await this.options.readText(blob));
-        configChanged ||= isConfig(path);
+        configChanged = true;
       }
-      if (extractorFor(path)) {
-        const text = this.cache.has(blob, path) ? "" : await this.options.readText(blob);
-        const specifiers = await this.cache.get(blob, path, text);
+      if (specifiers !== undefined) {
         this.files.set(path, { blob, specifiers });
-        extracting.push(path);
+        extracted.push(path);
       }
     }
 
-    const affected = new Set<string>(extracting);
+    const affected = new Set<string>(extracted);
     if (configChanged) {
       for (const importer of this.files.keys()) affected.add(importer);
     }
@@ -105,6 +115,7 @@ export class ImportGraph {
       }
     }
     for (const importer of affected) this.resolveFile(importer);
+    return this.touched;
   }
 
   /** Fan-in: the number of distinct internal files that import `path`. */
@@ -141,13 +152,40 @@ export class ImportGraph {
     return [...sums.values()];
   }
 
+  /** Everything the graph holds, as JSON-safe values. `restore` rebuilds an equal graph from it. */
+  snapshot(): GraphSnapshot {
+    return {
+      paths: [...this.paths],
+      configText: [...this.configText],
+      files: [...this.files],
+      targets: setEntries(this.targets),
+      importers: setEntries(this.importers),
+      packages: setEntries(this.packages),
+      probesOf: setEntries(this.probesOf),
+      importersOfProbe: setEntries(this.importersOfProbe),
+    };
+  }
+
+  static restore(options: ImportGraphOptions, s: GraphSnapshot): ImportGraph {
+    const graph = new ImportGraph(options);
+    for (const path of s.paths) graph.paths.add(path);
+    for (const [path, text] of s.configText) graph.configText.set(path, text);
+    for (const [path, record] of s.files) graph.files.set(path, record);
+    fillSetMap(graph.targets, s.targets);
+    fillSetMap(graph.importers, s.importers);
+    fillSetMap(graph.packages, s.packages);
+    fillSetMap(graph.probesOf, s.probesOf);
+    fillSetMap(graph.importersOfProbe, s.importersOfProbe);
+    return graph;
+  }
+
   private resolveFile(importer: string): void {
     this.clear(importer);
     const record = this.files.get(importer);
     if (!record) return;
     const probes = new Set<string>();
     for (const { specifier } of record.specifiers) {
-      const resolved = resolveImport(this.snapshot, importer, specifier);
+      const resolved = resolveImport(this.snapshotView, importer, specifier);
       for (const probe of resolved.probes) probes.add(probe);
       this.record(importer, resolved.target);
     }
@@ -165,16 +203,28 @@ export class ImportGraph {
     }
     add(this.targets, importer, target.path);
     add(this.importers, target.path, importer);
+    this.touched.add(target.path);
   }
 
   /** Removes everything `importer` contributed: its edges, packages and probes. */
   private clear(importer: string): void {
-    for (const target of this.targets.get(importer) ?? []) remove(this.importers, target, importer);
+    for (const target of this.targets.get(importer) ?? []) {
+      remove(this.importers, target, importer);
+      this.touched.add(target);
+    }
     this.targets.delete(importer);
     this.packages.delete(importer);
     for (const probe of this.probesOf.get(importer) ?? []) remove(this.importersOfProbe, probe, importer);
     this.probesOf.delete(importer);
   }
+}
+
+function setEntries<K, V>(map: Map<K, Set<V>>): [K, V[]][] {
+  return [...map].map(([key, set]) => [key, [...set]]);
+}
+
+function fillSetMap<K, V>(map: Map<K, Set<V>>, entries: [K, V[]][]): void {
+  for (const [key, values] of entries) map.set(key, new Set(values));
 }
 
 function add<K, V>(map: Map<K, Set<V>>, key: K, value: V): void {

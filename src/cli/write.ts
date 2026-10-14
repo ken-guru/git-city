@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { CHUNK_HASH_BYTES, chunkName, encodeChunk, encodeWorld } from "../shared/format.js";
+import { CHUNK_HASH_BYTES, chunkName, encodeChunk, encodeWorld, type WorldLayout } from "../shared/format.js";
 import { encodePlaces, encodeStrings, type PlaceTable, type StringTable } from "./naming.js";
 import type { TimelineData } from "./timeline.js";
 
@@ -17,6 +17,7 @@ export async function writeSite(
   outDir: string,
   pageDir: string,
   timeline: TimelineData,
+  layout: WorldLayout,
   names: StringTable,
   places: PlaceTable,
   check: (stagingDir: string) => Promise<void>,
@@ -47,6 +48,7 @@ export async function writeSite(
       language: timeline.language,
       seed: timeline.seed,
       chunks: [{ firstCommit: 0, hash }],
+      ...layout,
     }),
   );
   await writeFile(join(staging, "strings.json"), encodeStrings(names));

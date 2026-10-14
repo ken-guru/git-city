@@ -1,30 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { ImportGraph, type GraphCommit, widthStepFor } from "../src/cli/imports/graph.js";
+import { ImportGraph, type GraphCommit, type GraphSnapshot, widthStepFor } from "../src/cli/imports/graph.js";
+import { extractImports, extractorFor } from "../src/cli/imports/extract.js";
 
 /**
- * Seams under test: `ImportGraph` fed one commit at a time (writes and deletions, with blob text read through
- * an injected function), observed through its queries; and `widthStepFor`, the fan-in thresholds.
+ * Seams under test: `ImportGraph` fed one commit at a time (writes with the specifiers the facts layer holds,
+ * and deletions), observed through its queries, its touched targets and its snapshot; and `widthStepFor`.
  * Expected values are literals written from the sources below.
  */
 
 /** Drives a graph with commits given as file maps. `blobs` holds each blob's text by blob ID. */
 class Repo {
-  private readonly blobs = new Map<string, string>();
-  private nextBlob = 0;
+  nextBlob = 0;
   readonly graph: ImportGraph;
 
-  constructor() {
-    this.graph = new ImportGraph({ readText: async (blob) => this.blobs.get(blob) ?? "" });
+  constructor(
+    private readonly blobs = new Map<string, string>(),
+    snapshot?: GraphSnapshot,
+  ) {
+    const options = { readText: async (blob: string) => this.blobs.get(blob) ?? "" };
+    this.graph = snapshot ? ImportGraph.restore(options, snapshot) : new ImportGraph(options);
   }
 
-  async commit(writes: Record<string, string>, deleted: string[] = []): Promise<void> {
+  /** A repo that resumes from a JSON round trip of this one's snapshot, sharing its blobs. */
+  fork(): Repo {
+    const copy = new Repo(this.blobs, JSON.parse(JSON.stringify(this.graph.snapshot())) as GraphSnapshot);
+    copy.nextBlob = this.nextBlob;
+    return copy;
+  }
+
+  async commit(writes: Record<string, string>, deleted: string[] = []): Promise<Set<string>> {
     const commit: GraphCommit = { writes: [], deleted };
     for (const [path, text] of Object.entries(writes)) {
       const blob = `b${this.nextBlob++}`;
       this.blobs.set(blob, text);
-      commit.writes.push({ path, blob });
+      const specifiers = extractorFor(path) ? await extractImports(path, text) : undefined;
+      commit.writes.push({ path, blob, specifiers });
     }
-    await this.graph.apply(commit);
+    return this.graph.apply(commit);
   }
 }
 
@@ -78,6 +90,30 @@ describe("incremental resolution", () => {
 
     expect(repo.graph.fanIn("src/b.ts")).toBe(0);
     expect(repo.graph.fanIn("src/c.ts")).toBe(1);
+  });
+
+  it("returns the targets whose fan-in a commit changed", async () => {
+    const repo = new Repo();
+    await repo.commit({ "src/shared.ts": "", "src/other.ts": "" });
+
+    const touched = await repo.commit({ "src/a.ts": `import "./shared";` });
+
+    expect([...touched]).toEqual(["src/shared.ts"]);
+  });
+
+  it("resumes from a snapshot exactly as a run that never stopped", async () => {
+    const repo = new Repo();
+    await repo.commit({ "src/a.ts": `import "./later";`, "src/x.ts": `import "./a";` });
+    const resumed = repo.fork();
+
+    await repo.commit({ "src/later.ts": "", "src/y.ts": `import "./later";` });
+    await resumed.commit({ "src/later.ts": "", "src/y.ts": `import "./later";` });
+
+    expect(resumed.graph.targetsOf("src/a.ts")).toEqual(["src/later.ts"]);
+    expect(resumed.graph.fanIn("src/later.ts")).toBe(2);
+    expect(resumed.graph.targetsOf("src/a.ts")).toEqual(repo.graph.targetsOf("src/a.ts"));
+    expect(resumed.graph.fanIn("src/later.ts")).toBe(repo.graph.fanIn("src/later.ts"));
+    expect(resumed.graph.districtLinks((p) => p.split("/")[0]!)).toEqual(repo.graph.districtLinks((p) => p.split("/")[0]!));
   });
 
   it("re-resolves every importer when a tsconfig changes", async () => {
