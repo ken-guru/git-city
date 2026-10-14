@@ -1,3 +1,5 @@
+import { type Countryside, countryside, mix } from "../shared/countryside.js";
+
 /**
  * Layout: decides where every Building's Lot stands, as a fold over the Timeline in history order.
  * Every decision uses only what came before it, so a prefix of the history yields a prefix of the
@@ -19,6 +21,8 @@ export interface LayoutOptions {
   categoryOf?: (path: string) => string;
   /** Width step (0 narrowest, 3 widest) of a file when it is built. Defaults to 0. */
   widthStepOf?: (file: number) => number;
+  /** The land Villages and Blocks are placed on. Defaults to the Countryside for `seed`. */
+  terrain?: Pick<Countryside, "levelAt">;
   /** Hue per Role, from the Theme's palette. Defaults to the built-in palette. */
   hueOf?: (role: Role) => number;
 }
@@ -55,8 +59,15 @@ const LIGHTNESS_OFFSET = 0.06;
 const STONE = { hue: 40, saturation: 0.08 } as const;
 /** The yellow-green to green band reserved for the Countryside. Paving never uses it. */
 const GREEN_BAND = { from: 70, to: 160 } as const;
-/** Ring search limit before a village may grow next to a neighbour. */
+/** Ring search limit before a village may grow next to a neighbour, or before terrain relaxes. */
 const BUFFER_SEARCH_RINGS = 256;
+/**
+ * Terrain relaxation when there is no room: 0 flat land only, 1 hills allowed (rivers still not),
+ * 2 anything. Villages avoid rivers and hills, and the last step is unrestricted, so a spot always exists.
+ */
+const RELAX_STEPS = 3;
+/** Ring search limit for the terrain-restricted steps: a spot that needs more rings is left to a later step. */
+const RELAX_SEARCH_RINGS = 48;
 
 export const ROLES = [
   "tests", "docs", "api", "ui", "auth", "data", "cli", "infra", "utils", "core", "config", "build",
@@ -191,10 +202,12 @@ export class LayoutBuilder {
   private readonly ownedBlocks = new Map<string, number[]>();
   private readonly categoryOf: (path: string) => string;
   private readonly widthStepOf: (file: number) => number;
+  private readonly terrain: Pick<Countryside, "levelAt">;
 
   constructor(private readonly options: LayoutOptions) {
     this.categoryOf = options.categoryOf ?? guessCategory;
     this.widthStepOf = options.widthStepOf ?? (() => 0);
+    this.terrain = options.terrain ?? countryside(options.seed);
   }
 
   apply(change: LayoutChange): void {
@@ -373,16 +386,26 @@ export class LayoutBuilder {
 
   /** Founds a village at the free spot nearest the centre that keeps VILLAGE_SPACING from every other village. */
   private foundVillage(key: string): number {
-    const spot = this.nearest(
-      (c, r) => !this.blockAt.has(cellKey(c, r)) && !this.anyBlockWithin(c, r, VILLAGE_SPACING - 1),
-      Infinity,
-      0,
-      0,
-    )!;
+    let spot: Cell | undefined;
+    for (let step = 0; step < RELAX_STEPS && !spot; step++) {
+      spot = this.nearest(
+        (c, r) => !this.blockAt.has(cellKey(c, r)) && !this.anyBlockWithin(c, r, VILLAGE_SPACING - 1) && this.terrainAllows(step, c, r),
+        step < RELAX_STEPS - 1 ? RELAX_SEARCH_RINGS : Infinity,
+        0,
+        0,
+      );
+    }
     const id = this.villages.length;
     const angle = seeded(this.options.seed, id, 0) * Math.PI * 2;
-    this.villages.push({ id, district: key, col: spot.col, row: spot.row, angle });
+    this.villages.push({ id, district: key, col: spot!.col, row: spot!.row, angle });
     return id;
+  }
+
+  /** Whether a cell may take a Block at a relaxation step (see RELAX_STEPS). */
+  private terrainAllows(step: number, col: number, row: number): boolean {
+    if (step >= RELAX_STEPS - 1) return true;
+    const level = this.terrain.levelAt(col, row);
+    return step === 0 ? level === "flat" : level !== "river";
   }
 
   private anyBlockWithin(col: number, row: number, radius: number): boolean {
@@ -410,26 +433,7 @@ export class LayoutBuilder {
     // A Neighbourhood stays in the village its Blocks are in, even if its District has since moved.
     const village = own.length > 0 ? this.blocks[own[0]!]!.village : villageOfDistrict;
     const anchor = this.villages[village]!;
-    const globalSpot = this.bestBlockSpot(anchor, village);
-    let cohesive: Cell | undefined;
-    let cohesiveDist = Infinity;
-    for (const id of own) {
-      const b = this.blocks[id]!;
-      for (let dr = -1; dr <= 1; dr++) {
-        for (let dc = -1; dc <= 1; dc++) {
-          const c = b.col + dc;
-          const r = b.row + dr;
-          if ((dc === 0 && dr === 0) || this.blockAt.has(cellKey(c, r)) || this.nextToOtherVillage(c, r, village)) continue;
-          const d = Math.hypot(c - anchor.col, r - anchor.row);
-          if (d < cohesiveDist || (d === cohesiveDist && lessCell(c, r, cohesive!))) {
-            cohesive = { col: c, row: r };
-            cohesiveDist = d;
-          }
-        }
-      }
-    }
-    const globalDist = Math.hypot(globalSpot.col - anchor.col, globalSpot.row - anchor.row);
-    const spot = cohesive && cohesiveDist <= globalDist + COHESION_SLACK ? cohesive : globalSpot;
+    const spot = this.claimSpot(owner, anchor, village);
 
     const id = this.blocks.length;
     this.blocks.push({
@@ -447,15 +451,54 @@ export class LayoutBuilder {
     return id;
   }
 
-  /** The free spot nearest the village centre, keeping one Block of open land from other villages if it can. */
-  private bestBlockSpot(anchor: VillageRecord, village: number): Cell {
-    const buffered = this.nearest(
-      (c, r) => !this.blockAt.has(cellKey(c, r)) && !this.nextToOtherVillage(c, r, village),
-      BUFFER_SEARCH_RINGS,
-      anchor.col,
-      anchor.row,
-    );
-    return buffered ?? this.nearest((c, r) => !this.blockAt.has(cellKey(c, r)), Infinity, anchor.col, anchor.row)!;
+  /**
+   * The spot for a new Block: a Neighbourhood's own Block neighbour within COHESION_SLACK of the nearest free spot
+   * if there is one, else that nearest free spot. The nearest free spot keeps one Block of open land from other
+   * Villages if it can. Terrain relaxes in steps before the buffer does, so each Block tries flat land first.
+   */
+  private claimSpot(owner: string, anchor: VillageRecord, village: number): Cell {
+    for (const buffered of [true, false]) {
+      for (let step = 0; step < RELAX_STEPS; step++) {
+        const last = step === RELAX_STEPS - 1;
+        const free = this.nearest(
+          (c, r) =>
+            !this.blockAt.has(cellKey(c, r)) &&
+            (!buffered || !this.nextToOtherVillage(c, r, village)) &&
+            this.terrainAllows(step, c, r),
+          !last ? RELAX_SEARCH_RINGS : buffered ? BUFFER_SEARCH_RINGS : Infinity,
+          anchor.col,
+          anchor.row,
+        );
+        if (!free) continue;
+        const cohesive = this.cohesiveSpot(owner, anchor, village, step);
+        const globalDist = Math.hypot(free.col - anchor.col, free.row - anchor.row);
+        return cohesive && cohesive.dist <= globalDist + COHESION_SLACK ? cohesive.cell : free;
+      }
+    }
+    throw new Error("no free Block spot found, even with unlimited search");
+  }
+
+  /** The free cell next to one of a Neighbourhood's own Blocks, nearest the village centre, at a relaxation step. */
+  private cohesiveSpot(owner: string, anchor: VillageRecord, village: number, step: number): { cell: Cell; dist: number } | undefined {
+    let best: Cell | undefined;
+    let bestDist = Infinity;
+    for (const id of this.ownedBlocks.get(owner) ?? []) {
+      const b = this.blocks[id]!;
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          const c = b.col + dc;
+          const r = b.row + dr;
+          if ((dc === 0 && dr === 0) || this.blockAt.has(cellKey(c, r)) || this.nextToOtherVillage(c, r, village)) continue;
+          if (!this.terrainAllows(step, c, r)) continue;
+          const d = Math.hypot(c - anchor.col, r - anchor.row);
+          if (d < bestDist || (d === bestDist && lessCell(c, r, best!))) {
+            best = { col: c, row: r };
+            bestDist = d;
+          }
+        }
+      }
+    }
+    return best && { cell: best, dist: bestDist };
   }
 
   private nextToOtherVillage(col: number, row: number, village: number): boolean {
@@ -610,12 +653,6 @@ function avoidGreen(hue: number): number {
 /** A unit in [0, 1) from the seed, a salt and a lane: the same inputs always give the same value. */
 function seeded(seed: number, salt: number, lane: number): number {
   return mix(mix(seed ^ mix(salt)) + lane) / 2 ** 32;
-}
-
-function mix(value: number): number {
-  let a = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
-  a = Math.imul(a ^ (a >>> 16), 0x45d9f3b);
-  return (a ^ (a >>> 16)) >>> 0;
 }
 
 /** First free run of `slots` unit slots within one Block row, as the first slot index, or undefined. */
