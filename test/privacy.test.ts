@@ -141,6 +141,29 @@ describe("the final scan", () => {
     expect((error as Error).message.toLowerCase()).not.toContain("secretproject");
   });
 
+  it("does not fail on a hidden name that is only part of a longer word", async () => {
+    const dir = scratch();
+    writeFileSync(join(dir, "index.html"), "<title>GitCity</title>");
+    writeFileSync(join(dir, "strings.json"), `["Gitterwick lane"]`);
+
+    await expect(scanOutput(dir, ["git"])).resolves.toBeUndefined();
+  });
+
+  it("still fails on a hidden name that appears as a whole word", async () => {
+    const dir = scratch();
+    writeFileSync(join(dir, "index.html"), "<title>Git City</title>");
+
+    await expect(scanOutput(dir, ["git"])).rejects.toBeInstanceOf(PrivacyError);
+  });
+
+  it("builds when a repo file is named like a common word, such as git", async () => {
+    const repo = fixture().write("src/git.ts").commit("first");
+
+    const { outDir } = await run(repo);
+
+    expect(existsSync(join(outDir, "world.bin"))).toBe(true);
+  });
+
   it("does not scan the page bundle, which holds our code and no user data", async () => {
     const dir = scratch();
     mkdirSync(join(dir, "assets"));
