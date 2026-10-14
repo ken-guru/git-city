@@ -1,13 +1,20 @@
 import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, PerspectiveCamera, PlaneGeometry, Scene, WebGLRenderer } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { decodeChunk, decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
+import { type PlacesFile, parsePlaces } from "../shared/places.js";
 import { CityBuildings } from "./buildings.js";
+import { cityTitle, createDistrictLabels } from "./labels.js";
 import { buildTimelines, gridColumns, gridSlot, TRANSITION_COMMITS } from "./state.js";
 
 /** Tuning values for the City. The player and camera tickets replace the rest. */
 const TUNING = {
   commitsPerSecond: 2,
   lotSpacing: 1.5,
+  /** World distance between Block-grid cells, where District labels are anchored. */
+  blockSpacing: 6,
+  /** District labels are hidden beyond this many City extents from the camera, at a height of `labelHeight`. */
+  labelDistance: 1.5,
+  labelHeight: 3,
   groundMargin: 4,
   cameraFov: 45,
   /** Camera offset from the grid centre, as a multiple of the grid's extent plus a fixed distance. */
@@ -65,10 +72,17 @@ async function main() {
   const firstChunk = world.chunks[0];
   if (!firstChunk) throw new Error("world.bin lists no chunks");
   const chunk = decodeChunk(await fetchBytes(`chunks/${firstChunk.name}`));
-  play(world, buildTimelines(chunk, world.fileCount));
+  // Without places.json the City still plays, just without District labels.
+  let places: PlacesFile | undefined;
+  try {
+    places = parsePlaces(new TextDecoder().decode(await fetchBytes("places.json", { cache: "no-store" })));
+  } catch (e) {
+    console.warn("District names could not be loaded", e);
+  }
+  play(world, buildTimelines(chunk, world.fileCount), places);
 }
 
-function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
+function play(world: World, timelines: ReturnType<typeof buildTimelines>, places?: PlacesFile) {
   const commitCount = world.commitDays.length;
   const endTime = commitCount - 1 + TRANSITION_COMMITS;
   const columns = gridColumns(world.fileCount);
@@ -115,8 +129,15 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
+  const labels = places
+    ? createDistrictLabels(scene, places, TUNING.blockSpacing, extent * TUNING.labelDistance, TUNING.labelHeight)
+    : undefined;
+  if (labels) document.body.append(labels.element);
+  if (places) document.title = cityTitle(places);
+
   function resize() {
     renderer.setSize(innerWidth, innerHeight);
+    labels?.setSize(innerWidth, innerHeight);
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
   }
@@ -153,6 +174,8 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
     draw(time);
     controls.update();
     renderer.render(scene, camera);
+    labels?.update(camera);
+    labels?.render(scene, camera);
   });
 }
 

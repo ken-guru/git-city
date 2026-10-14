@@ -33,6 +33,8 @@ Options:
   --config <path>  read this config file instead of the shared and personal configs
   --strict         fail the build on near-miss names
   --private        ignore every reveal in the config
+  --theme <name>   the Theme for names and colours: modern or medieval
+  --seed <text>    the seed for Generated names (overrides naming.seed)
   --port <n>       port for serve, used exactly (default: the first free port
                    from ${DEFAULT_PORT} to ${DEFAULT_PORT + DEFAULT_PORT_ATTEMPTS - 1})
   -h, --help       show this help
@@ -57,6 +59,8 @@ async function main(argv: string[]): Promise<number> {
       config: { type: "string" },
       strict: { type: "boolean" },
       private: { type: "boolean" },
+      theme: { type: "string" },
+      seed: { type: "string" },
       port: { type: "string" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
@@ -82,6 +86,8 @@ async function main(argv: string[]): Promise<number> {
       configPath: values.config === undefined ? undefined : resolve(cwd, values.config),
       strict: values.strict,
       private: values.private,
+      theme: values.theme,
+      seed: values.seed,
     });
     for (const warning of summary.warnings) process.stderr.write(`git-city: warning: ${warning}\n`);
     const lines =[`Built ${summary.commits} commits and ${summary.files} files from ${summary.branch} into ${summary.outDir}`];
@@ -92,6 +98,7 @@ async function main(argv: string[]): Promise<number> {
     for (const miss of summary.nearMisses) {
       lines.push(`Near-miss: "${miss.text}" is close to a hidden name or Concept (use --strict to fail on these)`);
     }
+    lines.push(`Theme: ${summary.theme}`);
     if (summary.configSources.length > 0) lines.push(`Config: ${summary.configSources.join(", ")}`);
     lines.push(`Run "git-city serve" to watch it.`);
     process.stdout.write(`${lines.join("\n")}\n`);

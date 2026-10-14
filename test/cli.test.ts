@@ -47,7 +47,8 @@ describe("the git-city binary", () => {
     const site = join(repo.dir, "git-city-site");
     const audited = run("audit", site);
     expect(audited.status).toBe(0);
-    expect(audited.stdout).toBe("0\tMarkdown file 1\n1\tTypeScript file 2\n");
+    expect(audited.stdout.startsWith("0\tMarkdown file 1\n1\tTypeScript file 2\ncity\t")).toBe(true);
+    expect(audited.stdout).toMatch(/\ndistrict 0\t/);
 
     const near = new FixtureRepo().write("src/initec/a.ts").write("secret/platform.ts").commit("first");
     cleanupRepos.push(near);
