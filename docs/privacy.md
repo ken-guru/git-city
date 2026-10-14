@@ -24,9 +24,10 @@ By default, none of the following are in the output:
 - External Dependency names. External Cities get Generated names.
 - Commit hashes, remote URLs and the repository name.
 - Email addresses, in any form.
-- Contributors. They are off by default, and when on, they are shown only at the level you choose.
-- Commit messages. They are off by default.
-- Exact times of day. Off by default.
+- Contributors. They are off by default. The `contributors` setting is checked but not yet applied by this release, so
+  they never appear.
+- Commit messages. Off by default, and the `commitMessages` setting is not yet applied by this release.
+- Exact times of day. Off by default, and the `exactTimes` setting is not yet applied by this release.
 - Raw line or importer counts.
 - The mapping from Real names to Pseudonyms or Generated names.
 
@@ -37,11 +38,11 @@ Revealing a name is always an explicit choice in config (`reveal` in `rules`). N
 
 Run the build, then look at the output:
 
-- The build summary lists what was revealed, how many names were made, every detected External Dependency and any
-  near-miss warnings.
+- The build summary lists what was revealed, how many names were made and any near-miss warnings.
 - `git-city audit [dir]` lists every string in the output, one per line as an id and its text. Read it before you publish.
-- Before the output is swapped into place, every file is scanned for hidden Real names and Concepts. A hit fails the
-  run with exit code 2 and names the file, never the hidden word.
+- Before the output is swapped into place, the output's files are scanned for hidden Real names and Concepts, except the
+  page bundle in `assets/`, which is git-city's own code. A hit fails the run with exit code 2 and names the file, never
+  the hidden word.
 - `--strict` makes near-miss warnings fail the build, also with exit code 2.
 
 `git-city audit` is the check to run before publishing. It shows exactly the strings a viewer can read.
@@ -54,7 +55,8 @@ Some things stay visible even with every default in place:
   can identify a public repository to anyone who already knows its history. Names stay hidden, but the shape can match.
   `exclude` can take parts of the repo out of the City, and `tuning` changes the look, but neither removes the shape.
 - **Regenerating seeded names.** Generated names come from a seed, and the output contains a number derived from it. The
-  default seed is the root commit, which is public for a public repository. Someone who knows the root commit and the
+  default seed is built from the root commit, the Theme and birth order, and the root commit is public for a public
+  repository. Someone who knows the root commit and the
   Theme can regenerate the names and check a guess, for example whether a District is called "Ashford Keep". Setting
   `naming.seed` (or `--seed`) to a value you keep private removes this, because the seed no longer comes from the public
   root commit.

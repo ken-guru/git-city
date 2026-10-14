@@ -47,7 +47,8 @@ function documentedKeys(markdown: string): Set<string> {
   return keys;
 }
 
-const DOC_FILES = ["README.md", "docs/config.md", "docs/themes.md", "docs/privacy.md", "man/git-city.1"];
+const MARKDOWN_DOCS = ["README.md", "docs/config.md", "docs/themes.md", "docs/privacy.md"];
+const DOC_FILES = [...MARKDOWN_DOCS, "man/git-city.1"];
 
 describe("documentation rules", () => {
   it("never documents the git city form, which collides with git's own subcommands", () => {
@@ -55,7 +56,7 @@ describe("documentation rules", () => {
   });
 
   it("every relative link in the docs points at a file that exists", () => {
-    for (const file of ["README.md", "docs/config.md", "docs/themes.md", "docs/privacy.md"]) {
+    for (const file of MARKDOWN_DOCS) {
       const dir = new URL(`../${file}`, import.meta.url);
       for (const [, target] of read(file).matchAll(/\]\(([^)#\s]+)(?:#[^)]*)?\)/g)) {
         if (/^[a-z]+:/i.test(target!)) continue;

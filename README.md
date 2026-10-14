@@ -24,8 +24,7 @@ git-city
 ```
 
 This reads the default branch and writes the site to `git-city-site/`. The build prints its progress, then a summary:
-what was revealed, every detected External Dependency, any near-miss warnings, the sizes of the output, and the output
-path.
+what was revealed, how many names were made, any near-miss warnings, the sizes of the output, and the output path.
 
 The first run also suggests adding the output folder to `.gitignore`. git-city never edits `.gitignore` itself, so add
 the line yourself, or the site will be committed:

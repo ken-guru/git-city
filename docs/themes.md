@@ -20,9 +20,9 @@ read them. Until then, a new Theme is a change to this package.
 | `$schema` | Optional. Points an editor at the schema, for example `"../schema/theme.schema.json"`. |
 | `name` | Lower-case words and hyphens, starting with a letter, such as `medieval`. |
 | `display.title`, `display.description` | Non-empty text naming and describing the Theme. |
-| `wordPieces.prefixes` | One or more words of letters only, capitalised, such as `Ash`. |
+| `wordPieces.prefixes` | One or more words of letters only, such as `Ash`. |
 | `wordPieces.suffixes` | One or more lower-case words, such as `ford`. |
-| `streetSuffixes` | One or more words of letters and spaces, capitalised, such as `Lane`. |
+| `streetSuffixes` | One or more words of letters and spaces, such as `Lane`. |
 | `roleNouns` | A noun for every key in the coverage list below. Letters and single spaces, at most 24 characters. |
 | `palette` | A `hue` from 0 to 360 for every key in the coverage list below. |
 
@@ -47,7 +47,7 @@ to green band. Colour is never the only cue, so a hue should not be the only way
 Generated names are checked before they are used. A candidate is rejected when it contains a hidden Real name or a
 Concept, matched case-insensitively and with near-miss matching. A Role noun that would leak is replaced by the fallback
 noun, and if the fallback leaks too, the name is built from its proper name alone. The final scan then looks at every
-output file, and any hidden name that gets through fails the run with exit code 2.
+output file (except the page bundle in `assets/`), and any hidden name that gets through fails the run with exit code 2.
 
 When you write a Theme, check its word pieces and nouns against the names your repos use. Run a build with
 `--strict`, which makes near-misses fail, and read the build summary's near-miss warnings. `git-city audit` lists every
@@ -55,7 +55,7 @@ string in the output, so you can see the names the Theme produced.
 
 ## Checking a Theme
 
-- Validate it against `schema/theme.schema.json` in your editor, or run `npx vitest run test/theme.test.ts`, which
+- Validate it against `schema/theme.schema.json` in your editor, or run `npx vitest run test/schemas.test.ts`, which
   checks the validator and the schema against each other.
 - Build a sample repo with it: `git-city build --theme <name> --out <dir>`.
 - Read `git-city audit <dir>` and check the names.

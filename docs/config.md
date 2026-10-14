@@ -38,7 +38,7 @@ A flag always beats the config for the same setting.
 | `commitMessages` | boolean | Whether commit messages appear. Default `false`. Checked, but not yet applied by this release. |
 | `exactTimes` | boolean | Whether dates show exact times instead of the day. Default `false`. Checked, but not yet applied by this release. |
 | `theme` | string | The Theme name: `modern` (default) or `medieval`. The `--theme` flag wins over it. |
-| `externals` | object | Grouping overrides for External Dependencies. Free-form for now; checked to be an object. |
+| `externals` | object | Grouping overrides for External Dependencies, where the grouping threshold (3 to 5) is planned. Free-form for now; checked to be an object. |
 | `exclude` | list of strings | Path globs of files left out of the City. From both config files. |
 | `scale` | object | Settings for long histories. |
 | `scale.timeline` | string | `auto` (default), `commit`, `day`, `week` or `month`. `commit` refuses grouping and only warns. |
