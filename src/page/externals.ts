@@ -1,6 +1,15 @@
 import { BoxGeometry, Mesh, MeshLambertMaterial, RingGeometry, type Scene } from "three";
 import { cityVisibility, highwayVisibility } from "../shared/externals.js";
-import { type CityGeometry, type ExternalsGeometry, type HighwayGeometry, highwayWidth, laneBands, MARKING_WIDTH, type Point } from "./externals-geometry.js";
+import {
+  BRIDGE_HEIGHT,
+  type CityGeometry,
+  type ExternalsGeometry,
+  type HighwayGeometry,
+  highwayWidth,
+  laneBands,
+  MARKING_WIDTH,
+  type Point,
+} from "./externals-geometry.js";
 
 /**
  * The horizon ring, the orbital motorway's access Highways, the spurs and the External Cities, drawn in three.js (SPEC §7).
@@ -44,7 +53,7 @@ interface Band {
 }
 
 /** Makes one box per band of a road (or a single box for a spur), all sharing the road's start and direction. */
-function road(scene: Scene, start: Point, end: Point, bands: readonly Band[], ground: GroundAt): Road {
+function road(scene: Scene, start: Point, end: Point, bands: readonly Band[], ground: GroundAt, height?: number): Road {
   const dx = end.x - start.x;
   const dz = end.z - start.z;
   const length = Math.hypot(dx, dz) || 1;
@@ -55,7 +64,14 @@ function road(scene: Scene, start: Point, end: Point, bands: readonly Band[], gr
     scene.add(mesh);
     return { mesh, offset };
   });
-  return { lanes, start, direction: { x: dx / length, z: dz / length }, length, y: ground(start.x, start.z) + LIFT };
+  // A bridge deck is carried at its own height; everything else lies on the ground.
+  const y = height ?? ground(start.x, start.z) + LIFT;
+  return { lanes, start, direction: { x: dx / length, z: dz / length }, length, y };
+}
+
+/** A point at fraction `t` along a straight line. */
+function pointAlong(a: Point, b: Point, t: number): Point {
+  return { x: a.x + (b.x - a.x) * t, z: a.z + (b.z - a.z) * t };
 }
 
 /** Grows a road to `fraction` of its length, from its start outward. Each lane keeps its lateral offset. */
@@ -72,6 +88,8 @@ function grow(r: Road, fraction: number): void {
 
 interface HighwayPiece {
   road: Road;
+  /** One deck per bridge run, raised over water or a steep hill, built as the Highway is. */
+  decks: { road: Road; from: number; to: number }[];
   geometry: HighwayGeometry;
 }
 
@@ -108,7 +126,12 @@ export class ExternalLayer {
       const bands: Band[] = laneBands(h.lanes).map((b) => ({ offset: b.offset, width: b.width, material: asphalt }));
       // The centre marking is one more strip, in white, over the middle of the road.
       bands.push({ offset: 0, width: MARKING_WIDTH, material: marking });
-      this.highways.push({ road: road(scene, h.start, h.end, bands, ground), geometry: h });
+      const decks = h.bridges.map((run) => ({
+        road: road(scene, pointAlong(h.start, h.end, run.from), pointAlong(h.start, h.end, run.to), bands, ground, BRIDGE_HEIGHT),
+        from: run.from,
+        to: run.to,
+      }));
+      this.highways.push({ road: road(scene, h.start, h.end, bands, ground), decks, geometry: h });
     }
     for (const c of geometry.cities) {
       const material = new MeshLambertMaterial({ color: HAZE[theme], transparent: true, opacity: 0 });
@@ -139,7 +162,16 @@ export class ExternalLayer {
 
   /** Draws every piece at time `t` (in Steps). Pure in `t`: scrubbing and reversing need nothing extra. */
   update(t: number): void {
-    for (const { road: r, geometry } of this.highways) grow(r, highwayVisibility(t, geometry.from, geometry.to));
+    for (const { road: r, decks, geometry } of this.highways) {
+      const built = highwayVisibility(t, geometry.from, geometry.to);
+      grow(r, built);
+      // A deck is built as the Highway reaches it: a stretch that is not yet reached stays unbuilt.
+      for (const deck of decks) {
+        const span = deck.to - deck.from;
+        const fraction = span <= 0 ? (built >= deck.from ? 1 : 0) : Math.min(1, Math.max(0, (built - deck.from) / span));
+        grow(deck.road, fraction);
+      }
+    }
     for (const { spur, body, material, geometry } of this.cities) {
       const visible = cityVisibility(t, geometry.from, geometry.to);
       grow(spur, visible);

@@ -4,7 +4,7 @@ import { decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "..
 import { type ExternalCitiesFile, parseExternalCities } from "../shared/externals.js";
 import { type PlacesFile, parsePlaces } from "../shared/places.js";
 import { ExternalLayer } from "./externals.js";
-import { externalsGeometry } from "./externals-geometry.js";
+import { externalsGeometry, needsBridge } from "./externals-geometry.js";
 import { CityBuildings } from "./buildings.js";
 import { addCountryside, type CountrysideHandle } from "./countryside.js";
 import { BlockLayer, blockPaving } from "./blocks.js";
@@ -170,7 +170,9 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   const externalLayer = externals
     ? new ExternalLayer(
         scene,
-        externalsGeometry(externals, villageSites(world), BLOCK_WORLD),
+        externalsGeometry(externals, villageSites(world), BLOCK_WORLD, (x, z) =>
+          needsBridge(countryside.land, Math.round(x / BLOCK_WORLD), Math.round(z / BLOCK_WORLD)),
+        ),
         theme,
         (x, z) => countryside.land.heightAt(x / BLOCK_WORLD, z / BLOCK_WORLD),
       )

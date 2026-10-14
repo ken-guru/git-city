@@ -20,6 +20,61 @@ export interface HighwayGeometry {
   from: number;
   to: number | null;
   lanes: number;
+  /** The stretches of the Highway that cross water or a steep hill, as fractions of its length. */
+  bridges: BridgeRun[];
+}
+
+/** A stretch of a Highway that is carried on a bridge: from and to are fractions of its length, 0 to 1. */
+export interface BridgeRun {
+  from: number;
+  to: number;
+}
+
+/** Height of a bridge deck above the ground, in world units (the same deck height as the Village Roads). */
+export const BRIDGE_HEIGHT = 0.45;
+/** Points sampled along a Highway to find where it crosses water or steep ground. */
+export const BRIDGE_SAMPLES = 48;
+/** A height change over one Block between neighbouring cells that counts as steep ground. A tuning value. */
+export const STEEP_STEP = 0.5;
+
+/** The terrain the bridge rule reads, in Block cells: the Countryside's level and height. */
+export interface Terrain {
+  levelAt(col: number, row: number): "river" | "hill" | "flat";
+  heightAt(col: number, row: number): number;
+}
+
+/** Whether the ground at a Block cell needs a bridge: a river, or ground that falls away steeply to a neighbour. */
+export function needsBridge(terrain: Terrain, col: number, row: number): boolean {
+  if (terrain.levelAt(col, row) === "river") return true;
+  const height = terrain.heightAt(col, row);
+  return [
+    [1, 0],
+    [-1, 0],
+    [0, 1],
+    [0, -1],
+  ].some(([dc, dr]) => Math.abs(terrain.heightAt(col + dc!, row + dr!) - height) > STEEP_STEP);
+}
+
+/**
+ * The stretches of the straight Highway from `start` to `end` where `crosses` (given a world position) is true, sampled
+ * at `samples` steps. A run is the span from its first crossed sample to just past its last one, capped at the end.
+ */
+export function bridgeRuns(start: Point, end: Point, crosses: (x: number, z: number) => boolean, samples: number = BRIDGE_SAMPLES): BridgeRun[] {
+  const flags = Array.from({ length: samples + 1 }, (_, i) => {
+    const t = i / samples;
+    return crosses(start.x + (end.x - start.x) * t, start.z + (end.z - start.z) * t);
+  });
+  const runs: BridgeRun[] = [];
+  let open: number | undefined;
+  for (let i = 0; i <= samples; i++) {
+    if (flags[i] && open === undefined) open = i;
+    if (!flags[i] && open !== undefined) {
+      runs.push({ from: open / samples, to: Math.min(1, i / samples) });
+      open = undefined;
+    }
+  }
+  if (open !== undefined) runs.push({ from: open / samples, to: 1 });
+  return runs;
 }
 
 export interface CityGeometry {
@@ -50,7 +105,12 @@ export const CITY_BEYOND_RING_BLOCKS = 3;
  * The geometry of the horizon, the City spurs and the Highways. `villages` are the village centres in Block widths, and
  * `blockWorld` converts Block widths to world units.
  */
-export function externalsGeometry(file: ExternalCitiesFile, villages: readonly Point[], blockWorld: number): ExternalsGeometry {
+export function externalsGeometry(
+  file: ExternalCitiesFile,
+  villages: readonly Point[],
+  blockWorld: number,
+  crosses: (x: number, z: number) => boolean = () => false,
+): ExternalsGeometry {
   const ring = file.horizon * blockWorld;
   const onRing = (angle: number, radius: number): Point => ({ x: Math.cos(angle) * radius, z: Math.sin(angle) * radius });
   const cities: CityGeometry[] = file.cities.map((city) => {
@@ -72,13 +132,15 @@ export function externalsGeometry(file: ExternalCitiesFile, villages: readonly P
     // The root manifest's road leaves from the centre and meets the ring at its City's angle.
     const start = village === undefined ? { x: 0, z: 0 } : { x: village.x * blockWorld, z: village.z * blockWorld };
     const meets = village === undefined ? file.cities[h.city]!.angle : Math.atan2(village.z, village.x);
+    const end = onRing(meets, ring);
     return {
       start,
-      end: onRing(meets, ring),
+      end,
       city: h.city,
       from: h.from,
       to: h.to,
       lanes: h.lanes,
+      bridges: bridgeRuns(start, end, crosses),
     };
   });
   return { ring, ringLanes: file.ring, cities, highways };

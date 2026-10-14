@@ -2,7 +2,17 @@ import { describe, expect, it } from "vitest";
 import { Mesh, MeshLambertMaterial, RingGeometry, Scene } from "three";
 import { type ExternalCitiesFile, parseExternalCities } from "../src/shared/externals.js";
 import { ExternalLayer } from "../src/page/externals.js";
-import { CITY_BEYOND_RING_BLOCKS, externalsGeometry, highwayWidth, LANE_WIDTH, laneBands, MARKING_WIDTH } from "../src/page/externals-geometry.js";
+import {
+  BRIDGE_SAMPLES,
+  bridgeRuns,
+  CITY_BEYOND_RING_BLOCKS,
+  externalsGeometry,
+  highwayWidth,
+  LANE_WIDTH,
+  laneBands,
+  MARKING_WIDTH,
+  needsBridge,
+} from "../src/page/externals-geometry.js";
 
 /**
  * Seam under test: the page's geometry for the horizon, spurs and Highways (SPEC §7), from the CLI's externals.json.
@@ -77,6 +87,49 @@ describe("parsing externals.json", () => {
   });
 });
 
+describe("bridges", () => {
+  const start = { x: 24, z: 0 };
+  const end = { x: 120, z: 0 };
+
+  it("places a bridge run where a straight Highway crosses a river, and no run where it does not", () => {
+    // Samples every 2 world units from x = 24 to x = 120; the river is x in [60, 80], so samples 18 to 28 are over it.
+    const river = (x: number) => x >= 60 && x <= 80;
+    const runs = bridgeRuns(start, end, (x) => river(x));
+    expect(runs).toEqual([{ from: 18 / BRIDGE_SAMPLES, to: 29 / BRIDGE_SAMPLES }]);
+    expect(bridgeRuns(start, end, () => false)).toEqual([]);
+    expect(bridgeRuns(start, end, () => true)).toEqual([{ from: 0, to: 1 }]);
+  });
+
+  it("finds two runs where a Highway crosses two rivers", () => {
+    const runs = bridgeRuns(start, end, (x) => (x >= 30 && x <= 34) || (x >= 100 && x <= 110));
+    expect(runs).toHaveLength(2);
+    expect(runs[0]!.to).toBeLessThan(runs[1]!.from);
+  });
+
+  it("needs a bridge over a river cell, and beside a cell that stands steeply above or below it", () => {
+    // Column 5 is a river. Cell (8, 0) stands beside (9, 0), which rises 2 above it: steeper than STEEP_STEP.
+    const terrain = {
+      levelAt: (col: number) => (col === 5 ? ("river" as const) : ("flat" as const)),
+      heightAt: (col: number, row: number) => (col === 9 && row === 0 ? 2 : 0),
+    };
+    expect(needsBridge(terrain, 5, 0)).toBe(true);
+    expect(needsBridge(terrain, 8, 0)).toBe(true);
+    expect(needsBridge(terrain, 3, 0)).toBe(false);
+  });
+
+  it("does not need a bridge on flat, level ground", () => {
+    const flat = { levelAt: () => "flat" as const, heightAt: () => 0.3 };
+    expect(needsBridge(flat, 0, 0)).toBe(false);
+  });
+
+  it("gives each Highway the bridge runs of the ground it crosses, and none on flat ground", () => {
+    const crosses = (x: number) => x >= 60 && x <= 80;
+    const geometry = externalsGeometry(file, villages, BLOCK, (x) => crosses(x));
+    expect(geometry.highways[0]!.bridges).toEqual([{ from: 18 / BRIDGE_SAMPLES, to: 29 / BRIDGE_SAMPLES }]);
+    expect(geometry.highways[1]!.bridges).toEqual([]);
+  });
+});
+
 describe("Lanes beyond road width", () => {
   it("packs each Lane edge to edge on either side of the centre line, so no two Lanes overlap", () => {
     for (const lanes of [1, 2, 3, 6]) {
@@ -95,6 +148,18 @@ describe("Lanes beyond road width", () => {
     expect(highwayWidth(0)).toBe(highwayWidth(1));
     expect(highwayWidth(3)).toBeGreaterThan(highwayWidth(2));
     expect(highwayWidth(2)).toBeCloseTo(MARKING_WIDTH + 4 * LANE_WIDTH, 10);
+  });
+});
+
+describe("a bridged Highway drawn in three.js", () => {
+  it("draws the Lanes and the marking of a Highway, and builds its decks as it is built", () => {
+    const scene = new Scene();
+    const geometry = externalsGeometry(file, villages, BLOCK, (x) => x >= 60 && x <= 80);
+    const layer = new ExternalLayer(scene, geometry, "dark", () => 0);
+    // Two Lanes each way and the centre marking: 4 + 1 meshes for the access Highway.
+    expect(layer.highwayMeshes[0]).toHaveLength(5);
+    layer.update(3 + 2);
+    expect(layer.highwayMeshes[0]!.every((m) => m.visible)).toBe(true);
   });
 });
 
