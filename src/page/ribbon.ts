@@ -1,5 +1,4 @@
-import { SECONDS_PER_DAY } from "../shared/format.js";
-import { type Bin, binSteps, type RibbonData, tooltipFor } from "./ribbon-data.js";
+import { type Bin, binSteps, columnOf, dayText, type RibbonData, tooltipFor } from "./ribbon-data.js";
 import { type Action, COMMIT_SPEEDS, keyAction, type Mode, Player, REAL_SPEEDS } from "./timescale.js";
 
 /** Resolution of the native range input that scrubs the ribbon. */
@@ -95,6 +94,8 @@ export class Ribbon {
     addEventListener("keydown", (e) => {
       // A focused button already turns Space into a click; the keyboard action must not run on top of it.
       if (e.target instanceof HTMLButtonElement && e.key === " ") return;
+      // Browser shortcuts (reload, history back and forward) keep their meaning.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
       const action = keyAction(e.key, e.shiftKey);
       if (!action) return;
       e.preventDefault();
@@ -126,7 +127,7 @@ export class Ribbon {
     caption.textContent = identity?.text ?? "";
     status.textContent = buffer.waiting ? "Loading this part of history…" : "";
 
-    scrubber.value = String(Math.round((player.scale.clock(player.mode, buffer.displayed) / this.end()) * SCRUB_RESOLUTION));
+    scrubber.value = String(Math.round((player.scale.clock(player.mode, buffer.target) / this.end()) * SCRUB_RESOLUTION));
     scrubber.setAttribute("aria-valuetext", `${dayText(dayOf)}, commit ${number} of ${this.data.totalCommits}${buffer.waiting ? ", loading" : ""}`);
     modeReal.setAttribute("aria-pressed", String(player.mode === "real"));
     modeCommit.setAttribute("aria-pressed", String(player.mode === "commit"));
@@ -202,7 +203,7 @@ export class Ribbon {
     const keys = new Float64Array(scale.steps);
     for (let step = 0; step < keys.length; step++) keys[step] = scale.clock(mode, step);
     const bins = binSteps(keys, total, width, (step) => this.data.activityAt(step));
-    this.columns = bins.map((bin) => ({ col: Math.min(width - 1, Math.floor((keys[bin.first]! / total) * width)), bin }));
+    this.columns = bins.map((bin) => ({ col: columnOf(keys[bin.first]!, total, width), bin }));
     this.binAt = new Map(this.columns.map(({ col, bin }) => [col, bin]));
     this.keys = keys;
     this.maxFiles = Math.max(1, ...bins.map((bin) => bin.files));
@@ -230,9 +231,8 @@ export class Ribbon {
     const ink = styles.getPropertyValue("--fg").trim() || "#1d2630";
     const total = this.end();
     const x = (step: number) => (total > 0 ? (player.scale.clock(player.mode, step) / total) * width : 0);
-    const barTop = 0;
     const base = TRACK_HEIGHT - YEAR_STRIP;
-    const barMax = base - barTop - 4;
+    const barMax = base - 4;
 
     // The loaded history is a darker buffer; the rest of the track is the lighter, unloaded part.
     ctx.fillStyle = styles.getPropertyValue("--ribbon-unloaded").trim() || "rgba(127,127,127,0.12)";
@@ -327,7 +327,9 @@ export class Ribbon {
     for (const event of text.identity) line(event);
     tooltip.replaceChildren(...lines);
     tooltip.hidden = false;
-    tooltip.style.left = `${Math.min(rect.width - 8, Math.max(8, col))}px`;
+    // The tooltip is centred on the column, so keep half its width inside the track.
+    const half = tooltip.offsetWidth / 2;
+    tooltip.style.left = `${Math.min(rect.width - half - 8, Math.max(half + 8, col))}px`;
   }
 
   private hideTooltip(): void {
@@ -335,6 +337,3 @@ export class Ribbon {
   }
 }
 
-function dayText(day: number): string {
-  return new Date(day * SECONDS_PER_DAY * 1000).toISOString().slice(0, 10);
-}

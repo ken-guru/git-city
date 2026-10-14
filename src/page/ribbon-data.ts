@@ -246,7 +246,7 @@ function yearTicksOf(commitDays: ArrayLike<number>): YearTick[] {
 export function binSteps(keys: ArrayLike<number>, total: number, width: number, activity: (step: number) => StepActivity): Bin[] {
   const columns = new Map<number, Bin>();
   for (let step = 0; step < keys.length; step++) {
-    const col = Math.min(width - 1, Math.max(0, Math.floor((keys[step]! / total) * width)));
+    const col = columnOf(keys[step]!, total, width);
     let bin = columns.get(col);
     if (!bin) {
       bin = { first: step, last: step, commits: 0, files: 0, districts: new Map() };
@@ -261,7 +261,13 @@ export function binSteps(keys: ArrayLike<number>, total: number, width: number, 
   return [...columns.values()];
 }
 
-function dayText(day: number): string {
+/** The column a clock value falls in, of `width` equal columns over `total`. Empty clocks all fall in column 0. */
+export function columnOf(key: number, total: number, width: number): number {
+  if (!(total > 0)) return 0;
+  return Math.min(width - 1, Math.max(0, Math.floor((key / total) * width)));
+}
+
+export function dayText(day: number): string {
   return new Date(day * SECONDS_PER_DAY * 1000).toISOString().slice(0, 10);
 }
 

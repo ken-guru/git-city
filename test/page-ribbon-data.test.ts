@@ -159,6 +159,15 @@ describe("binSteps", () => {
   });
 });
 
+describe("binSteps with an empty clock", () => {
+  it("puts every Step in one column instead of producing NaN columns", () => {
+    const data = new RibbonData(source, places, colour);
+    const bins = binSteps(Float64Array.from([0, 0, 0, 0, 0]), 0, 10, (step) => data.activityAt(step));
+    expect(bins).toHaveLength(1);
+    expect(bins[0]).toMatchObject({ first: 0, last: 4 });
+  });
+});
+
 describe("tooltipFor", () => {
   it("gives the date, commits, file changes, busiest Districts and identity events by display name", () => {
     const data = new RibbonData(source, places, () => "#abc");
