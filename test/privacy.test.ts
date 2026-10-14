@@ -151,7 +151,7 @@ describe("the final scan", () => {
 
   it("still fails on a hidden name that appears as a whole word", async () => {
     const dir = scratch();
-    writeFileSync(join(dir, "index.html"), "<title>Git City</title>");
+    writeFileSync(join(dir, "notes.txt"), "Git City");
 
     await expect(scanOutput(dir, ["git"])).rejects.toBeInstanceOf(PrivacyError);
   });
@@ -162,6 +162,13 @@ describe("the final scan", () => {
     const { outDir } = await run(repo);
 
     expect(existsSync(join(outDir, "world.bin"))).toBe(true);
+  });
+
+  it("does not scan the page shell, a fixed template whose words are HTML and our own names", async () => {
+    const dir = scratch();
+    writeFileSync(join(dir, "index.html"), `<!doctype html><div id="labels"></div>`);
+
+    await expect(scanOutput(dir, ["labels"])).resolves.toBeUndefined();
   });
 
   it("does not scan the page bundle, which holds our code and no user data", async () => {
@@ -178,8 +185,8 @@ describe("the final scan", () => {
     const root = scratch();
     const pageDir = join(root, "page");
     mkdirSync(pageDir);
-    // Stands in for a leak: the page shell carries the hidden Concept.
-    writeFileSync(join(pageDir, "index.html"), "<!doctype html>Acme");
+    // Stands in for a leak: a page file that is not the fixed shell carries the hidden Concept.
+    writeFileSync(join(pageDir, "notes.txt"), "Acme");
     const outDir = join(root, "git-city-site");
 
     await expect(build({ repoDir: repo.dir, outDir, pageDir })).rejects.toThrow(PrivacyError);
