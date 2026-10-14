@@ -37,6 +37,7 @@ jobs:
       - name: Pack and install globally
         shell: bash
         run: |
+          mkdir -p "$RUNNER_TEMP/pack"
           npm pack --pack-destination "$RUNNER_TEMP/pack"
           npm install -g --prefix "$RUNNER_TEMP/prefix" "$RUNNER_TEMP"/pack/git-city-*.tgz
           # npm on Windows writes an extensionless sh shim next to git-city.cmd; git city needs it.
