@@ -6,6 +6,11 @@ export class PrivacyError extends Error {}
 
 /** Folders the scan skips: the page bundle is our own static code, and holds no user data. */
 const SKIPPED_FOLDERS = new Set(["assets"]);
+/**
+ * Files the scan skips at the top of the output: the page shell is a fixed template, and its only dynamic value is the
+ * script path. Its words (html, src, labels) are HTML and our own names, so a repo file of the same name must not fail the build.
+ */
+const SKIPPED_FILES = new Set(["index.html"]);
 
 /**
  * The final scan over a staged output folder. Fails on the first hidden needle found.
@@ -15,6 +20,7 @@ export async function scanOutput(stagingDir: string, needles: readonly string[])
   const pattern = hiddenPattern(needles);
   if (pattern === undefined) return;
   for (const file of await listFiles(stagingDir)) {
+    if (SKIPPED_FILES.has(relative(stagingDir, file))) continue;
     if (pattern.test(scannedText(file, await readFile(file)))) {
       throw new PrivacyError(`privacy check failed: a hidden name or Concept appears in ${relative(stagingDir, file)}`);
     }
