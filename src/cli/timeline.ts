@@ -77,6 +77,47 @@ export class TimelineBuilder {
     for (const file of [...touched, ...this.scaffolded]) this.updateScaffolding(seq, file, day);
   }
 
+  /** Everything the builder holds, as JSON-safe values, so a run can resume from it exactly. */
+  snapshot(): TimelineSnapshot {
+    return {
+      days: this.days,
+      standing: [...this.standing],
+      alive: this.alive,
+      floors: this.floors,
+      changeDays: this.changeDays,
+      scaffolded: [...this.scaffolded],
+      buildingType: this.buildingType,
+      language: this.language,
+      seed: this.seed,
+      nextFile: this.nextFile,
+      filePaths: this.filePaths,
+      eventCommit: this.eventCommit,
+      eventFile: this.eventFile,
+      eventKind: this.eventKind,
+      eventValue: this.eventValue,
+    };
+  }
+
+  static restore(s: TimelineSnapshot): TimelineBuilder {
+    const b = new TimelineBuilder();
+    b.days.push(...s.days);
+    for (const [path, file] of s.standing) b.standing.set(path, file);
+    b.alive.push(...s.alive);
+    b.floors.push(...s.floors);
+    b.changeDays.push(...s.changeDays.map((days) => [...days]));
+    for (const file of s.scaffolded) b.scaffolded.add(file);
+    b.buildingType.push(...s.buildingType);
+    b.language.push(...s.language);
+    b.seed.push(...s.seed);
+    b.nextFile = s.nextFile;
+    b.filePaths.push(...s.filePaths);
+    b.eventCommit.push(...s.eventCommit);
+    b.eventFile.push(...s.eventFile);
+    b.eventKind.push(...(s.eventKind as EventKind[]));
+    b.eventValue.push(...s.eventValue);
+    return b;
+  }
+
   result() {
     return {
       commitDays: Int32Array.from(this.days),
@@ -126,3 +167,22 @@ export class TimelineBuilder {
 }
 
 export type TimelineData = ReturnType<TimelineBuilder["result"]>;
+
+/** A JSON-safe copy of a TimelineBuilder, written as a cache checkpoint. */
+export interface TimelineSnapshot {
+  days: number[];
+  standing: [string, number][];
+  alive: boolean[];
+  floors: number[];
+  changeDays: number[][];
+  scaffolded: number[];
+  buildingType: number[];
+  language: number[];
+  seed: number[];
+  nextFile: number;
+  filePaths: string[];
+  eventCommit: number[];
+  eventFile: number[];
+  eventKind: number[];
+  eventValue: number[];
+}
