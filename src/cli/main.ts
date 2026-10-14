@@ -8,6 +8,7 @@ import { cacheClear, cacheStatus, CacheError, LockError } from "./cache.js";
 import { ConfigError } from "./config.js";
 import { HistoryError } from "./history.js";
 import { describeSizes } from "./chunks.js";
+import { describeSteps } from "./steps.js";
 import { PrivacyError } from "./privacy.js";
 import { DEFAULT_PORT, DEFAULT_PORT_ATTEMPTS, serve, ServeError } from "./serve.js";
 import { OutputError } from "./write.js";
@@ -110,6 +111,7 @@ async function main(argv: string[]): Promise<number> {
       lines.push(`Near-miss: "${miss.text}" is close to a hidden name or Concept (use --strict to fail on these)`);
     }
     lines.push(`Theme: ${summary.theme}`);
+    lines.push(...describeSteps(summary.steps));
     lines.push(...describeSizes(summary.sizes));
     if (summary.configSources.length > 0) lines.push(`Config: ${summary.configSources.join(", ")}`);
     lines.push(`Run "git-city serve" to watch it.`);

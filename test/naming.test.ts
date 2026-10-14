@@ -5,6 +5,8 @@ import { displayName, encodeStrings, findNearMisses, labelFor, nameFiles } from 
 const config = (rules: Rule[] = [], seed?: string): Config => ({
   rules,
   naming: seed === undefined ? {} : { seed },
+  exclude: [],
+  scale: {},
   sources: [],
 });
 const reveal = (value: string): Rule => ({ target: { kind: "path", value }, action: "reveal" });

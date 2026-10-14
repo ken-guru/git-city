@@ -90,7 +90,7 @@ describe("loadConfig", () => {
   });
 
   it("returns an empty config when no files are given", () => {
-    expect(loadConfig([])).toEqual({ rules: [], naming: {}, sources: [] });
+    expect(loadConfig([])).toEqual({ rules: [], naming: {}, exclude: [], scale: {}, sources: [] });
   });
 
   it("fails clearly on a file that cannot be read", () => {

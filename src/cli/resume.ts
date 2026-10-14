@@ -1,4 +1,4 @@
-import type { CacheSession } from "./cache.js";
+import { type CacheSession, scopeOf } from "./cache.js";
 import { git } from "./git.js";
 import { type CommitRecord, COMMITS_PER_BATCH, HistoryError, type HistoryReport, readCommitBatch } from "./history.js";
 import { Pipeline, type PipelineOptions } from "./pipeline.js";
@@ -19,6 +19,8 @@ export interface PipelineRead {
   replayed: number;
   /** Commits this run read from git; the rest came from the cache. */
   read: number;
+  /** The exclude scope this run used (see scopeOf). */
+  scope: string;
   /** The checkpoint this run resumed from, if any. */
   resumedFrom?: string;
 }
@@ -42,11 +44,12 @@ export async function readPipeline(
   let missingBlobs = 0;
   let start = 0;
   let resumedFrom: string | undefined;
+  const scope = scopeOf(options.exclude);
   const checkpoints = await cache.checkpoints(branch);
   for (let i = checkpoints.length - 1; i >= 0; i--) {
     const checkpoint = checkpoints[i]!;
     const at = position.get(checkpoint.commit);
-    if (at === undefined) continue;
+    if (at === undefined || (checkpoint.scope ?? "") !== scope) continue; // another scope (exclude rules) is never resumed
     const state = await cache.loadState(branch, checkpoint);
     const layout = await cache.loadLayout(branch, checkpoint);
     if (state === undefined || layout === undefined) continue; // a missing layer: fall back to an older checkpoint
@@ -76,6 +79,7 @@ export async function readPipeline(
     replayed: chain.length - start,
     read,
     resumedFrom,
+    scope,
   };
 }
 

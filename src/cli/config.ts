@@ -26,12 +26,19 @@ export type Rule =
 export type RuleAction = Rule["action"];
 export const RULE_ACTIONS: readonly RuleAction[] = ["pseudonym", "reveal", "allow", "category"];
 
+/** The `scale.timeline` setting: `auto` picks the smallest Step that fits; the others pin it (SPEC §9). */
+export const TIMELINE_SETTINGS = ["auto", "commit", "day", "week", "month"] as const;
+export type TimelineSetting = (typeof TIMELINE_SETTINGS)[number];
+
 export interface Config {
   /** Rules in file order: the last matching rule wins. */
   rules: Rule[];
   naming: { seed?: string };
   /** The Theme named in the config. The `--theme` flag wins over it. */
   theme?: string;
+  /** Path globs of files left out of the City, from every config file. */
+  exclude: string[];
+  scale: { timeline?: TimelineSetting };
   /** The files the config was read from, in merge order. */
   sources: string[];
 }
@@ -69,7 +76,21 @@ export function parseConfig(text: string, source: string): Config {
   checkSections(root, source);
   if (root.theme !== undefined && typeof root.theme !== "string") throw new ConfigError(`${source}: "theme" must be a string`);
   const theme = root.theme as string | undefined;
-  return { rules, naming, sources: [source], ...(theme === undefined ? {} : { theme }) };
+  const exclude = root.exclude === undefined ? [] : (root.exclude as string[]);
+  const scale = root.scale === undefined ? {} : parseScale(root.scale, source);
+  return { rules, naming, exclude, scale, sources: [source], ...(theme === undefined ? {} : { theme }) };
+}
+
+function parseScale(value: unknown, source: string): { timeline?: TimelineSetting } {
+  if (!isObject(value)) throw new ConfigError(`${source}: "scale" must be an object`);
+  for (const key of Object.keys(value)) {
+    if (key !== "timeline") throw new ConfigError(`${source}: unknown key "scale.${key}"`);
+  }
+  if (value.timeline === undefined) return {};
+  if (typeof value.timeline !== "string" || !(TIMELINE_SETTINGS as readonly string[]).includes(value.timeline)) {
+    throw new ConfigError(`${source}: "scale.timeline" must be one of ${TIMELINE_SETTINGS.join(", ")}`);
+  }
+  return { timeline: value.timeline as TimelineSetting };
 }
 
 /**
@@ -77,7 +98,7 @@ export function parseConfig(text: string, source: string): Config {
  * so a later file's rules win (the personal config comes last).
  */
 export function loadConfig(paths: readonly string[]): Config {
-  const merged: Config = { rules: [], naming: {}, sources: [] };
+  const merged: Config = { rules: [], naming: {}, exclude: [], scale: {}, sources: [] };
   for (const path of paths) {
     let text: string;
     try {
@@ -89,6 +110,8 @@ export function loadConfig(paths: readonly string[]): Config {
     merged.rules.push(...config.rules);
     merged.naming = { ...merged.naming, ...config.naming };
     if (config.theme !== undefined) merged.theme = config.theme;
+    merged.exclude.push(...config.exclude);
+    merged.scale = { ...merged.scale, ...config.scale };
     merged.sources.push(path);
   }
   return merged;
@@ -158,7 +181,7 @@ function checkSections(root: Record<string, unknown>, source: string): void {
   if (exclude !== undefined && !(Array.isArray(exclude) && exclude.every((item) => typeof item === "string"))) {
     throw new ConfigError(`${source}: "exclude" must be a list of strings`);
   }
-  for (const key of ["externals", "scale", "tuning"] as const) {
+  for (const key of ["externals", "tuning"] as const) {
     if (root[key] !== undefined && !isObject(root[key])) throw new ConfigError(`${source}: "${key}" must be an object`);
   }
 }

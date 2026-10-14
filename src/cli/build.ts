@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CacheSession } from "./cache.js";
+import { CacheSession, scopeOf } from "./cache.js";
 import { loadConfig } from "./config.js";
 import { gitMaybe, git } from "./git.js";
 import { isShallowRepository, resolveTimelineHead } from "./history.js";
@@ -12,11 +12,12 @@ import { seedNumber } from "./namer.js";
 import { type PipelineOptions } from "./pipeline.js";
 import { PrivacyError, scanOutput } from "./privacy.js";
 import { readPipeline, type PipelineRead } from "./resume.js";
-import type { SizeReport } from "./chunks.js";
+import { planChunks, type SizeReport, sizeReport } from "./chunks.js";
 import { type RoadNetwork, buildRoadNetwork } from "./imports/roads.js";
 import { DEFAULT_THEME, hueFor, loadTheme, type Theme } from "./theme.js";
+import { type StepEra, type StepLevel, chooseStepLevel, groupTimeline, PEAK_BUILDINGS_WARNING, peakStanding, planSteps, recentFromFor, stepEras } from "./steps.js";
 import type { WorldLayout } from "../shared/format.js";
-import { writeSite } from "./write.js";
+import { encodeSiteWorld, writeSite } from "./write.js";
 
 /** The pre-built page, shipped at `dist/page/` next to the CLI. */
 export const DEFAULT_PAGE_DIR = fileURLToPath(new URL("../page/", import.meta.url));
@@ -64,6 +65,8 @@ export interface BuildSummary {
   sizes: SizeReport;
   /** The Theme the names and colours came from. */
   theme: string;
+  /** The Steps used, per era of history (SPEC §9). */
+  steps: StepEra[];
 }
 
 export async function build(options: BuildOptions): Promise<BuildSummary> {
@@ -83,8 +86,20 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   const cache = await CacheSession.open(options.repoDir, { fresh: options.fresh, wait: options.wait });
   let read: PipelineRead;
   try {
-    read = await readPipeline(options.repoDir, head, branch, cache, pipelineOptions(options.repoDir, seed, theme));
-    await cache.checkpoint(branch, head, read.pipeline.runState(), read.pipeline.layout.snapshot(), new Set(read.chain), read.missingBlobs);
+    const previous = (await cache.checkpoints(branch)).at(-1);
+    if (previous !== undefined && (previous.scope ?? "") !== scopeOf(config.exclude)) {
+      warnings.push("the exclude rules changed since the last build, so the City is rebuilt in full and its layout changes");
+    }
+    read = await readPipeline(options.repoDir, head, branch, cache, pipelineOptions(options.repoDir, seed, theme, config.exclude));
+    await cache.checkpoint(
+      branch,
+      head,
+      read.pipeline.runState(),
+      read.pipeline.layout.snapshot(),
+      new Set(read.chain),
+      read.missingBlobs,
+      read.scope,
+    );
   } finally {
     await cache.close();
   }
@@ -92,8 +107,9 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     warnings.push(`${read.missingBlobs} file versions could not be read and were counted as empty (missing objects; is this a partial clone?)`);
   }
   const { pipeline } = read;
-  const data = pipeline.timeline.result();
-  const names = nameFiles(data.filePaths, config, { private: options.private });
+  const timeline0 = pipeline.timeline.result();
+  const commits = timeline0.commitDays.length;
+  const names = nameFiles(timeline0.filePaths, config, { private: options.private });
   if (options.strict && names.nearMisses.length > 0) {
     throw new PrivacyError(
       `${names.nearMisses.length} near-miss${names.nearMisses.length === 1 ? "" : "es"} found; --strict fails the build`,
@@ -102,7 +118,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
 
   const layout = pipeline.layout.result();
   const roads = roadsOf(layout, pipeline.graph.districtLinks((path) => pipeline.layout.districtForPath(path)));
-  const widthStep = Uint8Array.from({ length: data.fileCount }, (_, file) => pipeline.layout.stepOf(file));
+  const widthStep = Uint8Array.from({ length: timeline0.fileCount }, (_, file) => pipeline.layout.stepOf(file));
   const places = namePlaces(placeInputs(layout), config, {
     theme,
     seed: seedText,
@@ -110,13 +126,39 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     private: options.private,
   });
 
-  const sizes = await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, worldLayout(layout, roads, seed, widthStep), names.table, places, (staging) =>
-    scanOutput(staging, names.hidden),
+  // Steps: the smallest grouping that fits the budget (or the pinned one). Only the output's commits move.
+  const sizeAt = (level: StepLevel) => {
+    const plan = planSteps(timeline0.commitDays, level, recentFromFor(commits));
+    const timeline = groupTimeline(timeline0, plan);
+    const plans = planChunks(timeline);
+    const worldBytes = encodeSiteWorld(timeline, plans, worldLayout(claimsAtSteps(layout, plan.stepOf), roads, seed, widthStep));
+    return sizeReport(worldBytes, plans);
+  };
+  const choice = chooseStepLevel(config.scale.timeline ?? "auto", commits, sizeAt);
+  warnings.push(...choice.warnings);
+  const plan = planSteps(timeline0.commitDays, choice.level, choice.recentFrom);
+  const timeline = groupTimeline(timeline0, plan);
+  const peak = peakStanding(timeline0.eventKind);
+  if (peak > PEAK_BUILDINGS_WARNING) {
+    warnings.push(
+      `${peak} Buildings stand at once, above ${PEAK_BUILDINGS_WARNING}: the page will lean on level of detail; consider exclude in the config`,
+    );
+  }
+
+  const sizes = await writeSite(
+    outDir,
+    options.pageDir ?? DEFAULT_PAGE_DIR,
+    timeline,
+    worldLayout(claimsAtSteps(layout, plan.stepOf), roads, seed, widthStep),
+    names.table,
+    places,
+    (staging) => scanOutput(staging, names.hidden),
   );
   return {
     branch,
-    commits: data.commitDays.length,
-    files: data.fileCount,
+    commits,
+    files: timeline0.fileCount,
+    steps: stepEras(plan, commits, choice.recentFrom),
     outDir,
     configSources: config.sources,
     revealed: names.revealed,
@@ -127,10 +169,16 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   };
 }
 
-/** The pipeline's options for one run: the City seed, blob text for config files, and the Category and Theme hues. */
-function pipelineOptions(repoDir: string, seed: number, theme: Theme): PipelineOptions {
+/** The layout with each Block's claim moved to the Step its commit belongs to. Positions and Lots are untouched. */
+export function claimsAtSteps(layout: LayoutResult, stepOf: Uint32Array): LayoutResult {
+  return { ...layout, blocks: layout.blocks.map((block) => ({ ...block, claimedAt: stepOf[block.claimedAt]! })) };
+}
+
+/** The pipeline's options for one run: the City seed, blob text for config files, the exclude globs, and the Category and Theme hues. */
+function pipelineOptions(repoDir: string, seed: number, theme: Theme, exclude: string[]): PipelineOptions {
   return {
     seed,
+    exclude,
     readText: readBlobText(repoDir),
     categoryOf: (path) => categoryOf(path),
     hueOf: (role) => hueFor(theme, role),
