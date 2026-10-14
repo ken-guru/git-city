@@ -29,11 +29,12 @@ export interface GraphCommit {
 }
 
 export interface ImportGraphOptions {
-  /** Reads a blob's text. Called only for config files (package.json, tsconfig and jsconfig). */
+  /** Reads a blob's text. Called only for config files (package.json, tsconfig, jsconfig and pyproject.toml). */
   readText: (blob: string) => Promise<string>;
 }
 
-const JSON_FILE = /\.jsonc?$/;
+/** Files whose text is kept for config: JSON (manifests, tsconfigs) and pyproject.toml (Python source roots). */
+const CONFIG_TEXT_FILE = /\.jsonc?$|(^|\/)pyproject\.toml$/;
 /** The `extends` value of a tsconfig text, or undefined when it has none or does not parse. */
 function extendsValue(text: string): string | undefined {
   try {
@@ -47,7 +48,7 @@ function extendsValue(text: string): string | undefined {
 /** Config files whose content changes how any import resolves. */
 function isConfig(path: string): boolean {
   const name = path.slice(path.lastIndexOf("/") + 1);
-  return name === "package.json" || /^(tsconfig|jsconfig)(\..+)?\.json$/.test(name);
+  return name === "package.json" || name === "pyproject.toml" || /^(tsconfig|jsconfig)(\..+)?\.json$/.test(name);
 }
 
 interface FileRecord {
@@ -72,7 +73,7 @@ export interface GraphSnapshot {
 export class ImportGraph {
   private readonly paths = new Set<string>();
   private readonly configText = new Map<string, string>();
-  /** Blob of every JSON file in the commit's tree, so an extended config can be read when it is needed. */
+  /** Blob of every JSON and pyproject.toml file in the commit's tree, so a config can be read when it is needed. */
   private readonly jsonBlobs = new Map<string, string>();
   /** Paths some tsconfig extends: their text is kept, the rest of the JSON is not. */
   private readonly extendedPaths = new Set<string>();
@@ -120,7 +121,7 @@ export class ImportGraph {
     for (const { path, blob, specifiers } of commit.writes) {
       this.paths.add(path);
       changed.add(path);
-      if (JSON_FILE.test(path)) {
+      if (CONFIG_TEXT_FILE.test(path)) {
         // Only the manifests and tsconfigs (and the files they extend) keep their text; other JSON is never read.
         this.jsonBlobs.set(path, blob);
         jsonWritten.push(path);
@@ -220,8 +221,8 @@ export class ImportGraph {
     const record = this.files.get(importer);
     if (!record) return;
     const probes = new Set<string>();
-    for (const { specifier } of record.specifiers) {
-      const resolved = this.resolver.resolve(importer, specifier);
+    for (const { specifier, member } of record.specifiers) {
+      const resolved = this.resolver.resolve(importer, specifier, member);
       for (const probe of resolved.probes) probes.add(probe);
       this.record(importer, resolved.target);
     }

@@ -1,5 +1,6 @@
 import { builtinModules } from "node:module";
 import { parseJsonc } from "../jsonc.js";
+import { pythonSourceRoots, resolvePythonImport } from "./python.js";
 
 /**
  * Import resolution (SPEC §4, Resolve), for TS/JS. A specifier is resolved against one commit's path set
@@ -36,6 +37,8 @@ const SOURCE_EXTENSIONS = [".ts", ".tsx", ".d.ts", ".mts", ".cts", ".js", ".jsx"
 /** A JS-family extension in a specifier maps to the TypeScript source that builds it. */
 const JS_EXTENSION = /\.(js|jsx|mjs|cjs)$/;
 const DECLARATION = /\.d\.ts$/;
+/** A Python source file, whose imports follow Python's rules rather than TypeScript's. */
+const PYTHON_FILE = /\.py$/i;
 const TS_FOR_JS = [".ts", ".tsx", ".d.ts", ".mts", ".cts"];
 /** Output folders that map back to source (`dist/x.js` → `src/x.ts`). */
 const BUILD_DIRS = new Set(["dist", "build", "lib", "out"]);
@@ -49,9 +52,11 @@ export function extendsTarget(configPath: string, value: string): string {
   return normalize(join(dirname(configPath), value));
 }
 
-/** Resolves `specifier` as imported from the file at `fromPath`. */
-export function resolveImport(snapshot: Snapshot, fromPath: string, specifier: string): Resolved {
-  return new ImportResolver(snapshot).resolve(fromPath, specifier);
+/**
+ * Resolves `specifier` as imported from the file at `fromPath`. `member` is a Python `from` import's name, if any.
+ */
+export function resolveImport(snapshot: Snapshot, fromPath: string, specifier: string, member?: string): Resolved {
+  return new ImportResolver(snapshot).resolve(fromPath, specifier, member);
 }
 
 /**
@@ -65,8 +70,8 @@ export class ImportResolver {
     this.core = new Resolver(snapshot);
   }
 
-  resolve(fromPath: string, specifier: string): Resolved {
-    return this.core.resolveWithProbes(fromPath, specifier);
+  resolve(fromPath: string, specifier: string, member?: string): Resolved {
+    return this.core.resolveWithProbes(fromPath, specifier, member);
   }
 
   /** Forgets cached manifests and the workspace map. */
@@ -91,18 +96,26 @@ class Resolver {
   private readonly jsonCache = new Map<string, Record<string, any> | undefined>();
   /** Workspace package names to directories. Built on first use, then shared by every specifier. */
   private workspaceMap: Map<string, string> | undefined;
+  /** Source roots for Python imports. Built on first use, rebuilt with the config. */
+  private pythonRoots: string[] | undefined;
 
   constructor(private readonly snap: Snapshot) {}
 
-  resolveWithProbes(fromPath: string, specifier: string): Resolved {
+  resolveWithProbes(fromPath: string, specifier: string, member?: string): Resolved {
     this.probes = [];
-    const target = this.resolve(fromPath, specifier);
+    const target = PYTHON_FILE.test(fromPath) ? this.python(fromPath, specifier, member) : this.resolve(fromPath, specifier);
     return { target, probes: this.probes };
   }
 
   reset(): void {
     this.jsonCache.clear();
     this.workspaceMap = undefined;
+    this.pythonRoots = undefined;
+  }
+
+  private python(fromPath: string, specifier: string, member: string | undefined): Resolution | undefined {
+    this.pythonRoots ??= pythonSourceRoots(this.snap.paths, (path) => this.snap.read(path));
+    return resolvePythonImport({ exists: (path) => this.exists(path), roots: this.pythonRoots }, fromPath, specifier, member);
   }
 
   private resolve(fromPath: string, specifier: string): Resolution | undefined {
