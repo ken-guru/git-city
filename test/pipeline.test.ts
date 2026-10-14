@@ -28,6 +28,7 @@ function write(path: string, imports: string[] = []): CommitRecord["writes"][num
 function commitOf(day: number, writes: CommitRecord["writes"], deleted: string[] = []): CommitRecord {
   return {
     day,
+    seconds: day * 86_400,
     added: writes.map((w) => w.path),
     deleted,
     modified: [],

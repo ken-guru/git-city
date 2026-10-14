@@ -23,6 +23,8 @@ import { buildingTypeOf, categoryOf, floorsForPath, languageOf, seedFor, TUNING 
  */
 export class TimelineBuilder {
   private readonly days: number[] = [];
+  /** Per commit: its time, in whole seconds since 1970 (see CommitRecord). */
+  private readonly seconds: number[] = [];
   private readonly standing = new Map<string, number>();
   /** Per file id: whether it still stands. */
   private readonly alive: boolean[] = [];
@@ -59,6 +61,7 @@ export class TimelineBuilder {
     const seq = this.days.length;
     const day = commit.day;
     this.days.push(day);
+    this.seconds.push(commit.seconds);
     const change: TimelineChange = { added: [], deleted: [], moved: [] };
 
     // A rename whose old path does not stand is not a rename here: its new path is simply added.
@@ -142,6 +145,7 @@ export class TimelineBuilder {
   snapshot(): TimelineSnapshot {
     return {
       days: this.days,
+      seconds: this.seconds,
       standing: [...this.standing],
       alive: this.alive,
       floors: this.floors,
@@ -169,6 +173,7 @@ export class TimelineBuilder {
   static restore(s: TimelineSnapshot): TimelineBuilder {
     const b = new TimelineBuilder();
     appendAll(b.days, s.days);
+    appendAll(b.seconds, s.seconds);
     for (const [path, file] of s.standing) b.standing.set(path, file);
     appendAll(b.alive, s.alive);
     appendAll(b.floors, s.floors);
@@ -196,6 +201,7 @@ export class TimelineBuilder {
   result() {
     return {
       commitDays: Int32Array.from(this.days),
+      commitSeconds: Uint32Array.from(this.seconds),
       /** One commit per Step until the Timeline is grouped into Steps (see steps.ts). */
       stepCommits: Uint32Array.from(this.days, () => 1),
       fileCount: this.nextFile,
@@ -307,6 +313,7 @@ export type TimelineChange = Required<Omit<LayoutChange, "widths">>;
 /** A JSON-safe copy of a TimelineBuilder, written as a cache checkpoint. */
 export interface TimelineSnapshot {
   days: number[];
+  seconds: number[];
   standing: [string, number][];
   alive: boolean[];
   floors: number[];

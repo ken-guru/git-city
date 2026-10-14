@@ -36,7 +36,7 @@ A flag always beats the config for the same setting.
 | `naming.seed` | string | Overrides the seed for Generated names. The `--seed` flag wins over it. |
 | `contributors` | string | `off` (default), `anonymous`, `generated` or `real`. Checked, but not yet applied by this release. |
 | `commitMessages` | boolean | Whether commit messages appear. Default `false`. Checked, but not yet applied by this release. |
-| `exactTimes` | boolean | Whether dates show exact times instead of the day. Default `false`. Checked, but not yet applied by this release. |
+| `exactTimes` | boolean | Whether the page shows each Step's time of day (UTC) instead of its day. Default `false`, which keeps dates to the day. |
 | `theme` | string | The Theme name: `modern` (default) or `medieval`. The `--theme` flag wins over it. |
 | `externals` | object | Grouping overrides for External Dependencies, where the grouping threshold (3 to 5) is planned. Free-form for now; checked to be an object. |
 | `exclude` | list of strings | Path globs of files left out of the City. From both config files. |

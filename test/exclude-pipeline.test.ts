@@ -25,6 +25,7 @@ function commit(day: number, change: Partial<Omit<CommitRecord, "day">> & { path
   const { paths = [], ...rest } = change;
   return {
     day,
+    seconds: day * 86_400,
     added: paths,
     deleted: [],
     modified: [],
@@ -55,6 +56,7 @@ describe("Pipeline with exclude globs", () => {
         commit(1, { paths: ["src/a.ts"] }),
         {
           day: 2,
+          seconds: 2 * 86_400,
           added: ["vendor/a.ts"],
           deleted: ["src/a.ts"],
           modified: [],
@@ -74,6 +76,7 @@ describe("Pipeline with exclude globs", () => {
         commit(1, { paths: ["vendor/a.ts"] }),
         {
           day: 2,
+          seconds: 2 * 86_400,
           added: ["src/a.ts"],
           deleted: ["vendor/a.ts"],
           modified: [],

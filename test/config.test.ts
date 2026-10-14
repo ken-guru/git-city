@@ -78,6 +78,18 @@ describe("parseConfig", () => {
   });
 });
 
+describe("exactTimes", () => {
+  it("is read from the config, and the personal file's setting wins", () => {
+    expect(parseConfig(`{ "exactTimes": true }`, "x").exactTimes).toBe(true);
+    expect(parseConfig(`{}`, "x").exactTimes).toBeUndefined();
+
+    const shared = file("git-city.config.jsonc", `{ "exactTimes": true }`);
+    const personal = file("config.jsonc", `{ "exactTimes": false }`);
+    expect(loadConfig([shared, personal]).exactTimes).toBe(false);
+    expect(loadConfig([shared]).exactTimes).toBe(true);
+  });
+});
+
 describe("loadConfig", () => {
   it("merges files in the order given, so later rules come last", () => {
     const shared = file("git-city.config.jsonc", `{ "rules": [{ "path": "a/**", "action": "reveal" }] }`);
@@ -90,7 +102,7 @@ describe("loadConfig", () => {
   });
 
   it("returns an empty config when no files are given", () => {
-    expect(loadConfig([])).toEqual({ rules: [], naming: {}, exclude: [], scale: {}, sources: [] });
+    expect(loadConfig([])).toEqual({ rules: [], naming: {}, exclude: [], scale: {}, exactTimes: false, sources: [] });
   });
 
   it("fails clearly on a file that cannot be read", () => {

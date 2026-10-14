@@ -10,7 +10,8 @@ is and is not in the output, how to check it, and what risks remain.
   Keep" stands for a Module, not for a real directory.
 - **Labels** for Buildings, made from the type and birth order, such as "TypeScript file 412". They identify nothing
   outside the City.
-- **Timing** to the day: when Buildings appeared, grew and were removed.
+- **Timing** to the day: when Buildings appeared, grew and were removed. With `exactTimes` in config, the time of day
+  (UTC) is shown too.
 - **Shape**: how many Buildings there are, how large they get, and the connections between them (Roads and Highways).
 - **Commit sequence numbers**, not hashes.
 - **Names you chose to reveal**, and the Pseudonyms you set in config.
@@ -27,7 +28,7 @@ By default, none of the following are in the output:
 - Contributors. They are off by default. The `contributors` setting is checked but not yet applied by this release, so
   they never appear.
 - Commit messages. Off by default, and the `commitMessages` setting is not yet applied by this release.
-- Exact times of day. Off by default, and the `exactTimes` setting is not yet applied by this release.
+- Exact times of day. Off by default: they appear only when `exactTimes` is set in config.
 - Raw line or importer counts.
 - The mapping from Real names to Pseudonyms or Generated names.
 

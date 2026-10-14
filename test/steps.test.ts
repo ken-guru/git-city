@@ -16,7 +16,7 @@ function day(iso: string): number {
 }
 
 function commit(d: number, change: Partial<Omit<CommitRecord, "day">> = {}): CommitRecord {
-  return { day: d, added: [], deleted: [], modified: [], writes: [], ...change };
+  return { day: d, seconds: d * 86_400, added: [], deleted: [], modified: [], writes: [], ...change };
 }
 
 function run(commits: CommitRecord[]) {
