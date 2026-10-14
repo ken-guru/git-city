@@ -1,5 +1,6 @@
 import { EVENT_BLOCK_OWNER, EVENT_DISTRICT_MERGE, EVENT_DISTRICT_SPLIT, EVENT_ROAD_BUILT, EVENT_ROAD_LANES } from "../shared/format.js";
 import type { CommitRecord } from "./history.js";
+import { ExternalRegistry, type PlanOptions, type RegistrySnapshot } from "./imports/externals.js";
 import { ImportGraph, type GraphSnapshot, widthStepFor } from "./imports/graph.js";
 import { buildRoadNetwork, type RoadNetwork } from "./imports/roads.js";
 import { LayoutBuilder, type LayoutChange, type LayoutOptions, type LayoutSnapshot } from "./layout.js";
@@ -48,6 +49,8 @@ export interface PipelineOptions {
   readText: (blob: string) => Promise<string>;
   /** `exclude` globs: matching paths are left out of the City entirely (config, SPEC §10). */
   exclude?: string[];
+  /** The External City threshold and grouping overrides (config `externals`). */
+  externals?: PlanOptions;
   /** The layout's Category and hue functions (see LayoutOptions). */
   categoryOf?: LayoutOptions["categoryOf"];
   hueOf?: LayoutOptions["hueOf"];
@@ -62,6 +65,7 @@ export interface RunState {
   timeline: TimelineSnapshot;
   graph: GraphSnapshot;
   roads: RoadHistorySnapshot;
+  externals: RegistrySnapshot;
 }
 
 export class Pipeline {
@@ -76,6 +80,7 @@ export class Pipeline {
     readonly graph: ImportGraph,
     readonly layout: LayoutBuilder,
     readonly roads: RoadHistory,
+    readonly externals: ExternalRegistry,
   ) {
     this.excluded = pathExcluder(options.exclude ?? []);
     this.hasExclusions = (options.exclude?.length ?? 0) > 0;
@@ -88,6 +93,7 @@ export class Pipeline {
       new ImportGraph({ readText: options.readText }),
       new LayoutBuilder(layoutOptions(options)),
       new RoadHistory(),
+      new ExternalRegistry(options.externals),
     );
   }
 
@@ -101,12 +107,18 @@ export class Pipeline {
       ImportGraph.restore({ readText: options.readText }, run.graph),
       restoredLayout,
       RoadHistory.restore(run.roads),
+      ExternalRegistry.restore(options.externals ?? {}, run.externals),
     );
   }
 
   /** The state to checkpoint for the Timeline, the graph and the Road history, as JSON-safe values. */
   runState(): RunState {
-    return { timeline: this.timeline.snapshot(), graph: this.graph.snapshot(), roads: this.roads.snapshot() };
+    return {
+      timeline: this.timeline.snapshot(),
+      graph: this.graph.snapshot(),
+      roads: this.roads.snapshot(),
+      externals: this.externals.snapshot(),
+    };
   }
 
   /** Applies one commit to all of them. Every commit gives the layout a change, so its sequence numbers are commit numbers. */
@@ -117,6 +129,11 @@ export class Pipeline {
       writes: record.writes.map((w) => ({ path: w.path, blob: w.blob, specifiers: w.facts.imports })),
       deleted: record.deleted,
     });
+    // The External Dependencies this commit's manifests added and removed, dated to this commit (0-based, as the Steps are).
+    const commit = this.timeline.commits() - 1;
+    const declarations = this.graph.takeDeclarationChanges();
+    for (const d of declarations.removed) this.externals.undeclare(commit, d);
+    for (const d of declarations.added) this.externals.declare(commit, d);
 
     // Each file whose fan-in may have changed, or that arrived or moved in this commit, gets its width step re-read.
     const candidates = new Set<string>([...touched, ...change.added.map((a) => a.path), ...change.moved.map((m) => m.to)]);

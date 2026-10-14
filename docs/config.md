@@ -37,6 +37,9 @@ A flag always beats the config for the same setting.
 | `contributors` | string | `off` (default), `anonymous`, `generated` or `real`. Checked, but not yet applied by this release. |
 | `commitMessages` | boolean | Whether commit messages appear. Default `false`. Checked, but not yet applied by this release. |
 | `exactTimes` | boolean | Whether the page shows each Step's time of day (UTC) instead of its day. Default `false`, which keeps dates to the day. |
+| `externals` | object | Settings for External Cities: how External Dependencies group on the horizon. |
+| `externals.threshold` | integer | The smallest group that gets its own External City, from 3 to 5. Default 3. |
+| `externals.groups` | object | Maps a dependency's name to the group it joins, overriding the automatic grouping. |
 | `theme` | string | The Theme name: `modern` (default) or `medieval`. The `--theme` flag wins over it. |
 | `externals` | object | Grouping overrides for External Dependencies, where the grouping threshold (3 to 5) is planned. Free-form for now; checked to be an object. |
 | `exclude` | list of strings | Path globs of files left out of the City. From both config files. |
