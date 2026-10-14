@@ -30,8 +30,12 @@ export function lifetimes(chunk: Chunk, fileCount: number): { birth: Float64Arra
   return { birth, death };
 }
 
-/** A file's fixed spot on a square grid big enough for every file the Timeline ever holds. */
-export function gridSlot(file: number, fileCount: number): { column: number; row: number } {
-  const columns = Math.max(1, Math.ceil(Math.sqrt(fileCount)));
+/** Columns of a square grid big enough for every file the Timeline ever holds. */
+export function gridColumns(fileCount: number): number {
+  return Math.max(1, Math.ceil(Math.sqrt(fileCount)));
+}
+
+/** A file's fixed spot on the grid. Stand-in for Lots until the layout ticket places them in the CLI. */
+export function gridSlot(file: number, columns: number): { column: number; row: number } {
   return { column: file % columns, row: Math.floor(file / columns) };
 }

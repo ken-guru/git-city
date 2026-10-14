@@ -13,14 +13,31 @@ import {
   WebGLRenderer,
 } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { decodeChunk, decodeWorld, FormatVersionError, type World } from "../shared/format.js";
-import { gridSlot, lifetimes, scaleAt, TRANSITION_COMMITS } from "./state.js";
+import { decodeChunk, decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
+import { gridColumns, gridSlot, lifetimes, scaleAt, TRANSITION_COMMITS } from "./state.js";
 
-/** Tuning values for the walking skeleton. */
-const COMMITS_PER_SECOND = 2;
-const LOT_SPACING = 1.5;
-const BOX_FOOTPRINT = 1;
-const BOX_HEIGHT = 1;
+/** Tuning values for the walking skeleton. The player and Building tickets replace them. */
+const TUNING = {
+  commitsPerSecond: 2,
+  lotSpacing: 1.5,
+  boxFootprint: 1,
+  boxHeight: 1,
+  groundMargin: 4,
+  cameraFov: 45,
+  /** Camera offset from the grid centre, as a multiple of the grid's extent plus a fixed distance. */
+  cameraOffset: { x: [0.9, 4], y: [0.8, 4], z: [1.1, 6] },
+  skyLight: 1.6,
+  sunLight: 1.4,
+  sunDirection: [1, 2, 1.5],
+} as const;
+
+const PALETTE = {
+  light: { background: 0xe9eef2, ground: 0xc9d3db },
+  dark: { background: 0x10161c, ground: 0x26313b },
+  sky: 0xffffff,
+  skyGround: 0x445566,
+  box: 0x5b8cc4,
+} as const;
 
 const notice = document.getElementById("notice")!;
 const player = document.getElementById("player")!;
@@ -69,34 +86,35 @@ async function main() {
 function play(world: World, { birth, death }: ReturnType<typeof lifetimes>) {
   const commitCount = world.commitDays.length;
   const endTime = commitCount - 1 + TRANSITION_COMMITS;
-  const columns = Math.max(1, Math.ceil(Math.sqrt(world.fileCount)));
-  const extent = columns * LOT_SPACING;
+  const columns = gridColumns(world.fileCount);
+  const extent = columns * TUNING.lotSpacing;
 
   const renderer = new WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   document.body.prepend(renderer.domElement);
 
   const scene = new Scene();
-  const dark = matchMedia("(prefers-color-scheme: dark)").matches;
-  scene.background = new Color(dark ? 0x10161c : 0xe9eef2);
-  scene.add(new HemisphereLight(0xffffff, 0x445566, 1.6));
-  const sun = new DirectionalLight(0xffffff, 1.4);
-  sun.position.set(1, 2, 1.5);
+  const colours = matchMedia("(prefers-color-scheme: dark)").matches ? PALETTE.dark : PALETTE.light;
+  scene.background = new Color(colours.background);
+  scene.add(new HemisphereLight(PALETTE.sky, PALETTE.skyGround, TUNING.skyLight));
+  const sun = new DirectionalLight(PALETTE.sky, TUNING.sunLight);
+  sun.position.set(...TUNING.sunDirection);
   scene.add(sun);
 
-  const ground = new Mesh(new PlaneGeometry(extent + 4, extent + 4), new MeshLambertMaterial({ color: dark ? 0x26313b : 0xc9d3db }));
+  const ground = new Mesh(new PlaneGeometry(extent + TUNING.groundMargin, extent + TUNING.groundMargin), new MeshLambertMaterial({ color: colours.ground }));
   ground.rotation.x = -Math.PI / 2;
   scene.add(ground);
 
   // One instance per file; boxes grow up from the ground, so the unit box sits on y = 0.
-  const box = new BoxGeometry(BOX_FOOTPRINT, BOX_HEIGHT, BOX_FOOTPRINT).translate(0, BOX_HEIGHT / 2, 0);
-  const boxes = new InstancedMesh(box, new MeshLambertMaterial({ color: 0x5b8cc4, flatShading: true }), world.fileCount);
+  const box = new BoxGeometry(TUNING.boxFootprint, TUNING.boxHeight, TUNING.boxFootprint).translate(0, TUNING.boxHeight / 2, 0);
+  const boxes = new InstancedMesh(box, new MeshLambertMaterial({ color: PALETTE.box, flatShading: true }), world.fileCount);
   scene.add(boxes);
-  const origin = ((columns - 1) * LOT_SPACING) / 2;
+  const origin = ((columns - 1) * TUNING.lotSpacing) / 2;
   const matrix = new Matrix4();
 
-  const camera = new PerspectiveCamera(45, 1, 0.1, extent * 20 + 100);
-  camera.position.set(extent * 0.9 + 4, extent * 0.8 + 4, extent * 1.1 + 6);
+  const camera = new PerspectiveCamera(TUNING.cameraFov, 1, 0.1, extent * 20 + 100);
+  const { x, y, z } = TUNING.cameraOffset;
+  camera.position.set(extent * x[0] + x[1], extent * y[0] + y[1], extent * z[0] + z[1]);
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
@@ -124,14 +142,14 @@ function play(world: World, { birth, death }: ReturnType<typeof lifetimes>) {
   function draw(t: number) {
     for (let file = 0; file < world.fileCount; file++) {
       const s = scaleAt(birth[file]!, death[file]!, t);
-      const { column, row } = gridSlot(file, world.fileCount);
+      const { column, row } = gridSlot(file, columns);
       // A scale of 0 collapses the instance entirely rather than flattening it onto the ground.
-      matrix.makeScale(s, s, s).setPosition(column * LOT_SPACING - origin, 0, row * LOT_SPACING - origin);
+      matrix.makeScale(s, s, s).setPosition(column * TUNING.lotSpacing - origin, 0, row * TUNING.lotSpacing - origin);
       boxes.setMatrixAt(file, matrix);
     }
     boxes.instanceMatrix.needsUpdate = true;
     const commit = Math.min(commitCount - 1, Math.max(0, Math.floor(t)));
-    const day = new Date(world.commitDays[commit]! * 86_400_000).toISOString().slice(0, 10);
+    const day = new Date(world.commitDays[commit]! * SECONDS_PER_DAY * 1000).toISOString().slice(0, 10);
     status.textContent = `Commit ${commit + 1} of ${commitCount} · ${day}`;
   }
 
@@ -139,7 +157,7 @@ function play(world: World, { birth, death }: ReturnType<typeof lifetimes>) {
     const seconds = Math.min(0.1, (now - last) / 1000);
     last = now;
     if (playing) {
-      time = Math.min(endTime, time + seconds * COMMITS_PER_SECOND);
+      time = Math.min(endTime, time + seconds * TUNING.commitsPerSecond);
       if (time >= endTime) setPlaying(false);
     }
     draw(time);

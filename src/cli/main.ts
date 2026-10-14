@@ -84,9 +84,10 @@ class UsageError extends Error {}
 main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (e: unknown) => {
-    const known = e instanceof HistoryError || e instanceof OutputError || e instanceof UsageError || (e as { code?: string }).code?.startsWith("ERR_PARSE_ARGS");
-    process.stderr.write(`git-city: ${known ? (e as Error).message : (e as Error).stack ?? String(e)}\n`);
-    if (e instanceof UsageError || (e as { code?: string }).code?.startsWith("ERR_PARSE_ARGS")) process.stderr.write(`Try "git-city --help".\n`);
+    const usage = e instanceof UsageError || (e as { code?: string }).code?.startsWith("ERR_PARSE_ARGS") === true;
+    const expected = usage || e instanceof HistoryError || e instanceof OutputError;
+    process.stderr.write(`git-city: ${expected ? (e as Error).message : ((e as Error).stack ?? String(e))}\n`);
+    if (usage) process.stderr.write(`Try "git-city --help".\n`);
     process.exit(1);
   },
 );

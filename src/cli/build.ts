@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readHistory, resolveTimeline } from "./history.js";
+import { readHistory, resolveTimelineHead } from "./history.js";
 import { TimelineBuilder } from "./timeline.js";
 import { writeSite } from "./write.js";
 
@@ -23,10 +23,10 @@ export interface BuildSummary {
 
 export async function build(options: BuildOptions): Promise<BuildSummary> {
   const outDir = resolve(options.outDir);
-  const timeline = await resolveTimeline(options.repoDir, options.branch);
+  const { head, branch } = await resolveTimelineHead(options.repoDir, options.branch);
   const builder = new TimelineBuilder();
-  for await (const commit of readHistory(options.repoDir, timeline.head)) builder.add(commit);
+  for await (const commit of readHistory(options.repoDir, head)) builder.add(commit);
   const data = builder.result();
   await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data);
-  return { branch: timeline.branch, commits: data.commitDays.length, files: data.fileCount, outDir };
+  return { branch, commits: data.commitDays.length, files: data.fileCount, outDir };
 }

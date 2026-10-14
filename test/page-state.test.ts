@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { EVENT_ADD, EVENT_DELETE } from "../src/shared/format.js";
-import { gridSlot, lifetimes, scaleAt } from "../src/page/state.js";
+import { gridColumns, gridSlot, lifetimes, scaleAt } from "../src/page/state.js";
 
 describe("page time-state", () => {
   it("grows a box in as its commit plays and shrinks it out when deleted", () => {
@@ -39,8 +39,10 @@ describe("page time-state", () => {
   });
 
   it("gives every file its own spot on a square grid", () => {
-    const slots = Array.from({ length: 10 }, (_, file) => gridSlot(file, 10));
+    const columns = gridColumns(10);
+    const slots = Array.from({ length: 10 }, (_, file) => gridSlot(file, columns));
 
+    expect(columns).toBe(4);
     expect(slots[0]).toEqual({ column: 0, row: 0 });
     expect(slots[3]).toEqual({ column: 3, row: 0 });
     expect(slots[4]).toEqual({ column: 0, row: 1 });

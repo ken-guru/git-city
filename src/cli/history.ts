@@ -1,6 +1,6 @@
+import { SECONDS_PER_DAY } from "../shared/format.js";
 import { gitMaybe, gitStream } from "./git.js";
 
-const SECONDS_PER_DAY = 86_400;
 
 /** One commit on the Timeline, with its net change against its first parent. */
 export interface CommitRecord {
@@ -14,7 +14,7 @@ export interface CommitRecord {
 
 export class HistoryError extends Error {}
 
-export interface Timeline {
+export interface TimelineHead {
   /** The full hash of the Timeline's newest commit. */
   head: string;
   /** The branch name the Timeline was read from, for messages. */
@@ -25,7 +25,7 @@ export interface Timeline {
  * Picks the Timeline: `branch` if given, otherwise the default branch
  * (the one `origin/HEAD` names, else the checked-out branch).
  */
-export async function resolveTimeline(repoDir: string, branch?: string): Promise<Timeline> {
+export async function resolveTimelineHead(repoDir: string, branch?: string): Promise<TimelineHead> {
   if (!(await gitMaybe(repoDir, ["rev-parse", "--git-dir"]))) throw new HistoryError(`not a git repository: ${repoDir}`);
 
   let name = branch;

@@ -8,7 +8,8 @@ export const FORMAT_VERSION = 1;
 
 const WORLD_MAGIC = 0x57435447; // "GTCW"
 const CHUNK_MAGIC = 0x43435447; // "GTCC"
-const HASH_BYTES = 8;
+export const CHUNK_HASH_BYTES = 8;
+export const SECONDS_PER_DAY = 86_400;
 
 export const EVENT_ADD = 1;
 export const EVENT_DELETE = 2;
@@ -35,7 +36,10 @@ export interface World {
 export interface Chunk {
   formatVersion: number;
   firstCommit: number;
-  /** Files standing just before `firstCommit`. */
+  /**
+   * The snapshot at the chunk's first commit: files standing as that commit begins, before its own events.
+   * Replaying the events from there reaches any commit in the chunk.
+   */
   snapshot: Uint32Array;
   eventCommit: Uint32Array;
   eventFile: Uint32Array;
@@ -54,7 +58,7 @@ export function chunkName(index: number, hash: Uint8Array): string {
 }
 
 export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { chunks: { firstCommit: number; hash: Uint8Array }[] }): Uint8Array {
-  const w = new Writer(20 + world.commitDays.length * 4 + world.chunks.length * (4 + HASH_BYTES));
+  const w = new Writer(20 + world.commitDays.length * 4 + world.chunks.length * (4 + CHUNK_HASH_BYTES));
   w.u32(WORLD_MAGIC);
   w.u32(FORMAT_VERSION);
   w.u32(world.commitDays.length);
@@ -62,7 +66,7 @@ export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { c
   w.u32(world.chunks.length);
   for (const day of world.commitDays) w.i32(day);
   for (const chunk of world.chunks) {
-    if (chunk.hash.length !== HASH_BYTES) throw new Error(`chunk hash must be ${HASH_BYTES} bytes`);
+    if (chunk.hash.length !== CHUNK_HASH_BYTES) throw new Error(`chunk hash must be ${CHUNK_HASH_BYTES} bytes`);
     w.u32(chunk.firstCommit);
     w.bytes(chunk.hash);
   }
@@ -79,7 +83,7 @@ export function decodeWorld(bytes: Uint8Array): World {
   const chunks: ChunkRef[] = [];
   for (let i = 0; i < chunkCount; i++) {
     const firstCommit = r.u32();
-    chunks.push({ firstCommit, name: chunkName(i, r.bytes(HASH_BYTES)) });
+    chunks.push({ firstCommit, name: chunkName(i, r.bytes(CHUNK_HASH_BYTES)) });
   }
   return { formatVersion: r.formatVersion, commitDays, fileCount, chunks };
 }

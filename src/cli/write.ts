@@ -2,10 +2,8 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { chunkName, encodeChunk, encodeWorld } from "../shared/format.js";
+import { CHUNK_HASH_BYTES, chunkName, encodeChunk, encodeWorld } from "../shared/format.js";
 import type { TimelineData } from "./timeline.js";
-
-const CHUNK_HASH_BYTES = 8;
 
 export class OutputError extends Error {}
 
