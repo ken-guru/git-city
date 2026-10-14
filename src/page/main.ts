@@ -1,7 +1,10 @@
 import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, PerspectiveCamera, PlaneGeometry, Scene, WebGLRenderer } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { type Chunk, decodeWorld, FormatVersionError, type World } from "../shared/format.js";
+import { type Chunk, decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
+import { type ExternalCitiesFile, parseExternalCities } from "../shared/externals.js";
 import { type PlacesFile, parsePlaces } from "../shared/places.js";
+import { ExternalLayer } from "./externals.js";
+import { externalsGeometry, needsBridge } from "./externals-geometry.js";
 import { CityBuildings } from "./buildings.js";
 import { addCountryside, type CountrysideHandle } from "./countryside.js";
 import { BlockLayer, blockPaving } from "./blocks.js";
@@ -92,7 +95,14 @@ async function main() {
   } catch (e) {
     console.warn("District names could not be loaded", e);
   }
-  const onChunk = play(world, timelines, stream, first, places);
+  // Without externals.json the City still plays, just without the horizon and the External Cities.
+  let externals: ExternalCitiesFile | undefined;
+  try {
+    externals = parseExternalCities(new TextDecoder().decode(await fetchBytes("externals.json", { cache: "no-store" })));
+  } catch (e) {
+    console.warn("External Cities could not be loaded", e);
+  }
+  const onChunk = play(world, timelines, stream, first, places, externals);
   stream
     .loadAll((index, chunk) => {
       if (index > 0) {
@@ -107,7 +117,16 @@ async function main() {
 }
 
 /** Builds the City and its player. Returns the hook that feeds each later chunk to the ribbon's data. */
-function play(world: World, timelines: Timelines, stream: ChunkStream, first: Chunk, places?: PlacesFile): (chunk: Chunk) => void {
+function play(
+  world: World,
+  timelines: Timelines,
+  stream: ChunkStream,
+  first: Chunk,
+  places?: PlacesFile,
+  externals?: ExternalCitiesFile,
+): (chunk: Chunk) => void {
+  const commitCount = world.commitDays.length;
+  const status = document.getElementById("status") as HTMLElement;
   // The City's extent is set by its Blocks: the layout places them all, so the page frames what it has.
   const extent = cityExtent(world);
   const theme = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
@@ -158,6 +177,18 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, first: Ch
     theme,
     timelines.roads,
   );
+
+  // The horizon, the Highways and the External Cities, from the CLI's externals.json, over the Countryside's terrain.
+  const externalLayer = externals
+    ? new ExternalLayer(
+        scene,
+        externalsGeometry(externals, villageSites(world), BLOCK_WORLD, (x, z) =>
+          needsBridge(countryside.land, Math.round(x / BLOCK_WORLD), Math.round(z / BLOCK_WORLD)),
+        ),
+        theme,
+        (x, z) => countryside.land.heightAt(x / BLOCK_WORLD, z / BLOCK_WORLD),
+      )
+    : undefined;
 
   const city = new CityBuildings(
     scene,
@@ -221,8 +252,17 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, first: Ch
     const rate = player.stepsPerSecond();
     const duration = durationFor(rate);
     city.update(t, rate, camera.position);
+    externalLayer?.update(t);
     blockLayer.update(t, duration, camera.position, detail.massFar);
     roadLayer.update(t, duration);
+    const commit = Math.min(commitCount - 1, Math.max(0, Math.floor(t)));
+    // Exact times are opt-in (SPEC §8): with them the label shows the time of day, in UTC, else the day.
+    const when = world.commitSeconds
+      ? `${new Date(world.commitSeconds[commit]! * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC`
+      : new Date(world.commitDays[commit]! * SECONDS_PER_DAY * 1000).toISOString().slice(0, 10);
+    status.textContent = Math.floor(t) > stream.loadedThrough()
+      ? "Loading this part of history…"
+      : `Commit ${commit + 1} of ${commitCount} · ${when}`;
   }
 
   let last = performance.now();

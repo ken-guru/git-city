@@ -20,6 +20,16 @@ export interface Theme {
 
 export class ThemeError extends Error {}
 
+/**
+ * The built-in palette: the hue of every Role and the fallback, as in the modern Theme (SPEC §8). A Theme that
+ * omits its palette takes these hues.
+ */
+export const DEFAULT_PALETTE: Record<ThemeKey, { hue: number }> = {
+  tests: { hue: 42 }, docs: { hue: 270 }, api: { hue: 28 }, ui: { hue: 340 }, auth: { hue: 355 }, data: { hue: 15 },
+  cli: { hue: 245 }, infra: { hue: 205 }, utils: { hue: 38 }, core: { hue: 215 }, config: { hue: 180 }, build: { hue: 220 },
+  fallback: { hue: 40 },
+};
+
 /** The Themes that ship with GitCity, in `themes/` at the package root. */
 export const BUILT_IN_THEMES = ["modern", "medieval"] as const;
 export const DEFAULT_THEME = "modern";
@@ -54,7 +64,8 @@ export function validateTheme(value: unknown): Theme {
   const display = object(value.display, "display");
   const wordPieces = object(value.wordPieces, "wordPieces");
   const roleNouns = object(value.roleNouns, "roleNouns");
-  const palette = object(value.palette, "palette");
+  // A Theme may leave its palette out: the built-in palette then gives every Role its hue.
+  const palette = value.palette === undefined ? DEFAULT_PALETTE : object(value.palette, "palette");
 
   for (const key of THEME_KEYS) {
     const noun = roleNouns[key];

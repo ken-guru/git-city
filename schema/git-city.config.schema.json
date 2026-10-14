@@ -23,7 +23,14 @@
     "commitMessages": { "type": "boolean" },
     "exactTimes": { "type": "boolean" },
     "theme": { "type": "string" },
-    "externals": { "type": "object" },
+    "externals": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "threshold": { "type": "integer", "minimum": 3, "maximum": 5 },
+        "groups": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } }
+      }
+    },
     "exclude": { "type": "array", "items": { "type": "string" } },
     "scale": {
       "type": "object",

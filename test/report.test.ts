@@ -15,6 +15,7 @@ const summary: BuildSummary = {
   sizes: { chunks: 1, worldBytes: 100, firstPlayBytes: 2048, totalBytes: 4096 },
   theme: "modern",
   steps: [],
+  externals: { cities: [], dependencies: [] },
   outputIgnored: false,
 };
 

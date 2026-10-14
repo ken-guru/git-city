@@ -1,5 +1,6 @@
 import { parseJsonc } from "../jsonc.js";
 import type { RawImport } from "./extract.js";
+import { declarationsOf, isManifestPath, type Declaration } from "./externals.js";
 import { isPyproject, isPythonFile, parentDirectories } from "./python.js";
 import { extendsTarget, ImportResolver, MAX_EXTENDS_DEPTH, type Resolution, type Snapshot } from "./resolve.js";
 
@@ -69,6 +70,7 @@ export interface GraphSnapshot {
   packages: [string, string[]][];
   probesOf: [string, string[]][];
   importersOfProbe: [string, string[]][];
+  declared: [string, Declaration[]][];
 }
 
 export class ImportGraph {
@@ -88,6 +90,9 @@ export class ImportGraph {
   /** Every path each importer's resolution probed, and the reverse index from probe to importer. */
   private readonly probesOf = new Map<string, Set<string>>();
   private readonly importersOfProbe = new Map<string, Set<string>>();
+  /** The External Dependencies each manifest declares at this commit, and the changes the last `apply` made to them. */
+  private readonly declared = new Map<string, Declaration[]>();
+  private declarationChanges: { added: Declaration[]; removed: Declaration[] } = { added: [], removed: [] };
   /** Targets whose importer set changed during the current `apply`. */
   private touched = new Set<string>();
   /** Directories holding Python files, with how many such files each holds. Kept with `paths`, for namespace packages. */
@@ -108,6 +113,7 @@ export class ImportGraph {
   /** Feeds one commit. Returns the targets whose fan-in this commit changed, so the layout can re-width them. */
   async apply(commit: GraphCommit): Promise<Set<string>> {
     this.touched = new Set();
+    this.declarationChanges = { added: [], removed: [] };
     const changed = new Set<string>();
     let configChanged = false;
     for (const path of commit.deleted) {
@@ -117,16 +123,19 @@ export class ImportGraph {
       this.files.delete(path);
       this.configText.delete(path);
       this.jsonBlobs.delete(path);
+      this.dropDeclarations(path);
       changed.add(path);
       configChanged ||= isConfig(path);
     }
 
     const extracted: string[] = [];
     const jsonWritten: string[] = [];
+    const manifestsWritten: { path: string; blob: string }[] = [];
     for (const { path, blob, specifiers } of commit.writes) {
       if (!this.paths.has(path) && isPythonFile(path)) for (const dir of this.linkPythonDirs(path)) changed.add(dir);
       this.paths.add(path);
       changed.add(path);
+      if (isManifestPath(path)) manifestsWritten.push({ path, blob });
       if (CONFIG_TEXT_FILE.test(path) || isPyproject(path)) {
         // Only the manifests and tsconfigs (and the files they extend) keep their text; other JSON is never read.
         this.jsonBlobs.set(path, blob);
@@ -141,6 +150,7 @@ export class ImportGraph {
     for (const path of jsonWritten) {
       if (isConfig(path) || this.extendedPaths.has(path)) await this.loadConfigText(path, 0);
     }
+    for (const { path, blob } of manifestsWritten) await this.setDeclarations(path, blob);
 
     const affected = new Set<string>(extracted);
     if (configChanged) {
@@ -157,6 +167,34 @@ export class ImportGraph {
     return this.touched;
   }
 
+  /**
+   * The declarations the last `apply` added and removed, across every manifest (SPEC §4, External Dependencies). Read once
+   * per commit; a manifest rewritten with the same dependencies changes nothing.
+   */
+  takeDeclarationChanges(): { added: Declaration[]; removed: Declaration[] } {
+    const changes = this.declarationChanges;
+    this.declarationChanges = { added: [], removed: [] };
+    return changes;
+  }
+
+  /** The dependencies `path` declares, read from its blob and diffed against what it declared before. */
+  private async setDeclarations(path: string, blob: string): Promise<void> {
+    const next = declarationsOf(path, await this.options.readText(blob));
+    const previous = this.declared.get(path) ?? [];
+    const keyOf = (d: Declaration) => `${d.ecosystem}\u0000${d.name}`;
+    const nextKeys = new Set(next.map(keyOf));
+    const previousKeys = new Set(previous.map(keyOf));
+    for (const d of previous) if (!nextKeys.has(keyOf(d))) this.declarationChanges.removed.push(d);
+    for (const d of next) if (!previousKeys.has(keyOf(d))) this.declarationChanges.added.push(d);
+    this.declared.set(path, next);
+  }
+
+  /** A deleted manifest declares nothing from this commit on. */
+  private dropDeclarations(path: string): void {
+    this.declarationChanges.removed.push(...(this.declared.get(path) ?? []));
+    this.declared.delete(path);
+  }
+
   /** Fan-in: the number of distinct internal files that import `path`. */
   fanIn(path: string): number {
     return this.importers.get(path)?.size ?? 0;
@@ -170,6 +208,11 @@ export class ImportGraph {
   /** Bare package names `path` imports, sorted. Whether they are declared is decided by the manifests. */
   packagesOf(path: string): string[] {
     return [...(this.packages.get(path) ?? [])].sort();
+  }
+
+  /** Every importing file with the bare package names it imports, sorted by file. Matching them to declarations is up to the caller. */
+  importedPackages(): [string, string[]][] {
+    return [...this.packages].map(([path, names]) => [path, [...names].sort()] as [string, string[]]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
   }
 
   /**
@@ -204,6 +247,7 @@ export class ImportGraph {
       packages: setEntries(this.packages),
       probesOf: setEntries(this.probesOf),
       importersOfProbe: setEntries(this.importersOfProbe),
+      declared: [...this.declared],
     };
   }
 
@@ -222,6 +266,7 @@ export class ImportGraph {
     fillSetMap(graph.packages, s.packages);
     fillSetMap(graph.probesOf, s.probesOf);
     fillSetMap(graph.importersOfProbe, s.importersOfProbe);
+    for (const [path, declared] of s.declared) graph.declared.set(path, declared);
     return graph;
   }
 

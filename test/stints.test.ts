@@ -6,7 +6,7 @@ import { TimelineBuilder } from "../src/cli/timeline.js";
 import { EVENT_ADD, EVENT_RELOCATE, EVENT_RENOVATE } from "../src/shared/format.js";
 
 function commit(day: number, change: Partial<Omit<CommitRecord, "day">> = {}): CommitRecord {
-  return { day, added: [], deleted: [], modified: [], writes: [], ...change };
+  return { day, seconds: day * 86_400, added: [], deleted: [], modified: [], writes: [], ...change };
 }
 
 /** Runs the Timeline and the layout over the same commits, the way the pipeline does. */

@@ -1,5 +1,6 @@
 import type { BuildSummary } from "./build.js";
 import { describeSizes, FIRST_PLAY_BUDGET_BYTES, type SizeReport, TOTAL_BUDGET_BYTES } from "./chunks.js";
+import type { ExternalReport } from "./imports/externals.js";
 import { describeSteps } from "./steps.js";
 
 /** More standing Buildings than this and the page leans on level of detail (SPEC §10 scale warnings). */
@@ -32,6 +33,7 @@ export function formatBuildSummary(summary: BuildSummary): string {
   lines.push(`Theme: ${summary.theme}`);
   lines.push(...describeSteps(summary.steps));
   lines.push(...describeSizes(summary.sizes));
+  lines.push(...describeExternals(summary.externals));
   if (summary.configSources.length > 0) lines.push(`Config: ${summary.configSources.join(", ")}`);
   if (summary.outputIgnored === false) {
     const entry = summary.outputIgnoreEntry ?? "git-city-site/";
@@ -39,6 +41,20 @@ export function formatBuildSummary(summary: BuildSummary): string {
   }
   lines.push(`Run "git-city serve" to watch it.`);
   return `${lines.join("\n")}\n`;
+}
+
+/** The External Dependencies: each City, the Outskirts count, and every declared dependency with its Lanes (SPEC §7). */
+export function describeExternals(report: ExternalReport): string[] {
+  if (report.dependencies.length === 0) return [];
+  const cities = report.cities.length === 0 ? "none" : report.cities.map((c) => `${c.key} (${c.members})`).join(", ");
+  const outskirts = report.dependencies.filter((d) => d.city === undefined).length;
+  const lines = [`External Cities: ${cities}; Outskirts: ${outskirts} dependencies`];
+  lines.push(`External Dependencies (${report.dependencies.length}):`);
+  for (const d of report.dependencies) {
+    const where = d.city === undefined ? "Outskirts" : d.city;
+    lines.push(`  ${d.name} (${where}, ${d.importers} importing file${d.importers === 1 ? "" : "s"}, ${d.lanes} Lane${d.lanes === 1 ? "" : "s"})`);
+  }
+  return lines;
 }
 
 /** One line for CI logs. */

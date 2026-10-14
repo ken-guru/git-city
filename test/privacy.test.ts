@@ -141,6 +141,36 @@ describe("the final scan", () => {
     expect((error as Error).message.toLowerCase()).not.toContain("secretproject");
   });
 
+  it("does not fail on a hidden name that is only part of a longer word", async () => {
+    const dir = scratch();
+    writeFileSync(join(dir, "index.html"), "<title>GitCity</title>");
+    writeFileSync(join(dir, "strings.json"), `["Gitterwick lane"]`);
+
+    await expect(scanOutput(dir, ["git"])).resolves.toBeUndefined();
+  });
+
+  it("still fails on a hidden name that appears as a whole word", async () => {
+    const dir = scratch();
+    writeFileSync(join(dir, "notes.txt"), "Git City");
+
+    await expect(scanOutput(dir, ["git"])).rejects.toBeInstanceOf(PrivacyError);
+  });
+
+  it("builds when a repo file is named like a common word, such as git", async () => {
+    const repo = fixture().write("src/git.ts").commit("first");
+
+    const { outDir } = await run(repo);
+
+    expect(existsSync(join(outDir, "world.bin"))).toBe(true);
+  });
+
+  it("does not scan the page shell, a fixed template whose words are HTML and our own names", async () => {
+    const dir = scratch();
+    writeFileSync(join(dir, "index.html"), `<!doctype html><div id="labels"></div>`);
+
+    await expect(scanOutput(dir, ["labels"])).resolves.toBeUndefined();
+  });
+
   it("does not scan the page bundle, which holds our code and no user data", async () => {
     const dir = scratch();
     mkdirSync(join(dir, "assets"));
@@ -155,8 +185,8 @@ describe("the final scan", () => {
     const root = scratch();
     const pageDir = join(root, "page");
     mkdirSync(pageDir);
-    // Stands in for a leak: the page shell carries the hidden Concept.
-    writeFileSync(join(pageDir, "index.html"), "<!doctype html>Acme");
+    // Stands in for a leak: a page file that is not the fixed shell carries the hidden Concept.
+    writeFileSync(join(pageDir, "notes.txt"), "Acme");
     const outDir = join(root, "git-city-site");
 
     await expect(build({ repoDir: repo.dir, outDir, pageDir })).rejects.toThrow(PrivacyError);

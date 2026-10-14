@@ -148,6 +148,7 @@ export function groupTimeline(data: TimelineData, plan: StepPlan): TimelineData 
   return {
     ...data,
     commitDays: Int32Array.from(plan.firstCommit, (c) => data.commitDays[c]!),
+    commitSeconds: Uint32Array.from(plan.firstCommit, (c) => data.commitSeconds[c]!),
     stepCommits: Uint32Array.from(plan.stepCommits),
     eventCommit: Uint32Array.from(keep, (i) => stepOfEvent(i)),
     eventFile: Uint32Array.from(keep, (i) => data.eventFile[i]!),

@@ -61,6 +61,25 @@ describe("binary format", () => {
     expect([...world.commitDays]).toEqual([19000, 19001]);
   });
 
+  it("carries the Steps' times only when they are given", () => {
+    const world = {
+      commitDays: Int32Array.of(19000, 19001),
+      stepCommits: Uint32Array.of(1, 1),
+      fileCount: 3,
+      buildingType: new Uint8Array(3),
+      language: new Uint8Array(3),
+      seed: new Uint32Array(3),
+      chunks: [{ firstCommit: 0, hash: new Uint8Array(CHUNK_HASH_BYTES) }],
+      ...emptyLayout,
+    };
+
+    const timed = decodeWorld(encodeWorld({ ...world, commitSeconds: Uint32Array.of(1_640_995_200, 1_641_038_400) }));
+    expect([...timed.commitSeconds!]).toEqual([1_640_995_200, 1_641_038_400]);
+    expect([...timed.commitDays]).toEqual([19000, 19001]);
+
+    expect(decodeWorld(encodeWorld(world)).commitSeconds).toBeUndefined();
+  });
+
   it("round-trips a snapshot's per-file state", () => {
     const bytes = encodeChunk({
       firstCommit: 2000,
