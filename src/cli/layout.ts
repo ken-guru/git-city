@@ -19,6 +19,8 @@ export interface LayoutOptions {
   categoryOf?: (path: string) => string;
   /** Width step (0 narrowest, 3 widest) of a file when it is built. Defaults to 0. */
   widthStepOf?: (file: number) => number;
+  /** Hue per Role, from the Theme's palette. Defaults to the built-in palette. */
+  hueOf?: (role: Role) => number;
 }
 
 /** Tuning values. Starting points, named so they can be configured. */
@@ -225,7 +227,7 @@ export class LayoutBuilder {
         village: d.village,
         neighbourhoods: [...d.neighbourhoods],
         role: d.role,
-        paving: paving(this.options.seed, d.index, d.role),
+        paving: paving(this.options.seed, d.index, d.role, this.options.hueOf),
       }));
     return {
       districts,
@@ -588,11 +590,16 @@ export function layoutHistory(changes: Iterable<LayoutChange>, options: LayoutOp
 }
 
 /** Paving for a District: its Role's hue, or stone, with seeded offsets that stay for the District's life. */
-export function paving(seed: number, index: number, role: Role | null): LayoutResult["districts"][number]["paving"] {
+export function paving(
+  seed: number,
+  index: number,
+  role: Role | null,
+  hueOf: (role: Role) => number = (r) => ROLE_HUE[r],
+): LayoutResult["districts"][number]["paving"] {
   const lightness = PAVING_LIGHTNESS + (seeded(seed, index, 2) * 2 - 1) * LIGHTNESS_OFFSET;
   if (role === null) return { hue: STONE.hue, saturation: STONE.saturation, lightness };
   const saturation = PAVING_SATURATION + (seeded(seed, index, 1) * 2 - 1) * SATURATION_OFFSET;
-  return { hue: avoidGreen(ROLE_HUE[role]), saturation, lightness };
+  return { hue: avoidGreen(hueOf(role)), saturation, lightness };
 }
 
 function avoidGreen(hue: number): number {

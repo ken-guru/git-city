@@ -1,0 +1,43 @@
+{
+  "$schema": "../schema/theme.schema.json",
+  "name": "modern",
+  "display": {
+    "title": "Modern",
+    "description": "Plain, contemporary names. The default Theme."
+  },
+  "wordPieces": {
+    "prefixes": ["North", "Bright", "Vector", "Nimbus", "Cobalt", "Lumen", "Harbor", "Summit", "Quartz", "Ember", "Atlas", "Signal"],
+    "suffixes": ["gate", "field", "point", "view", "works", "reach", "park", "ridge", "wood", "side"]
+  },
+  "streetSuffixes": ["Street", "Avenue", "Road", "Drive", "Way", "Row"],
+  "roleNouns": {
+    "tests": "Lab",
+    "docs": "Library",
+    "api": "Hub",
+    "ui": "Studio",
+    "auth": "Checkpoint",
+    "data": "Warehouse",
+    "cli": "Terminal",
+    "infra": "Depot",
+    "utils": "Workshop",
+    "core": "Tower",
+    "config": "Panel",
+    "build": "Foundry",
+    "fallback": "Quarter"
+  },
+  "palette": {
+    "tests": { "hue": 42 },
+    "docs": { "hue": 270 },
+    "api": { "hue": 28 },
+    "ui": { "hue": 340 },
+    "auth": { "hue": 355 },
+    "data": { "hue": 15 },
+    "cli": { "hue": 245 },
+    "infra": { "hue": 205 },
+    "utils": { "hue": 38 },
+    "core": { "hue": 215 },
+    "config": { "hue": 180 },
+    "build": { "hue": 220 },
+    "fallback": { "hue": 40 }
+  }
+}

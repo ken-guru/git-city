@@ -15,11 +15,32 @@ export async function scanOutput(stagingDir: string, needles: readonly string[])
   const lowered = [...new Set(needles.map((n) => n.toLowerCase()))].filter((n) => n.length > 0);
   if (lowered.length === 0) return;
   for (const file of await listFiles(stagingDir)) {
-    const text = (await readFile(file)).toString("utf8").toLowerCase();
+    const text = scannedText(file, await readFile(file)).toLowerCase();
     if (lowered.some((needle) => text.includes(needle))) {
       throw new PrivacyError(`privacy check failed: a hidden name or Concept appears in ${relative(stagingDir, file)}`);
     }
   }
+}
+
+/**
+ * The text a file is scanned as. A JSON file is scanned by its string values only: its keys are the
+ * output's own fixed vocabulary, never user data, so a folder named "name" or "source" cannot fail the build.
+ */
+function scannedText(file: string, raw: Buffer): string {
+  const text = raw.toString("utf8");
+  if (!file.endsWith(".json")) return text;
+  try {
+    return stringValues(JSON.parse(text)).join("\n");
+  } catch {
+    return text;
+  }
+}
+
+function stringValues(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(stringValues);
+  if (typeof value === "object" && value !== null) return Object.values(value).flatMap(stringValues);
+  return [];
 }
 
 async function listFiles(dir: string): Promise<string[]> {
