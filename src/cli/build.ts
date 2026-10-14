@@ -123,7 +123,9 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   const sizes = await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, worldLayout(layout, roads, seed, widthStep), names.table, places, (staging) =>
     scanOutput(staging, names.hidden),
   );
-  warnings.push(...scaleWarnings(layout.lots.length, sizes));
+  // A Building is one file, so the Buildings standing at the end are the files in the head tree.
+  const standing = ((await gitMaybe(options.repoDir, ["ls-tree", "-r", "--name-only", head])) ?? "").split("\n").filter((p) => p !== "").length;
+  warnings.push(...scaleWarnings(standing, sizes));
   const entry = relative(options.repoDir, outDir);
   const inside = entry !== "" && !entry.startsWith("..") && !isAbsolute(entry);
   const outputIgnoreEntry = inside ? `${entry.split(sep).join("/")}/` : undefined;

@@ -20,6 +20,11 @@ const CONTENT_TYPES: Record<string, string> = {
   ".bin": "application/octet-stream",
   ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".mjs": "text/javascript; charset=utf-8",
+  ".wasm": "application/wasm",
+  ".woff2": "font/woff2",
+  ".webp": "image/webp",
+  ".ico": "image/x-icon",
 };
 
 export interface Server {

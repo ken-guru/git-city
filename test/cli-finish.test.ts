@@ -30,7 +30,7 @@ function run(...args: string[]) {
 
 describe("git-city init", () => {
   it("writes the personal config under the git directory, then refuses to overwrite it", () => {
-    const fixture = new FixtureRepo().write("src/a.ts", 'import x from "left-pad";\n').commit("first");
+    const fixture = new FixtureRepo().write("package.json", JSON.stringify({ dependencies: { "left-pad": "1.0.0" } })).commit("first");
     cleanups.push(() => fixture.remove());
 
     const first = run("init", "-C", fixture.dir);

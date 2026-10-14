@@ -20,7 +20,7 @@ export function scaleWarnings(buildings: number, sizes: SizeReport): string[] {
 
 /** The interactive build summary: privacy, near-misses, sizes, Steps, the output path and the first-run hint. */
 export function formatBuildSummary(summary: BuildSummary): string {
-  const lines = [`Built ${summary.commits} commits and ${summary.files} files from ${summary.branch} into ${summary.outDir}`];
+  const lines = [headline(summary)];
   if (summary.revealed.length > 0) {
     lines.push(`Revealed ${summary.revealed.length} name${summary.revealed.length === 1 ? "" : "s"}:`);
     for (const r of summary.revealed) lines.push(`  ${r.text}`);
@@ -29,7 +29,7 @@ export function formatBuildSummary(summary: BuildSummary): string {
     lines.push(`Near-miss: "${miss.text}" is close to a hidden name or Concept (use --strict to fail on these)`);
   }
   lines.push(`Theme: ${summary.theme}`);
-  lines.push("Steps: none (every commit is shown on its own)");
+  lines.push("Steps: none used (every commit is shown on its own)");
   lines.push(...describeSizes(summary.sizes));
   if (summary.configSources.length > 0) lines.push(`Config: ${summary.configSources.join(", ")}`);
   if (summary.outputIgnored === false) {
@@ -42,7 +42,7 @@ export function formatBuildSummary(summary: BuildSummary): string {
 
 /** One line for CI logs. */
 export function formatBuildLine(summary: BuildSummary): string {
-  return `Built ${summary.commits} commits and ${summary.files} files from ${summary.branch} into ${summary.outDir} (theme ${summary.theme}, ${kib(summary.sizes.firstPlayBytes)} to first play)`;
+  return `${headline(summary)} (theme ${summary.theme}, ${kib(summary.sizes.firstPlayBytes)} to first play)`;
 }
 
 /** The build result as JSON, for `--json`. */
@@ -64,6 +64,11 @@ export function buildJson(summary: BuildSummary): string {
     null,
     2,
   );
+}
+
+/** The first line of both build formats. */
+function headline(summary: BuildSummary): string {
+  return `Built ${summary.commits} commits and ${summary.files} files from ${summary.branch} into ${summary.outDir}`;
 }
 
 function kib(bytes: number): string {

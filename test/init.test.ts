@@ -17,7 +17,9 @@ function fixture(): FixtureRepo {
 describe("initConfig", () => {
   it("writes a personal starter config under the git directory by default", async () => {
     const repo = fixture()
-      .write("src/app.ts", 'import express from "express";\nimport { x } from "./local";\n')
+      .write("package.json", JSON.stringify({ dependencies: { express: "^4.0.0" } }))
+      .write("src/app.ts", 'import express from "express";\nimport undeclared from "not-declared";\n')
+      .write("lib/package.json", JSON.stringify({ devDependencies: { "@scope/pkg": "^1.0.0" } }))
       .write("lib/util.ts", 'import { z } from "@scope/pkg/sub";\n')
       .commit("first");
 
@@ -26,8 +28,9 @@ describe("initConfig", () => {
     expect(written).toBe(join(repo.dir, ".git", "git-city", "config.jsonc"));
     const text = readFileSync(written, "utf8");
     expect(text).toMatch(/^\s*\/\//m); // commented
-    expect(text).toContain("Modules (top-level folders): lib, src");
-    expect(text).toContain("External Dependencies: @scope/pkg, express");
+    expect(text).toContain("Detected Modules (folders with a package manifest): lib");
+    expect(text).toContain("External Dependencies (declared in a manifest): @scope/pkg, express");
+    expect(text).not.toContain("not-declared");
     expect(text).toContain("Themes: medieval, modern");
     expect(() => parseConfig(text, written)).not.toThrow();
     expect(existsSync(join(repo.dir, "git-city.config.jsonc"))).toBe(false);

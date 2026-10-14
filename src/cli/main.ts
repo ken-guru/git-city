@@ -57,12 +57,18 @@ Options:
   -h, --help       show this help
   -v, --version    show the version
 
-Flags only make the output more private; when a flag and the config set the same thing, the flag wins.
+--strict and --private only make the output more private. Any flag beats the config for the same setting.
 Exit codes: 0 success, 1 error, 2 privacy check failed, 3 another run holds the lock.
 `;
 
 /** Progress line for an interactive terminal: each phase overwrites the last on stderr. */
 const CLEAR_LINE = "\r\x1b[2K";
+
+/** Whether CI is set to a true value (CI=1, CI=true); CI=0 or CI=false does not count. */
+function inCi(): boolean {
+  const value = process.env.CI?.trim().toLowerCase();
+  return value !== undefined && value !== "" && value !== "0" && value !== "false";
+}
 
 function version(): string {
   const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
@@ -107,8 +113,9 @@ async function main(argv: string[]): Promise<number> {
 
   if (command === "build" && rest.length === 0) {
     // Progress and the full summary are for a person at a terminal; CI gets one line.
-    const interactive = process.stdout.isTTY === true && process.env.CI === undefined;
-    const progress = interactive && values.quiet !== true && values.json !== true;
+    const interactive = process.stdout.isTTY === true && !inCi();
+    const quiet = values.quiet === true;
+    const progress = interactive && process.stderr.isTTY === true && !quiet && values.json !== true;
     let summary: Awaited<ReturnType<typeof build>>;
     try {
       summary = await build({
@@ -129,7 +136,7 @@ async function main(argv: string[]): Promise<number> {
     }
     for (const warning of summary.warnings) process.stderr.write(`git-city: warning: ${warning}\n`);
     if (values.json) process.stdout.write(`${buildJson(summary)}\n`);
-    else if (values.quiet) return 0;
+    else if (quiet) return 0;
     else if (interactive) process.stdout.write(formatBuildSummary(summary));
     else process.stdout.write(`${formatBuildLine(summary)}\n`);
     return 0;
@@ -163,7 +170,7 @@ async function main(argv: string[]): Promise<number> {
     // A port the user names is used exactly; the default moves along to the next free port.
     const portAttempts = values.port === undefined ? DEFAULT_PORT_ATTEMPTS : 1;
     const server = await serve({ dir: resolve(cwd, rest[0] ?? values.out ?? DEFAULT_OUT), port, portAttempts });
-    if (new URL(server.url).port !== String(port)) process.stdout.write(`Port ${port} is in use.\n`);
+    if (port !== 0 && new URL(server.url).port !== String(port)) process.stdout.write(`Port ${port} is in use.\n`);
     process.stdout.write(`Serving at ${server.url} (Ctrl+C to stop)\n`);
     if (values.open) openInBrowser(server.url);
     await new Promise<void>((done) => process.once("SIGINT", done).once("SIGTERM", done));
