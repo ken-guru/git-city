@@ -433,7 +433,7 @@ Each also runs as `git city …`.
 | Command | Does |
 |---|---|
 | `git-city` / `git-city build` | build or resume |
-| `git-city serve [dir]` | localhost only, port 4173 (`--port`, `--open`); correct content types; world file never cached; no live reload |
+| `git-city serve [dir]` | localhost only, the first free port from 4173 up (about 10 tries; `--port` names one exactly and fails if it is taken; `--open`); correct content types; world file never cached; no live reload |
 | `git-city audit [dir]` | list every string in the output |
 | `git-city init [--shared]` | write a commented starter config (personal by default) listing detected Modules, External Dependencies and Themes |
 | `git-city cache status\|clear` | inspect or remove `.git/git-city/` |

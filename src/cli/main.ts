@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { build } from "./build.js";
 import { HistoryError } from "./history.js";
-import { DEFAULT_PORT, serve } from "./serve.js";
+import { DEFAULT_PORT, DEFAULT_PORT_ATTEMPTS, serve, ServeError } from "./serve.js";
 import { OutputError } from "./write.js";
 
 const DEFAULT_OUT = "git-city-site";
@@ -22,7 +22,8 @@ Options:
   -C <path>        run as if started in <path>
   --branch <name>  read this branch instead of the default branch
   --out <dir>      output folder (default: ${DEFAULT_OUT})
-  --port <n>       port for serve (default: ${DEFAULT_PORT})
+  --port <n>       port for serve, used exactly (default: the first free port
+                   from ${DEFAULT_PORT} to ${DEFAULT_PORT + DEFAULT_PORT_ATTEMPTS - 1})
   -h, --help       show this help
   -v, --version    show the version
 `;
@@ -69,7 +70,10 @@ async function main(argv: string[]): Promise<number> {
   if (command === "serve" && rest.length <= 1) {
     const port = values.port === undefined ? DEFAULT_PORT : Number(values.port);
     if (!Number.isInteger(port) || port < 0 || port > 65_535) throw new UsageError(`invalid port: ${values.port}`);
-    const server = await serve({ dir: resolve(cwd, rest[0] ?? values.out ?? DEFAULT_OUT), port });
+    // A port the user names is used exactly; the default moves along to the next free port.
+    const portAttempts = values.port === undefined ? DEFAULT_PORT_ATTEMPTS : 1;
+    const server = await serve({ dir: resolve(cwd, rest[0] ?? values.out ?? DEFAULT_OUT), port, portAttempts });
+    if (new URL(server.url).port !== String(port)) process.stdout.write(`Port ${port} is in use.\n`);
     process.stdout.write(`Serving at ${server.url} (Ctrl+C to stop)\n`);
     await new Promise<void>((done) => process.once("SIGINT", done).once("SIGTERM", done));
     await server.close();
@@ -85,7 +89,7 @@ main(process.argv.slice(2)).then(
   (code) => process.exit(code),
   (e: unknown) => {
     const usage = e instanceof UsageError || (e as { code?: string }).code?.startsWith("ERR_PARSE_ARGS") === true;
-    const expected = usage || e instanceof HistoryError || e instanceof OutputError;
+    const expected = usage || e instanceof HistoryError || e instanceof OutputError || e instanceof ServeError;
     process.stderr.write(`git-city: ${expected ? (e as Error).message : ((e as Error).stack ?? String(e))}\n`);
     if (usage) process.stderr.write(`Try "git-city --help".\n`);
     process.exit(1);

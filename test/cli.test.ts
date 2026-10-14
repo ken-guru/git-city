@@ -1,5 +1,6 @@
 import { execSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -66,6 +67,25 @@ describe("the git-city binary", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toBe(`git-city: not a git repository: ${empty}\n`);
+  });
+
+  it("says in one line when the port it was given is taken", async () => {
+    const blocker = createNetServer();
+    await new Promise<void>((done) => blocker.listen(0, "127.0.0.1", done));
+    const port = (blocker.address() as AddressInfo).port;
+    try {
+      const result = await new Promise<{ status: number | null; stderr: string }>((resolve) => {
+        const child = spawn(process.execPath, [CLI, "serve", "-C", repo.dir, "--port", String(port)]);
+        let stderr = "";
+        child.stderr.setEncoding("utf8").on("data", (d: string) => (stderr += d));
+        child.on("exit", (status) => resolve({ status, stderr }));
+      });
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toBe(`git-city: port ${port} is in use; free it or choose another with --port\n`);
+    } finally {
+      await new Promise((done) => blocker.close(done));
+    }
   });
 
   it("explains unknown commands", () => {

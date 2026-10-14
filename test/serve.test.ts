@@ -1,9 +1,10 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
+import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { serve, type Server } from "../src/cli/serve.js";
+import { serve, ServeError, type Server } from "../src/cli/serve.js";
 
 let site: string;
 let server: Server;
@@ -26,6 +27,16 @@ afterAll(async () => {
   await server.close();
   rmSync(join(site, ".."), { recursive: true, force: true });
 });
+
+/** Holds a free localhost port, the way another program would. */
+async function occupy(): Promise<{ port: number; close(): Promise<void> }> {
+  const blocker = createNetServer();
+  await new Promise<void>((done) => blocker.listen(0, "127.0.0.1", done));
+  return {
+    port: (blocker.address() as AddressInfo).port,
+    close: () => new Promise((done) => blocker.close(() => done())),
+  };
+}
 
 /** A raw GET, so paths like `/../x` reach the server unnormalised. */
 function get(path: string): Promise<{ status: number; type?: string; cache?: string; body: string }> {
@@ -59,6 +70,30 @@ describe("git-city serve", () => {
     expect((await get("/chunks/0000.abcdef0123456789.bin")).cache).toBe("public, max-age=31536000, immutable");
     expect((await get("/assets/page.ABC123.js")).cache).toBe("public, max-age=31536000, immutable");
     expect((await get("/index.html")).cache).toBe("no-cache");
+  });
+
+  it("moves on to the next port when its port is taken", async () => {
+    const blocker = await occupy();
+    const fallback = await serve({ dir: site, port: blocker.port, portAttempts: 3 });
+    try {
+      const port = Number(new URL(fallback.url).port);
+      expect(port).toBeGreaterThan(blocker.port);
+      expect(port).toBeLessThan(blocker.port + 3);
+    } finally {
+      await fallback.close();
+      await blocker.close();
+    }
+  });
+
+  it("says plainly when every port it may try is taken", async () => {
+    const blocker = await occupy();
+    try {
+      await expect(serve({ dir: site, port: blocker.port, portAttempts: 1 })).rejects.toThrow(
+        new ServeError(`port ${blocker.port} is in use; free it or choose another with --port`),
+      );
+    } finally {
+      await blocker.close();
+    }
   });
 
   it("answers 404 for missing files and anything outside the site", async () => {

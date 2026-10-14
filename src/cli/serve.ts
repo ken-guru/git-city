@@ -1,10 +1,12 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { createServer } from "node:http";
+import { createServer, type Server as HttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { extname, join, resolve, sep } from "node:path";
 
 export const DEFAULT_PORT = 4173;
+/** Tuning value: how many ports from DEFAULT_PORT up `serve` tries when no `--port` is given. */
+export const DEFAULT_PORT_ATTEMPTS = 10;
 /** Loopback only; browsers reach it as `localhost`. */
 const LISTEN_ADDRESS = "127.0.0.1";
 
@@ -31,8 +33,23 @@ function cacheControl(relative: string): string {
   return "no-cache";
 }
 
-/** Serves a built site on localhost. No live reload: rebuild and refresh. */
-export async function serve(options: { dir: string; port?: number }): Promise<Server> {
+function listen(server: HttpServer, port: number): Promise<void> {
+  return new Promise((done, fail) => {
+    server.once("error", fail);
+    server.listen(port, LISTEN_ADDRESS, () => {
+      server.off("error", fail);
+      done();
+    });
+  });
+}
+
+export class ServeError extends Error {}
+
+/**
+ * Serves a built site on localhost. No live reload: rebuild and refresh.
+ * When `port` is taken, tries the next ports, `portAttempts` in all (default: only `port`).
+ */
+export async function serve(options: { dir: string; port?: number; portAttempts?: number }): Promise<Server> {
   const root = resolve(options.dir);
   const server = createServer(async (req, res) => {
     const notFound = () => {
@@ -65,10 +82,23 @@ export async function serve(options: { dir: string; port?: number }): Promise<Se
     else createReadStream(file).pipe(res);
   });
 
-  await new Promise<void>((resolveListen, reject) => {
-    server.once("error", reject);
-    server.listen(options.port ?? DEFAULT_PORT, LISTEN_ADDRESS, () => resolveListen());
-  });
+  const first = options.port ?? DEFAULT_PORT;
+  const attempts = first === 0 ? 1 : Math.max(1, options.portAttempts ?? 1);
+  for (let candidate = first; ; candidate++) {
+    try {
+      await listen(server, candidate);
+      break;
+    } catch (e) {
+      if ((e as { code?: string }).code !== "EADDRINUSE") throw e;
+      if (candidate - first + 1 >= attempts) {
+        throw new ServeError(
+          attempts === 1
+            ? `port ${first} is in use; free it or choose another with --port`
+            : `ports ${first} to ${candidate} are all in use; free one or choose another with --port`,
+        );
+      }
+    }
+  }
   const { port } = server.address() as AddressInfo;
   return {
     url: `http://localhost:${port}/`,
