@@ -41,7 +41,7 @@ describe("rankPeople", () => {
     expect(people.slotOf[2]).toBe(-1);
   });
 
-  it("counts people beyond the top eight as more, and keeps the top eight", () => {
+  it("counts people beyond the top six as more, and keeps the top six", () => {
     const n = TOP_PEOPLE + 3;
     const many = {
       name: Uint32Array.from({ length: n }, (_, i) => i),
@@ -103,21 +103,34 @@ function pavingHues(): number[] {
 
 describe("top people's colours", () => {
   // The expected hues are written out here, not read from the code, so a changed palette must change this list too.
-  const expectedHues = [0, 50, 175, 200, 227, 252, 285, 310];
+  const expectedHues = [5, 55, 190, 255, 290, 315];
 
-  it("are the chosen hues, to within the eight-bit rounding of a colour", () => {
+  it("are six, and are the chosen hues to within the eight-bit rounding of a colour", () => {
+    expect(TOP_PEOPLE).toBe(6);
     expect(PERSON_COLOURS).toHaveLength(TOP_PEOPLE);
     PERSON_COLOURS.forEach((colour, i) => {
-      expect(hueDistance(hueOf(colour), expectedHues[i]!)).toBeLessThanOrEqual(2);
+      expect(hueDistance(hueOf(colour), expectedHues[i]!)).toBeLessThanOrEqual(0.5);
     });
   });
 
-  it("keep the clearance from every built-in paving hue and stay out of the green band", () => {
+  it("keep 10 degrees from every built-in paving hue, on the hue each colour is made from", () => {
     const paving = pavingHues();
     expect(paving.length).toBeGreaterThan(0);
+    for (const hue of expectedHues) {
+      expect(Math.min(...paving.map((p) => hueDistance(hue, p)))).toBeGreaterThanOrEqual(PAVING_CLEARANCE);
+    }
+  });
+
+  it("keep about 10 degrees on the rendered colours, allowing the eight-bit drift", () => {
+    const paving = pavingHues();
+    for (const colour of PERSON_COLOURS) {
+      expect(Math.min(...paving.map((p) => hueDistance(hueOf(colour), p)))).toBeGreaterThanOrEqual(PAVING_CLEARANCE - 0.5);
+    }
+  });
+
+  it("stay out of the green band", () => {
     for (const colour of PERSON_COLOURS) {
       const hue = hueOf(colour);
-      expect(Math.min(...paving.map((p) => hueDistance(hue, p)))).toBeGreaterThanOrEqual(PAVING_CLEARANCE - 1);
       expect(hue < GREEN_BAND[0] || hue > GREEN_BAND[1]).toBe(true);
     }
   });

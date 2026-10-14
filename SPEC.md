@@ -320,7 +320,8 @@ All bots are grouped as **Automation**.
 - Contributor rules set Pseudonyms only (`pseudonym`); a rule matches a Contributor by its name or its email. `reveal` and `allow` do not apply to Contributors.
 - Concept Pseudonyms apply to Contributors' names and to commit messages.
 - All bots form one Automation Contributor. *Interpretation:* a bot is one whose name ends in `[bot]` or matches a known bot name or email.
-- Known limitation, not yet decided: a grouped Step (§9) is credited to its newest commit's author, for counts, ranking and highlights. Real names skip the near-miss check that Generated names pass.
+- Revealed Real names get the same near-miss check as revealed file names: a near-miss warns, and `--strict` fails the build. The hard check against hidden terms is unchanged, and a name that holds a hidden term falls back to a Generated name.
+- A grouped Step (§9) is credited to its newest commit's author, for counts, ranking and highlights. This is kept as built.
 
 ### Generated names
 | Thing | Form | Example (medieval) |
@@ -598,14 +599,15 @@ Units are **commits of Timeline position**, as in every prototype.
 ### Contributors and commit messages
 Opt-in only.
 - **Markers:** a pin over each changed Building, up to **12 per commit**, fading after about **6 commits**.
-- **Colours:** the **top 8** people each get a colour (clear of paving and countryside), everyone else is grey, and Automation has its own grey.
-- **Legend:** the top 8 with commit counts, "+N more people" and Automation. Hover or tap lights up a person's Buildings from the last 120 commits.
+- **Colours:** the **top six** people each get a colour, everyone else is grey, and Automation has its own grey. Six is the number decided for the colour clearance below.
+- **Legend:** the top six with commit counts, "+N more people" and Automation. Hover or tap lights up a person's Buildings from the last 120 commits.
 - **Commit messages** (a separate opt-in): a caption with the date, Contributor and message. Above about 6 commits in 2 s it becomes a summary: "23 commits by 4 people · latest: …".
 
 **As built (#54):**
 - **Pins:** one cone per Building a commit changed (added, deleted, re-floored, relocated or renovated), up to 12 per commit. A pin settles in over about one commit, holds, and fades out by six commits. It hovers over the Building's roof at that moment.
-- **Colours:** the top 8 people by commits get the hues 0, 50, 175, 200, 227, 252, 285 and 310, at HSL saturation 0.78 and lightness 0.52. The rest are grey (#6b7785) and Automation has its own grey (#b4bcc6). *Interpretation:* "clear of paving and countryside" means at least 5° of hue from every paving hue of the built-in Themes, and no colour in the green band 60°–170°. Hue alone cannot give eight people 10°, so the separation between them also relies on saturation (pins are saturated; paving is medium-low). *Not verified visually.*
-- **Legend:** the top 8 with commit counts, "+N more people" and Automation. Hover, focus or tap lights up a person's Buildings from the last 120 commits, uncapped; tap again clears it.
+- **Colours:** the top six people by commits get the hues 5, 55, 190, 255, 290 and 315 (HSL saturation 0.78, lightness 0.52), in rank order. The rest are grey (#6b7785) and Automation has its own grey (#b4bcc6).
+- **Why six, and the 10° rule:** the decided clearance is 10° of hue from every District paving hue of the built-in Themes, with the colours at least 25° apart and outside the green band 60°–170° (taken as the countryside's green). Eight colours cannot all keep 10°, so the largest number that fits is six. The clearance is measured on the HSL hue, the unit the Theme palettes use. An 8-bit colour drifts from its HSL hue by under half a degree, and no set of six keeps 10° on the rendered colours as well, so the rendered clearance is about 9.95°. *Interpretation:* "clear of paving and countryside" is read as this rule. *Not verified visually.*
+- **Legend:** the top six with commit counts, "+N more people" and Automation. Hover, focus or tap lights up a person's Buildings from the last 120 commits, uncapped; tap again clears it.
 - **Caption:** the date, Contributor and message of the current Step's newest commit. *Interpretation:* the summary counts real commits passed in the 2 s of viewing at the current speed (two times the Steps per second), and applies only when every Step in that window is a single commit. A grouped history keeps its per-Step caption at normal speed. The summary reads "N commits by M people · latest: …".
 - **Messages:** the subject line, with email addresses removed, Concept Pseudonyms applied and a 160-character cap. A message that holds a hidden term is not shown.
 

@@ -371,6 +371,11 @@ export interface ContributionNaming {
   message?: Uint32Array;
   /** How many Contributors' Real names are shown (SPEC §8). */
   revealed: number;
+  /**
+   * Revealed Real names that come close to a hidden term. `id` is the Contributor's index in the order given. They warn
+   * and `--strict` fails, exactly as for revealed file names; the hard hidden-term check is unchanged.
+   */
+  nearMisses: NearMiss[];
 }
 
 /**
@@ -398,7 +403,8 @@ export function nameContributions(
   let person = 0;
   // Fixed names first, so a Generated name never takes one (as for Districts). Anonymous numbers count every person
   // in first-commit order, pseudonymous ones included, so a Contributor keeps its number when a rule changes.
-  const fixed: (string | undefined)[] = contributors.map((c) => {
+  const shownReal = new Map<number, string>();
+  const fixed: (string | undefined)[] = contributors.map((c, i) => {
     if (c.automation) return AUTOMATION_NAME;
     const ordinal = ++person;
     const policy = contributorPolicy(rules, c, ignoreReveal);
@@ -408,12 +414,18 @@ export function nameContributions(
       const candidate = replaceConcepts(c.name, pseudonymConcepts);
       if (candidate !== "" && !containsAny(candidate, hiddenConcepts) && !containsAny(candidate, hidden)) {
         revealed++;
+        shownReal.set(i, candidate);
         return candidate;
       }
     }
     return undefined;
   });
   for (const text of fixed) if (text !== undefined) taken.add(text.toLowerCase());
+  // A revealed Real name gets the same near-miss check as a revealed file name (SPEC §8): a warning, which --strict fails.
+  const nearMisses: NearMiss[] = [];
+  for (const [id, text] of shownReal) {
+    for (const term of findNearMisses(text, hidden)) nearMisses.push({ id, text, term });
+  }
 
   // A Generated name's birth order is the Contributor's index, so it never changes as later Contributors appear.
   const contributorName = Uint32Array.from(contributors, (_, i) => {
@@ -437,7 +449,7 @@ export function nameContributions(
     });
   }
 
-  return { table: { strings, [SEALED]: true } as StringTable, contributorName, message, revealed };
+  return { table: { strings, [SEALED]: true } as StringTable, contributorName, message, revealed, nearMisses };
 }
 
 /** The policy a contributor's rules give. A rule can name a contributor by its mailmapped name or its email. */

@@ -2,7 +2,7 @@ import type { World } from "../shared/format.js";
 import { NO_CONTENT } from "../shared/format.js";
 import type { Config } from "./config.js";
 import type { CommitAuthor } from "./history.js";
-import { type ContributionOptions, nameContributions, type StringTable } from "./naming.js";
+import { type ContributionOptions, type NearMiss, nameContributions, type StringTable } from "./naming.js";
 
 /** Commit authors whose name or email matches these are bots: release, dependency and CI automation (SPEC §8). */
 const BOT_NAME = /\[bot\]$|^(dependabot|renovate|github-actions|greenkeeper|snyk|mergify|semantic-release|release-please|pre-commit-ci|codecov|imgbot|allcontributors|sonarcloud|circleci|travis-ci|azure-pipelines|jenkins)([ _.-]|$)/i;
@@ -50,6 +50,8 @@ export interface CommitContent {
   columns: CommitColumns;
   /** Contributors whose Real names are shown. */
   revealed: number;
+  /** Revealed Real names close to a hidden term; see ContributionNaming.nearMisses. */
+  nearMisses: NearMiss[];
 }
 
 /**
@@ -65,7 +67,7 @@ export function commitContent(
   const level = config.contributors ?? "off";
   const wantNames = level !== "off";
   const wantMessages = config.commitMessages === true;
-  if (!wantNames && !wantMessages) return { table, columns: {}, revealed: 0 };
+  if (!wantNames && !wantMessages) return { table, columns: {}, revealed: 0, nearMisses: [] };
 
   const { contributors, contributorOf } = wantNames ? contributorTable(source.authors) : { contributors: [], contributorOf: [] };
   const named = nameContributions(table, contributors, config, {
@@ -82,7 +84,7 @@ export function commitContent(
     };
   }
   if (named.message !== undefined) columns.messages = named.message;
-  return { table: named.table, columns, revealed: named.revealed };
+  return { table: named.table, columns, revealed: named.revealed, nearMisses: named.nearMisses };
 }
 
 export function contributorTable(authors: readonly CommitAuthor[]): ContributorTable {

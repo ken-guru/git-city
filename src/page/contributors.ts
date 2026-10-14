@@ -5,8 +5,11 @@
 import { type Chunk, EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_RELOCATE, EVENT_RENOVATE, type World } from "../shared/format.js";
 import { easeOutCubic } from "./state.js";
 
-/** The people who get a colour of their own, and the legend's list (SPEC §11). */
-export const TOP_PEOPLE = 8;
+/**
+ * The people who get a colour of their own, and the legend's list (SPEC §11): six, the most that keep PAVING_CLEARANCE
+ * from every paving hue. Everyone else is grey.
+ */
+export const TOP_PEOPLE = 6;
 /** Most pins over one commit's changed Buildings (SPEC §11). */
 export const PINS_PER_COMMIT = 12;
 /** Commits a pin lives for: it settles in, holds, and fades by this many commits (SPEC §11). */
@@ -23,19 +26,20 @@ export const SUMMARY_SECONDS = 2;
  */
 export const GREEN_BAND: readonly [number, number] = [60, 170];
 /**
- * The smallest hue distance from any built-in Theme's paving hue that the top people's colours keep. Hue alone cannot
- * give more than this to eight people: a 10-degree floor fits six colours, so the colours rely on saturation too (pins
- * are fully saturated, paving is medium-low saturation).
+ * The smallest hue distance, in degrees, from any built-in Theme's paving hue that a coloured person's hue keeps. It is
+ * measured on the HSL hue the colour is made from, which is the unit the Themes' palettes use. The 8-bit colour can drift
+ * from its HSL hue by under half a degree; the tests allow for that drift.
  */
-export const PAVING_CLEARANCE = 5;
-/** The least hue distance between any two top people's colours, so the legend's swatches stay told apart. */
+export const PAVING_CLEARANCE = 10;
+/** The least hue distance between any two coloured people's hues, so the legend's swatches stay told apart. */
 export const PERSON_SEPARATION = 25;
 /**
- * The top people's colours, in rank order: HSL at saturation 0.78 and lightness 0.52, for the hues 0, 50, 175, 200, 227,
- * 252, 285 and 310. These are the largest set of eight that keeps PAVING_CLEARANCE from every paving hue, stays out of
- * GREEN_BAND and keeps PERSON_SEPARATION between themselves. The tests check each of these claims against the themes.
+ * The coloured people's colours, in rank order: HSL at saturation 0.78 and lightness 0.52, for the hues 5, 55, 190, 255,
+ * 290 and 315. This is the largest set of six that keeps PAVING_CLEARANCE from every paving hue, stays out of GREEN_BAND
+ * and keeps PERSON_SEPARATION between themselves. No set of six keeps 10 degrees on the rendered 8-bit colours as well:
+ * the search found none. The tests check each claim against the themes.
  */
-export const PERSON_COLOURS: readonly number[] = [0xe42525, 0xe4c425, 0x25e4d4, 0x25a4e4, 0x254ee4, 0x4b25e4, 0xb425e4, 0xe425c4];
+export const PERSON_COLOURS: readonly number[] = [0xe43525, 0xe4d425, 0x25c4e4, 0x5525e4, 0xc425e4, 0xe425b4];
 /** Everyone outside the top people. */
 export const OTHER_COLOUR = 0x6b7785;
 /** Automation has its own grey. */

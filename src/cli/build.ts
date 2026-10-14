@@ -200,6 +200,12 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   );
 
   options.onPhase?.("Writing site");
+  // A revealed Real name close to a hidden term fails --strict, as a revealed file name does (SPEC §8).
+  if (options.strict && content.nearMisses.length > 0) {
+    throw new PrivacyError(
+      `${content.nearMisses.length} near-miss${content.nearMisses.length === 1 ? "" : "es"} in Contributor names found; --strict fails the build`,
+    );
+  }
   const sizes = await writeSite(
     outDir,
     options.pageDir ?? DEFAULT_PAGE_DIR,
@@ -225,7 +231,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     configSources: config.sources,
     revealed: names.revealed,
     revealedContributors: content.revealed,
-    nearMisses: names.nearMisses,
+    nearMisses: [...names.nearMisses, ...content.nearMisses],
     warnings,
     theme: theme.name,
     sizes,

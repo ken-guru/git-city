@@ -113,6 +113,20 @@ describe("commitContent", () => {
     expect(content.revealed).toBe(1);
   });
 
+  it("shows a revealed Real name close to a hidden Concept, and warns about it as a near-miss", () => {
+    const cfg = config('{"contributors":"real"}');
+    const src: CommitSource = {
+      authors: [{ key: "lee@example.com", name: "Acme Lee", bot: false }],
+      commitAuthor: Int32Array.from([0]),
+      subjects: ["x"],
+    };
+    // "Acmee" stands for a hidden Concept. "Acme Lee" is not the same term, so the hard check lets it through.
+    const content = commitContent(baseTable(), src, cfg, { theme: loadTheme("modern"), seed: "s", hidden: ["Acmee"], taken: [] });
+    expect(content.table.strings[content.columns.contributors!.name[0]!]).toBe("Acme Lee");
+    expect(content.revealed).toBe(1);
+    expect(content.nearMisses).toEqual([{ id: 0, text: "Acme Lee", term: "Acmee" }]);
+  });
+
   it("applies a contributor pseudonym rule by name or by email, and a Concept pseudonym to Real names", () => {
     const cfg = config(`{
       "contributors": "real",

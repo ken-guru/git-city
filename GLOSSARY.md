@@ -50,7 +50,7 @@
 
 **Pin**: The marker drawn over a Building that a commit changed (added, deleted, re-floored, relocated or renovated), coloured by its Contributor. A commit draws up to 12 Pins, which settle in over about one commit, hold, and fade out by six commits. *As built (#54).*
 
-**Legend**: The key for Contributors' colours: the top 8 people by commits, with their commit counts, "+N more people", and Automation. Hovering, focusing or tapping an entry lights up that person's Buildings from the last 120 commits; tapping again clears it. *As built (#54).*
+**Legend**: The key for Contributors' colours: the top six people by commits, with their commit counts, "+N more people", and Automation. Hovering, focusing or tapping an entry lights up that person's Buildings from the last 120 commits; tapping again clears it. *As built (#54).*
 
 **Real name**: The actual name of a file, Module or concept as it appears in the repo.
 
