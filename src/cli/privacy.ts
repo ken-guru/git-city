@@ -12,14 +12,29 @@ const SKIPPED_FOLDERS = new Set(["assets"]);
  * The message names the file, never the needle, so a hidden name cannot leak into a log.
  */
 export async function scanOutput(stagingDir: string, needles: readonly string[]): Promise<void> {
-  const lowered = [...new Set(needles.map((n) => n.toLowerCase()))].filter((n) => n.length > 0);
-  if (lowered.length === 0) return;
+  const pattern = hiddenPattern(needles);
+  if (pattern === undefined) return;
   for (const file of await listFiles(stagingDir)) {
-    const text = scannedText(file, await readFile(file)).toLowerCase();
-    if (lowered.some((needle) => text.includes(needle))) {
+    if (pattern.test(scannedText(file, await readFile(file)))) {
       throw new PrivacyError(`privacy check failed: a hidden name or Concept appears in ${relative(stagingDir, file)}`);
     }
   }
+}
+
+/**
+ * One case-insensitive pattern for every hidden name. A needle matches only as a whole word, so a short name such as
+ * "git" does not fail the build on "GitCity" or on a generated name that happens to contain it. A hidden name that is
+ * a whole word still fails, wherever it appears.
+ */
+function hiddenPattern(needles: readonly string[]): RegExp | undefined {
+  const words = [...new Set(needles.map((n) => n.trim()))].filter((n) => n.length > 0);
+  if (words.length === 0) return undefined;
+  const alternatives = words.sort((a, b) => b.length - a.length).map(escapeRegExp).join("|");
+  return new RegExp(`(?<![\\p{L}\\p{N}])(?:${alternatives})(?![\\p{L}\\p{N}])`, "iu");
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**
