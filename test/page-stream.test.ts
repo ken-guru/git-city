@@ -56,6 +56,7 @@ function publish(timeline: ChunkInput, chunkCommits: number) {
   const world = decodeWorld(
     encodeWorld({
       commitDays: timeline.commitDays,
+      stepCommits: Uint32Array.from({ length: timeline.commitDays.length }, () => 1),
       fileCount: timeline.fileCount,
       buildingType: timeline.buildingType,
       language: timeline.language,

@@ -1,7 +1,30 @@
 import type { CommitRecord } from "./history.js";
 import { ImportGraph, type GraphSnapshot, widthStepFor } from "./imports/graph.js";
 import { LayoutBuilder, type LayoutChange, type LayoutOptions, type LayoutSnapshot } from "./layout.js";
+
+import { pathExcluder } from "./rules.js";
 import { TimelineBuilder, type TimelineSnapshot } from "./timeline.js";
+
+
+
+/**
+ * A commit with the excluded paths taken out. A rename with one side excluded is no rename here: its other side
+ * is an add (out of the excluded folder) or a delete (into it). Both sides excluded drops it.
+ */
+export function withoutExcluded(commit: CommitRecord, excluded: (path: string) => boolean): CommitRecord {
+  const keep = (path: string) => !excluded(path);
+  const renamed = (commit.renamed ?? []).filter((r) => keep(r.from) && keep(r.to));
+  const lines = commit.lines === undefined ? undefined : new Map([...commit.lines].filter(([path]) => keep(path)));
+  return {
+    ...commit,
+    added: commit.added.filter(keep),
+    deleted: commit.deleted.filter(keep),
+    modified: commit.modified.filter(keep),
+    renamed,
+    lines,
+    writes: commit.writes.filter((w) => keep(w.path)),
+  };
+}
 
 /**
  * The per-commit fold the build runs: the Timeline, the import graph and the layout, fed one commit at a time in
@@ -14,6 +37,8 @@ export interface PipelineOptions {
   seed: number;
   /** Reads a blob's text, for config files the import graph resolves against. */
   readText: (blob: string) => Promise<string>;
+  /** `exclude` globs: matching paths are left out of the City entirely (config, SPEC §10). */
+  exclude?: string[];
   /** The layout's Category and hue functions (see LayoutOptions). */
   categoryOf?: LayoutOptions["categoryOf"];
   hueOf?: LayoutOptions["hueOf"];
@@ -30,12 +55,18 @@ export interface RunState {
 }
 
 export class Pipeline {
+  private readonly excluded: (path: string) => boolean;
+  private readonly hasExclusions: boolean;
+
   private constructor(
     private readonly options: PipelineOptions,
     readonly timeline: TimelineBuilder,
     readonly graph: ImportGraph,
     readonly layout: LayoutBuilder,
-  ) {}
+  ) {
+    this.excluded = pathExcluder(options.exclude ?? []);
+    this.hasExclusions = (options.exclude?.length ?? 0) > 0;
+  }
 
   static fresh(options: PipelineOptions): Pipeline {
     return new Pipeline(
@@ -64,7 +95,8 @@ export class Pipeline {
   }
 
   /** Applies one commit to all three. Every commit gives the layout a change, so its sequence numbers are commit numbers. */
-  async add(record: CommitRecord): Promise<void> {
+  async add(input: CommitRecord): Promise<void> {
+    const record = this.hasExclusions ? withoutExcluded(input, this.excluded) : input;
     const change = this.timeline.add(record);
     const touched = await this.graph.apply({
       writes: record.writes.map((w) => ({ path: w.path, blob: w.blob, specifiers: w.facts.imports })),

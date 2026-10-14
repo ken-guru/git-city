@@ -165,6 +165,8 @@ export class TimelineBuilder {
   result() {
     return {
       commitDays: Int32Array.from(this.days),
+      /** One commit per Step until the Timeline is grouped into Steps (see steps.ts). */
+      stepCommits: Uint32Array.from(this.days, () => 1),
       fileCount: this.nextFile,
       /** Names are made from these and never leave the CLI: only the naming step writes text. */
       filePaths: [...this.filePaths],
