@@ -65,7 +65,24 @@ export async function resolveBlobFacts(repoDir: string, blobs: readonly string[]
 
 /** Sizes for many blobs from one `cat-file --batch-check` process. Missing blobs map to undefined. */
 async function readSizes(repoDir: string, blobs: readonly string[]): Promise<Map<string, number | undefined>> {
-  const args = ["cat-file", "--batch-check"];
+  const sizes = new Map<string, number | undefined>();
+  let carry = "";
+  const decoder = new TextDecoder();
+  for await (const chunk of catFile(repoDir, "--batch-check", blobs)) {
+    const lines = (carry + decoder.decode(chunk, { stream: true })).split("\n");
+    carry = lines.pop() ?? "";
+    for (const line of lines) recordSize(sizes, line);
+  }
+  if (carry) recordSize(sizes, carry);
+  return sizes;
+}
+
+/**
+ * Feeds `blobs` to one `cat-file` process in `mode` and yields its stdout as it arrives.
+ * Throws a GitError if git exits non-zero.
+ */
+async function* catFile(repoDir: string, mode: "--batch" | "--batch-check", blobs: readonly string[]): AsyncGenerator<Buffer> {
+  const args = ["cat-file", mode];
   const child = spawnGit(repoDir, args, ["pipe", "pipe", "pipe"]);
   let stderr = "";
   child.stderr!.setEncoding("utf8").on("data", (d: string) => (stderr += d));
@@ -73,18 +90,12 @@ async function readSizes(repoDir: string, blobs: readonly string[]): Promise<Map
   const finished = finishGit(child, args, () => stderr);
   finished.catch(() => {});
   child.stdin!.end(`${blobs.join("\n")}\n`);
-
-  const sizes = new Map<string, number | undefined>();
-  let carry = "";
-  const decoder = new TextDecoder();
-  for await (const chunk of child.stdout!) {
-    const lines = (carry + decoder.decode(chunk as Buffer, { stream: true })).split("\n");
-    carry = lines.pop() ?? "";
-    for (const line of lines) recordSize(sizes, line);
+  try {
+    for await (const chunk of child.stdout!) yield chunk as Buffer;
+  } finally {
+    if (child.exitCode === null) child.kill();
   }
-  if (carry) recordSize(sizes, carry);
   await finished;
-  return sizes;
 }
 
 function recordSize(sizes: Map<string, number | undefined>, line: string): void {
@@ -100,18 +111,8 @@ function recordSize(sizes: Map<string, number | undefined>, line: string): void 
  * Returns one scan per blob, or undefined for a blob git reports missing.
  */
 async function scanContents(repoDir: string, blobs: readonly string[]): Promise<(ContentScan | undefined)[]> {
-  const args = ["cat-file", "--batch"];
-  const child = spawnGit(repoDir, args, ["pipe", "pipe", "pipe"]);
-  let stderr = "";
-  child.stderr!.setEncoding("utf8").on("data", (d: string) => (stderr += d));
-  child.stdin!.on("error", () => {});
-  const finished = finishGit(child, args, () => stderr);
-  finished.catch(() => {});
-  child.stdin!.end(`${blobs.join("\n")}\n`);
-
   const scanner = new BatchScanner(blobs.length);
-  for await (const chunk of child.stdout!) scanner.push(chunk as Buffer);
-  await finished;
+  for await (const chunk of catFile(repoDir, "--batch", blobs)) scanner.push(chunk);
   scanner.finish();
   return scanner.results;
 }
