@@ -83,7 +83,8 @@ async function main(argv: string[]): Promise<number> {
       strict: values.strict,
       private: values.private,
     });
-    const lines = [`Built ${summary.commits} commits and ${summary.files} files from ${summary.branch} into ${summary.outDir}`];
+    for (const warning of summary.warnings) process.stderr.write(`git-city: warning: ${warning}\n`);
+    const lines =[`Built ${summary.commits} commits and ${summary.files} files from ${summary.branch} into ${summary.outDir}`];
     if (summary.revealed.length > 0) {
       lines.push(`Revealed ${summary.revealed.length} name${summary.revealed.length === 1 ? "" : "s"}:`);
       for (const r of summary.revealed) lines.push(`  ${r.text}`);

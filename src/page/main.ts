@@ -1,27 +1,13 @@
-import {
-  BoxGeometry,
-  Color,
-  DirectionalLight,
-  HemisphereLight,
-  InstancedMesh,
-  Matrix4,
-  Mesh,
-  MeshLambertMaterial,
-  PerspectiveCamera,
-  PlaneGeometry,
-  Scene,
-  WebGLRenderer,
-} from "three";
+import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, PerspectiveCamera, PlaneGeometry, Scene, WebGLRenderer } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { decodeChunk, decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
-import { gridColumns, gridSlot, lifetimes, scaleAt, TRANSITION_COMMITS } from "./state.js";
+import { CityBuildings } from "./buildings.js";
+import { buildTimelines, gridColumns, gridSlot, TRANSITION_COMMITS } from "./state.js";
 
-/** Tuning values for the walking skeleton. The player and Building tickets replace them. */
+/** Tuning values for the City. The player and camera tickets replace the rest. */
 const TUNING = {
   commitsPerSecond: 2,
   lotSpacing: 1.5,
-  boxFootprint: 1,
-  boxHeight: 1,
   groundMargin: 4,
   cameraFov: 45,
   /** Camera offset from the grid centre, as a multiple of the grid's extent plus a fixed distance. */
@@ -36,7 +22,6 @@ const PALETTE = {
   dark: { background: 0x10161c, ground: 0x26313b },
   sky: 0xffffff,
   skyGround: 0x445566,
-  box: 0x5b8cc4,
 } as const;
 
 const notice = document.getElementById("notice")!;
@@ -80,10 +65,10 @@ async function main() {
   const firstChunk = world.chunks[0];
   if (!firstChunk) throw new Error("world.bin lists no chunks");
   const chunk = decodeChunk(await fetchBytes(`chunks/${firstChunk.name}`));
-  play(world, lifetimes(chunk, world.fileCount));
+  play(world, buildTimelines(chunk, world.fileCount));
 }
 
-function play(world: World, { birth, death }: ReturnType<typeof lifetimes>) {
+function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
   const commitCount = world.commitDays.length;
   const endTime = commitCount - 1 + TRANSITION_COMMITS;
   const columns = gridColumns(world.fileCount);
@@ -105,12 +90,24 @@ function play(world: World, { birth, death }: ReturnType<typeof lifetimes>) {
   ground.rotation.x = -Math.PI / 2;
   scene.add(ground);
 
-  // One instance per file; boxes grow up from the ground, so the unit box sits on y = 0.
-  const box = new BoxGeometry(TUNING.boxFootprint, TUNING.boxHeight, TUNING.boxFootprint).translate(0, TUNING.boxHeight / 2, 0);
-  const boxes = new InstancedMesh(box, new MeshLambertMaterial({ color: PALETTE.box, flatShading: true }), world.fileCount);
-  scene.add(boxes);
   const origin = ((columns - 1) * TUNING.lotSpacing) / 2;
-  const matrix = new Matrix4();
+  const place = (file: number) => {
+    const { column, row } = gridSlot(file, columns);
+    return { x: column * TUNING.lotSpacing - origin, z: row * TUNING.lotSpacing - origin };
+  };
+  const city = new CityBuildings(
+    scene,
+    {
+      fileCount: world.fileCount,
+      buildingType: world.buildingType,
+      language: world.language,
+      seed: world.seed,
+      buildings: timelines.buildings,
+      scaffolds: timelines.scaffolds,
+      place,
+    },
+    matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
+  );
 
   const camera = new PerspectiveCamera(TUNING.cameraFov, 1, 0.1, extent * 20 + 100);
   const { x, y, z } = TUNING.cameraOffset;
@@ -140,14 +137,7 @@ function play(world: World, { birth, death }: ReturnType<typeof lifetimes>) {
   player.hidden = false;
 
   function draw(t: number) {
-    for (let file = 0; file < world.fileCount; file++) {
-      const s = scaleAt(birth[file]!, death[file]!, t);
-      const { column, row } = gridSlot(file, columns);
-      // A scale of 0 collapses the instance entirely rather than flattening it onto the ground.
-      matrix.makeScale(s, s, s).setPosition(column * TUNING.lotSpacing - origin, 0, row * TUNING.lotSpacing - origin);
-      boxes.setMatrixAt(file, matrix);
-    }
-    boxes.instanceMatrix.needsUpdate = true;
+    city.update(t, TUNING.commitsPerSecond);
     const commit = Math.min(commitCount - 1, Math.max(0, Math.floor(t)));
     const day = new Date(world.commitDays[commit]! * SECONDS_PER_DAY * 1000).toISOString().slice(0, 10);
     status.textContent = `Commit ${commit + 1} of ${commitCount} · ${day}`;

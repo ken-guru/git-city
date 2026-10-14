@@ -33,12 +33,20 @@ export async function writeSite(
     eventCommit: timeline.eventCommit,
     eventFile: timeline.eventFile,
     eventKind: timeline.eventKind,
+    eventValue: timeline.eventValue,
   });
   const hash = createHash("sha256").update(chunk).digest().subarray(0, CHUNK_HASH_BYTES);
   await writeFile(join(staging, "chunks", chunkName(0, hash)), chunk);
   await writeFile(
     join(staging, "world.bin"),
-    encodeWorld({ commitDays: timeline.commitDays, fileCount: timeline.fileCount, chunks: [{ firstCommit: 0, hash }] }),
+    encodeWorld({
+      commitDays: timeline.commitDays,
+      fileCount: timeline.fileCount,
+      buildingType: timeline.buildingType,
+      language: timeline.language,
+      seed: timeline.seed,
+      chunks: [{ firstCommit: 0, hash }],
+    }),
   );
   await writeFile(join(staging, "strings.json"), encodeStrings(names));
 
