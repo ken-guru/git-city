@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { Language, Parser } from "web-tree-sitter";
 import { describe, expect, it } from "vitest";
 
 const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
@@ -19,7 +20,7 @@ const GRAMMARS = [
   "tree-sitter-javascript/tree-sitter-javascript.wasm",
   "tree-sitter-python/tree-sitter-python.wasm",
 ];
-const GRAMMAR_PACKAGES = ["tree-sitter-typescript", "tree-sitter-javascript", "tree-sitter-python"];
+const GRAMMAR_PACKAGES = [...new Set(GRAMMARS.map((grammar) => grammar.split("/")[0] as string))];
 
 describe("package metadata", () => {
   it("publishes the git-city bin and the Node range", () => {
@@ -77,13 +78,30 @@ describe("npm pack contents (needs `npm run build` first)", () => {
     expect(files.has("THIRD_PARTY_NOTICES.md")).toBe(true);
   });
 
-  it("contains exactly the grammar wasm files under dist/grammars", () => {
+  it("contains each grammar wasm file under dist/grammars", () => {
     for (const grammar of GRAMMARS) {
       expect(files.has(`dist/grammars/${grammar.split("/")[1]}`), grammar).toBe(true);
     }
   });
 
-  it("does not ship three.js sources in the tarball beyond the page bundle", () => {
+  it("ships grammars that web-tree-sitter can load and parse with", async () => {
+    await Parser.init();
+    const sources: Record<string, string> = {
+      "tree-sitter-typescript.wasm": "const x: number = 1;",
+      "tree-sitter-tsx.wasm": "const el = <div>hi</div>;",
+      "tree-sitter-javascript.wasm": "const x = () => 1;",
+      "tree-sitter-python.wasm": "def f(x):\n    return x\n",
+    };
+    for (const grammar of GRAMMARS) {
+      const name = grammar.split("/")[1] as string;
+      const lang = await Language.load(new URL(`../node_modules/${grammar}`, import.meta.url).pathname);
+      const parser = new Parser();
+      parser.setLanguage(lang);
+      expect(parser.parse(sources[name] as string)?.rootNode.hasError, name).toBe(false);
+    }
+  });
+
+  it("does not ship node_modules in the tarball", () => {
     const nodeModules = [...files].filter((p) => p.includes("node_modules/"));
     expect(nodeModules).toEqual([]);
   });

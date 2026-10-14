@@ -30,7 +30,7 @@ THE SOFTWARE.
 
 ## web-tree-sitter
 
-`web-tree-sitter@0.27.0` is a runtime dependency. The CLI uses it to load the grammars in `dist/grammars/`.
+`web-tree-sitter@0.27.0` is a runtime dependency. It is the runtime that loads the grammars in `dist/grammars/`.
 
 The MIT License (MIT)
 
