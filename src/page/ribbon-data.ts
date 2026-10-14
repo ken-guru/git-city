@@ -1,6 +1,7 @@
 import {
   type Chunk,
   EVENT_ADD,
+  EVENT_BLOCK_OWNER,
   EVENT_DELETE,
   EVENT_DISTRICT_MERGE,
   EVENT_DISTRICT_SPLIT,
@@ -96,6 +97,8 @@ export class RibbonData {
   private readonly identity: Identity[] = [];
   private readonly files: Uint32Array;
   private readonly perStep = new Map<number, Map<number, number>>();
+  /** Each Block's owning District (birth index) as of the chunks read so far. */
+  private readonly ownerOf = new Map<number, number>();
   private readonly positionOfBirth = new Map<number, number>();
   /** Commits before each Step: entry i is the commit count through Step i - 1. One extra entry at the end. */
   private readonly commitsBefore: Float64Array;
@@ -121,11 +124,18 @@ export class RibbonData {
 
   /** Adds one chunk's events. Chunks must come in order, so the identity list stays sorted by Step. */
   addChunk(chunk: Chunk): void {
-    const { eventCommit, eventFile, eventKind, eventStint } = chunk;
+    const { eventCommit, eventFile, eventKind, eventStint, snapshot } = chunk;
+    // The snapshot is the owners at the chunk's first commit; it agrees with the events already read.
+    snapshot.blockIds.forEach((block, i) => this.ownerOf.set(block, snapshot.blockDistricts[i]!));
     for (let i = 0; i < eventCommit.length; i++) {
       const step = eventCommit[i]!;
       const kind = eventKind[i]!;
       const file = eventFile[i]!;
+      if (kind === EVENT_BLOCK_OWNER) {
+        // The file column is the Block, the stint column its new owner's birth index.
+        this.ownerOf.set(file, eventStint[i]!);
+        continue;
+      }
       if (kind === EVENT_DISTRICT_SPLIT || kind === EVENT_DISTRICT_MERGE) {
         const position = this.positionOfBirth.get(file);
         if (position === undefined) continue;
@@ -195,11 +205,17 @@ export class RibbonData {
     return place?.name ?? `District ${(birth ?? position) + 1}`;
   }
 
+  /**
+   * The District a Stint's Building belongs to: the owner of its Block at that point in history. The world file's
+   * final owner is only a fallback for a Block whose owner has not been read yet.
+   */
   private districtOfStint(stint: number): number | undefined {
     const lot = this.source.stints.lot[stint];
     if (lot === undefined) return undefined;
     const block = this.source.lots.block[lot];
     if (block === undefined) return undefined;
+    const birth = this.ownerOf.get(block);
+    if (birth !== undefined) return this.positionOfBirth.get(birth);
     const position = this.source.blocks.district[block];
     return position === undefined || position === NO_DISTRICT ? undefined : position;
   }

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { type Chunk, EVENT_ADD, EVENT_DISTRICT_MERGE, EVENT_DISTRICT_SPLIT, EVENT_FLOORS, EVENT_RELOCATE } from "../src/shared/format.js";
+import {
+  type Chunk,
+  EVENT_ADD,
+  EVENT_BLOCK_OWNER,
+  EVENT_DISTRICT_MERGE,
+  EVENT_DISTRICT_SPLIT,
+  EVENT_FLOORS,
+  EVENT_RELOCATE,
+} from "../src/shared/format.js";
 import type { PlacesFile } from "../src/shared/places.js";
 import { binSteps, type RibbonSource, RibbonData, tooltipFor } from "../src/page/ribbon-data.js";
 
@@ -89,6 +97,38 @@ describe("RibbonData: activity", () => {
   it("reports commits from the world file even before a chunk has loaded", () => {
     const data = new RibbonData(source, places, colour);
     expect(data.activityAt(1)).toMatchObject({ files: 0, commits: 12 });
+  });
+});
+
+describe("RibbonData: District owners over time", () => {
+  // Blocks 0..2 with lots 0..2 and stints 0..2. The world file's final owners are deliberately not used here.
+  const timed: RibbonSource = {
+    commitDays: [0, 1, 2, 3, 4, 5],
+    stepCommits: [1, 1, 1, 1, 1, 1],
+    stints: { lot: [0, 1, 2] },
+    lots: { block: [0, 1, 2] },
+    blocks: { district: [1, 1, 1], claimed: [0, 1, 2], village: [0, 0, 0] },
+    districts: { index: [0, 1] },
+  };
+
+  it("attributes activity to the owner at that commit: the parent before a split, the child after, the parent again after a merge", () => {
+    const data = new RibbonData(timed, places, colour);
+    data.addChunk(
+      chunkOf([
+        [1, 1, EVENT_BLOCK_OWNER, 0, 0], // Block 1 is claimed by District 0
+        [2, 1, EVENT_ADD, 1, 1], // a file on Block 1 before the split
+        [3, 1, EVENT_DISTRICT_SPLIT, 1, 0], // District 1 splits off from District 0
+        [3, 1, EVENT_BLOCK_OWNER, 1, 1], // Block 1 moves to the child
+        [4, 1, EVENT_FLOORS, 2, 1], // a file on Block 1 after the split
+        [5, 1, EVENT_DISTRICT_MERGE, 1, 0], // the child merges back
+        [5, 1, EVENT_BLOCK_OWNER, 0, 0], // Block 1 moves back to the parent
+        [5, 1, EVENT_FLOORS, 3, 1], // a file on Block 1 after the merge
+      ]),
+    );
+    expect(data.activityAt(2).districts).toEqual([[0, 1]]);
+    expect(data.activityAt(4).districts).toEqual([[1, 1]]);
+    expect(data.activityAt(5).districts).toEqual([[0, 1]]);
+    expect(data.nameOf(1)).toBe("Mill Vale");
   });
 });
 
