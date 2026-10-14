@@ -131,4 +131,30 @@ describe("the externals section", () => {
     writeFileSync(personal, JSON.stringify({ externals: { groups: { a: "two", b: "three" } } }));
     expect(loadConfig([shared, personal]).externals).toEqual({ threshold: 4, groups: { a: "two", b: "three" } });
   });
+
+  it("reads the contributors level and the commit messages switch", () => {
+    const config = parseConfig('{ "contributors": "generated", "commitMessages": true }', "c.jsonc");
+    expect(config.contributors).toBe("generated");
+    expect(config.commitMessages).toBe(true);
+    expect(parseConfig("{}", "c.jsonc").contributors).toBeUndefined();
+    expect(parseConfig("{}", "c.jsonc").commitMessages).toBeUndefined();
+  });
+
+  it("refuses an unknown contributors level and a non-boolean commitMessages", () => {
+    expect(() => parseConfig('{ "contributors": "everyone" }', "c.jsonc")).toThrow(/"contributors" must be one of off, anonymous, generated, real/);
+    expect(() => parseConfig('{ "commitMessages": "yes" }', "c.jsonc")).toThrow(/"commitMessages" must be true or false/);
+  });
+
+  it("lets the personal config override the contributors level and the messages switch", () => {
+    const dir = mkdtempSync(join(tmpdir(), "git-city-config-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const shared = join(dir, "shared.jsonc");
+    const personal = join(dir, "personal.jsonc");
+    writeFileSync(shared, JSON.stringify({ contributors: "anonymous", commitMessages: true }));
+    writeFileSync(personal, JSON.stringify({ contributors: "real" }));
+    const merged = loadConfig([shared, personal]);
+    expect(merged.contributors).toBe("real");
+    expect(merged.commitMessages).toBe(true);
+    expect(loadConfig([shared]).contributors).toBe("anonymous");
+  });
 });

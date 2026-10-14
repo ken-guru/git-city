@@ -15,9 +15,11 @@ import { readPipeline, type PipelineRead } from "./resume.js";
 import { planChunks, type SizeReport, sizeReport } from "./chunks.js";
 import type { RoadTable } from "./roadhistory.js";
 import { DEFAULT_THEME, hueFor, loadTheme, type Theme } from "./theme.js";
+import type { TimelineData } from "./timeline.js";
 import { type StepEra, type StepLevel, chooseStepLevel, groupTimeline, PEAK_BUILDINGS_WARNING, peakStanding, planSteps, recentFromFor, stepEras } from "./steps.js";
 import type { StintTable, WorldLayout } from "../shared/format.js";
 import { encodeSiteWorld, writeSite } from "./write.js";
+import { commitContent } from "./contributors.js";
 import { externalCities } from "./external-cities.js";
 import { declarationIndex, externalReport, ExternalRegistry, importerKey, type ExternalReport, type PlanOptions } from "./imports/externals.js";
 import { isPythonFile } from "./imports/python.js";
@@ -78,6 +80,8 @@ export interface BuildSummary {
   steps: StepEra[];
   /** The External Dependencies declared at HEAD, with their External City or the Outskirts, and their Highway Lanes (SPEC §4, §7). */
   externals: ExternalReport;
+  /** Contributors whose Real names are shown (SPEC §8). */
+  revealedContributors: number;
 }
 
 export async function build(options: BuildOptions): Promise<BuildSummary> {
@@ -146,11 +150,16 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   // Steps: the smallest grouping that fits the budget (or the pinned one). Only the output's commits move.
   // Everything keyed by commit (claims, events, Road build dates) is renumbered with the same plan.
   const worldFor = (stepOf: Uint32Array) => worldLayout(claimsAtSteps(layout, stepOf), roads, streets, seed, widthStep, rawTimeline.stints);
+  // The Contributors and messages of a Timeline, named with the names already in the City (`taken`) and the hidden terms.
+  const namedContent = (timeline: TimelineData, taken: string[], hidden: string[] = names.hidden) =>
+    commitContent(names.table, timeline, config, { theme, seed: seedText, hidden, private: options.private, taken });
   const sizeAt = (level: StepLevel) => {
     const plan = planSteps(rawTimeline.commitDays, level, recentFromFor(commits));
     const timeline = groupTimeline(rawTimeline, plan);
     const plans = planChunks(timeline);
-    const worldBytes = encodeSiteWorld(timeline, plans, worldFor(plan.stepOf), config.exactTimes === true);
+    // Sized with the Contributors and messages it will hold; the City's other names are not known yet, so only places are taken.
+    const content = namedContent(timeline, [places.file.city.name, ...places.file.districts.map((d) => d.name)]);
+    const worldBytes = encodeSiteWorld(timeline, plans, worldFor(plan.stepOf), config.exactTimes === true, content.columns);
     return sizeReport(worldBytes, plans);
   };
   const choice = chooseStepLevel(config.scale.timeline ?? "auto", commits, sizeAt);
@@ -183,18 +192,31 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     },
   });
   const hidden = [...names.hidden, ...cities.hiddenKeys];
+  // Contributors and messages are named last, so their Generated names differ from every other name in the City.
+  const content = namedContent(
+    timeline,
+    [places.file.city.name, ...places.file.districts.map((d) => d.name), ...cities.file.cities.map((c) => c.name)],
+    hidden,
+  );
 
   options.onPhase?.("Writing site");
+  // A revealed Real name close to a hidden term fails --strict, as a revealed file name does (SPEC §8).
+  if (options.strict && content.nearMisses.length > 0) {
+    throw new PrivacyError(
+      `${content.nearMisses.length} near-miss${content.nearMisses.length === 1 ? "" : "es"} in Contributor names found; --strict fails the build`,
+    );
+  }
   const sizes = await writeSite(
     outDir,
     options.pageDir ?? DEFAULT_PAGE_DIR,
     timeline,
     worldFor(plan.stepOf),
-    names.table,
+    content.table,
     places,
     config.exactTimes === true,
     (staging) => scanOutput(staging, hidden),
     `${JSON.stringify(cities.file)}\n`,
+    content.columns,
   );
   const entry = relative(options.repoDir, outDir);
   const inside = entry !== "" && !entry.startsWith("..") && !isAbsolute(entry);
@@ -208,7 +230,8 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     outDir,
     configSources: config.sources,
     revealed: names.revealed,
-    nearMisses: names.nearMisses,
+    revealedContributors: content.revealed,
+    nearMisses: [...names.nearMisses, ...content.nearMisses],
     warnings,
     theme: theme.name,
     sizes,

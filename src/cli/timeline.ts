@@ -10,7 +10,7 @@ import {
   EVENT_SCAFFOLD_ON,
   type EventKind,
 } from "../shared/format.js";
-import type { CommitRecord } from "./history.js";
+import type { CommitAuthor, CommitRecord } from "./history.js";
 import { ancestors, type LayoutChange, type PathMove, splitPath, wholeDirectoryMoves } from "./layout.js";
 import { buildingTypeOf, categoryOf, floorsForPath, languageOf, seedFor, TUNING } from "./model.js";
 
@@ -25,6 +25,12 @@ export class TimelineBuilder {
   private readonly days: number[] = [];
   /** Per commit: its time, in whole seconds since 1970 (see CommitRecord). */
   private readonly seconds: number[] = [];
+  /** Distinct commit authors, in first-commit order, and per commit the index of its author (-1 for none). */
+  private readonly authors: CommitAuthor[] = [];
+  private readonly authorIndex = new Map<string, number>();
+  private readonly commitAuthor: number[] = [];
+  /** Per commit: its subject line, or "" for none. */
+  private readonly subjects: string[] = [];
   private readonly standing = new Map<string, number>();
   /** Per file id: whether it still stands. */
   private readonly alive: boolean[] = [];
@@ -62,6 +68,8 @@ export class TimelineBuilder {
     const day = commit.day;
     this.days.push(day);
     this.seconds.push(commit.seconds);
+    this.commitAuthor.push(this.authorOf(commit.author));
+    this.subjects.push(commit.subject ?? "");
     const change: TimelineChange = { added: [], deleted: [], moved: [] };
 
     // A rename whose old path does not stand is not a rename here: its new path is simply added.
@@ -146,6 +154,9 @@ export class TimelineBuilder {
     return {
       days: this.days,
       seconds: this.seconds,
+      authors: this.authors,
+      commitAuthor: this.commitAuthor,
+      subjects: this.subjects,
       standing: [...this.standing],
       alive: this.alive,
       floors: this.floors,
@@ -174,6 +185,10 @@ export class TimelineBuilder {
     const b = new TimelineBuilder();
     appendAll(b.days, s.days);
     appendAll(b.seconds, s.seconds);
+    appendAll(b.authors, s.authors);
+    s.authors.forEach((author, i) => b.authorIndex.set(author.key, i));
+    appendAll(b.commitAuthor, s.commitAuthor);
+    appendAll(b.subjects, s.subjects);
     for (const [path, file] of s.standing) b.standing.set(path, file);
     appendAll(b.alive, s.alive);
     appendAll(b.floors, s.floors);
@@ -202,6 +217,10 @@ export class TimelineBuilder {
     return {
       commitDays: Int32Array.from(this.days),
       commitSeconds: Uint32Array.from(this.seconds),
+      /** Per commit: the index of its author in `authors`, or -1 when it has none. */
+      commitAuthor: Int32Array.from(this.commitAuthor),
+      authors: [...this.authors],
+      subjects: [...this.subjects],
       /** One commit per Step until the Timeline is grouped into Steps (see steps.ts). */
       stepCommits: Uint32Array.from(this.days, () => 1),
       fileCount: this.nextFile,
@@ -295,6 +314,16 @@ export class TimelineBuilder {
     }
   }
 
+  /** The index of an author in `authors`, adding it the first time it is seen. */
+  private authorOf(author: CommitAuthor | undefined): number {
+    if (author === undefined) return -1;
+    const known = this.authorIndex.get(author.key);
+    if (known !== undefined) return known;
+    this.authors.push(author);
+    this.authorIndex.set(author.key, this.authors.length - 1);
+    return this.authors.length - 1;
+  }
+
   /** Records an event; `stint` defaults to the file's current Stint. */
   private event(commit: number, file: number, kind: EventKind, value: number, stint: number = this.currentStint[file]!) {
     this.eventCommit.push(commit);
@@ -314,6 +343,9 @@ export type TimelineChange = Required<Omit<LayoutChange, "widths">>;
 export interface TimelineSnapshot {
   days: number[];
   seconds: number[];
+  authors: CommitAuthor[];
+  commitAuthor: number[];
+  subjects: string[];
   standing: [string, number][];
   alive: boolean[];
   floors: number[];

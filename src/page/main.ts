@@ -35,6 +35,8 @@ import { Ribbon } from "./ribbon.js";
 import { RoadLayer } from "./roads.js";
 import { appendTimelines, buildTimelines, durationFor, latestAt, type Timelines } from "./state.js";
 import { Player, Timescale } from "./timescale.js";
+import { type ChangeIndex, changesIndex } from "./contributors.js";
+import { createContributorView } from "./contributor-view.js";
 
 /** Tuning values for the City. */
 const TUNING = {
@@ -122,11 +124,23 @@ async function main() {
   } catch (e) {
     console.warn("External Cities could not be loaded", e);
   }
-  const onChunk = play(world, timelines, stream, first, places, externals);
+  // Contributors and commit messages (SPEC §11) are read only when the output holds them; their names live in strings.json.
+  let strings: string[] | undefined;
+  if (world.contributors || world.messages) {
+    try {
+      strings = JSON.parse(new TextDecoder().decode(await fetchBytes("strings.json", { cache: "no-store" })));
+    } catch (e) {
+      console.warn("Contributor names could not be loaded", e);
+    }
+  }
+  const changes = changesIndex();
+  changes.add(first);
+  const onChunk = play(world, timelines, stream, first, places, externals, { changes, strings });
   stream
     .loadAll((index, chunk) => {
       if (index > 0) {
         appendTimelines(timelines, chunk, world.language);
+        changes.add(chunk);
         onChunk(chunk);
       }
     })
@@ -144,6 +158,7 @@ function play(
   first: Chunk,
   places?: PlacesFile,
   externals?: ExternalCitiesFile,
+  contributions?: { changes: ChangeIndex; strings?: string[] },
 ): (chunk: Chunk) => void {
   const commitCount = world.commitDays.length;
   const status = document.getElementById("status") as HTMLElement;
@@ -237,6 +252,9 @@ function play(
     : undefined;
   if (labels) document.body.append(labels.element);
   if (places) document.title = cityTitle(places);
+  const contributorView = contributions
+    ? createContributorView(scene, world, timelines, contributions.changes, contributions.strings)
+    : undefined;
 
   const scale = new Timescale(world.commitDays, world.stepCommits);
   const player = new Player(scale);
@@ -283,6 +301,7 @@ function play(
     status.textContent = Math.floor(t) > stream.loadedThrough()
       ? "Loading this part of history…"
       : `Commit ${commit + 1} of ${commitCount} · ${when}`;
+    contributorView?.update(t, rate, when);
   }
 
   // The camera's automatic moves: following the changes during playback, and the postcard showcase at the latest commit.

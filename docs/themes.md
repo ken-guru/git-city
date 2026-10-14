@@ -22,6 +22,7 @@ read them. Until then, a new Theme is a change to this package.
 | `display.title`, `display.description` | Non-empty text naming and describing the Theme. |
 | `wordPieces.prefixes` | One or more words of letters only, such as `Ash`. |
 | `wordPieces.suffixes` | One or more lower-case words, such as `ford`. |
+| `personNames.given`, `personNames.family` | Optional. One or more capitalised words each, such as `Elric` and `Thatcher`, for Contributors' Generated names. When left out, built-in neutral names are used. |
 | `streetSuffixes` | One or more words of letters and spaces, such as `Lane`. |
 | `roleNouns` | A noun for every key in the coverage list below. Letters and single spaces, at most 24 characters. |
 | `palette` | Optional. When given, a `hue` from 0 to 360 for every key in the coverage list below. When left out, the built-in palette gives the hues (the modern Theme's). |

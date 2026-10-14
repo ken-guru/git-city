@@ -25,14 +25,20 @@ By default, none of the following are in the output:
 - External Dependency names. External Cities get Generated names.
 - Commit hashes, remote URLs and the repository name.
 - Email addresses, in any form.
-- Contributors. They are off by default. The `contributors` setting is checked but not yet applied by this release, so
-  they never appear.
-- Commit messages. Off by default, and the `commitMessages` setting is not yet applied by this release.
+- Contributors. They are off by default, and the `contributors` setting (see the [config reference](config.md)) turns
+  them on. At `anonymous` they are "Contributor N"; at `generated` they get person names from the Theme, checked against
+  every hidden name; at `real` they show the name from `.mailmap`, and `--private` replaces that with a generated name.
+  Bots are one Automation Contributor. Email addresses are never written, and a `rules` pseudonym for a contributor
+  (by name or email) replaces the name. When contributors are off, no Contributor data is in the output.
+- Commit messages. Off by default. When on (`commitMessages`), only each Step's newest commit subject is written, with
+  email addresses removed and Concept pseudonyms applied. A subject that holds a hidden name is left out, and subjects
+  are cut to 160 characters.
 - Exact times of day. Off by default: they appear only when `exactTimes` is set in config.
 - Raw line or importer counts.
 - The mapping from Real names to Pseudonyms or Generated names.
 
-Revealing a name is always an explicit choice in config (`reveal` in `rules`). Nothing is revealed by default, and the
+Revealing a name is always an explicit choice in config: a `reveal` rule in `rules`, or the `real` level of `contributors`
+for Contributors' names. Nothing is revealed by default, and the
 `--private` flag ignores every reveal. See the [config reference](config.md).
 
 ## How to check it

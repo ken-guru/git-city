@@ -3,6 +3,7 @@ import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { encodeWorld, type WorldLayout } from "../shared/format.js";
 import { type PlannedChunk, planChunks, sizeReport, type SizeReport, writeChunks } from "./chunks.js";
+import type { CommitColumns } from "./contributors.js";
 import { encodePlaces, encodeStrings, type PlaceTable, type StringTable } from "./naming.js";
 import type { TimelineData } from "./timeline.js";
 
@@ -24,6 +25,7 @@ export async function writeSite(
   exactTimes: boolean,
   check: (stagingDir: string) => Promise<void>,
   externals?: string,
+  columns: CommitColumns = {},
 ): Promise<SizeReport> {
   await assertReplaceable(outDir);
   const staging = `${outDir}.staging`;
@@ -33,7 +35,7 @@ export async function writeSite(
 
   const plans = planChunks(timeline);
   await writeChunks(join(staging, "chunks"), plans, outDir);
-  const world = encodeSiteWorld(timeline, plans, layout, exactTimes);
+  const world = encodeSiteWorld(timeline, plans, layout, exactTimes, columns);
   await writeFile(join(staging, "world.bin"), world);
   await writeFile(join(staging, "strings.json"), encodeStrings(names));
   await writeFile(join(staging, "places.json"), encodePlaces(places));
@@ -61,6 +63,7 @@ export function encodeSiteWorld(
   plans: readonly PlannedChunk[],
   layout: WorldLayout,
   exactTimes: boolean,
+  columns: CommitColumns = {},
 ): Uint8Array {
   return encodeWorld({
     commitDays: timeline.commitDays,
@@ -72,6 +75,7 @@ export function encodeSiteWorld(
     seed: timeline.seed,
     chunks: plans.map((p) => ({ firstCommit: p.firstCommit, hash: p.hash })),
     ...layout,
+    ...columns,
   });
 }
 
