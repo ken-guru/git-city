@@ -6,6 +6,7 @@ import { type FileFacts, MISSING_FACTS } from "./facts.js";
 import { git } from "./git.js";
 import type { CommitRecord } from "./history.js";
 import type { LayoutSnapshot } from "./layout.js";
+import type { PlanOptions } from "./imports/externals.js";
 import type { RunState } from "./pipeline.js";
 
 /** Folder under the git common directory that holds the cache, shared by all worktrees. */
@@ -27,7 +28,7 @@ const LAYER_DEFINITIONS = {
   commits: { sources: ["history", "git"], packages: [], dirs: ["commits"], dependents: ["run"] },
   // The run state is the Timeline and the import graph, so changing their code clears it.
   run: {
-    sources: ["pipeline", "timeline", "model", "imports/graph", "imports/resolve", "imports/python", "../shared/buildings", "../shared/format"],
+    sources: ["pipeline", "timeline", "model", "imports/graph", "imports/resolve", "imports/python", "imports/externals", "../shared/buildings", "../shared/format"],
     packages: [],
     dirs: ["runs", "states"],
     dependents: ["layout"],
@@ -100,9 +101,15 @@ export const MAX_CHECKPOINTS = 3;
  * The scope a run's run state and layout belong to: a hash of the `exclude` globs, or "" when there are none.
  * A checkpoint is only resumed from in the same scope, so changing `exclude` rebuilds the City from the start.
  */
-export function scopeOf(exclude: readonly string[] | undefined): string {
-  if (exclude === undefined || exclude.length === 0) return "";
-  return createHash("sha256").update(JSON.stringify([...exclude].sort())).digest("hex").slice(0, 16);
+export function scopeOf(exclude: readonly string[] | undefined, externals?: PlanOptions): string {
+  const hasExternals = externals !== undefined && (externals.threshold !== undefined || Object.keys(externals.groups ?? {}).length > 0);
+  if (!hasExternals) {
+    if (exclude === undefined || exclude.length === 0) return "";
+    return createHash("sha256").update(JSON.stringify([...exclude].sort())).digest("hex").slice(0, 16);
+  }
+  // The External City grouping is part of the scope too: a different threshold or grouping rebuilds the Cities from the start.
+  const grouping = { threshold: externals.threshold ?? null, groups: externals.groups ?? {} };
+  return createHash("sha256").update(JSON.stringify([[...(exclude ?? [])].sort(), grouping])).digest("hex").slice(0, 16);
 }
 
 /** The scope a checkpoint was saved in. Checkpoints from before scopes existed have the empty scope. */

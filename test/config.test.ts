@@ -97,3 +97,26 @@ describe("loadConfig", () => {
     expect(() => loadConfig(["/nonexistent/git-city.config.jsonc"])).toThrow(ConfigError);
   });
 });
+
+describe("the externals section", () => {
+  it("reads the threshold and the grouping overrides", () => {
+    const config = parseConfig(JSON.stringify({ externals: { threshold: 4, groups: { "left-pad": "padding" } } }), "git-city.config.jsonc");
+    expect(config.externals).toEqual({ threshold: 4, groups: { "left-pad": "padding" } });
+  });
+
+  it("refuses a threshold outside 3 to 5, and unknown keys", () => {
+    expect(() => parseConfig(JSON.stringify({ externals: { threshold: 6 } }), "c.jsonc")).toThrow(ConfigError);
+    expect(() => parseConfig(JSON.stringify({ externals: { threshold: 2 } }), "c.jsonc")).toThrow(ConfigError);
+    expect(() => parseConfig(JSON.stringify({ externals: { colour: "red" } }), "c.jsonc")).toThrow(ConfigError);
+  });
+
+  it("merges the groups of later config files over earlier ones", () => {
+    const dir = mkdtempSync(join(tmpdir(), "git-city-externals-cfg-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const shared = join(dir, "shared.jsonc");
+    const personal = join(dir, "personal.jsonc");
+    writeFileSync(shared, JSON.stringify({ externals: { threshold: 4, groups: { a: "one" } } }));
+    writeFileSync(personal, JSON.stringify({ externals: { groups: { a: "two", b: "three" } } }));
+    expect(loadConfig([shared, personal]).externals).toEqual({ threshold: 4, groups: { a: "two", b: "three" } });
+  });
+});

@@ -18,6 +18,9 @@ import { DEFAULT_THEME, hueFor, loadTheme, type Theme } from "./theme.js";
 import { type StepEra, type StepLevel, chooseStepLevel, groupTimeline, PEAK_BUILDINGS_WARNING, peakStanding, planSteps, recentFromFor, stepEras } from "./steps.js";
 import type { StintTable, WorldLayout } from "../shared/format.js";
 import { encodeSiteWorld, writeSite } from "./write.js";
+import { externalCities } from "./external-cities.js";
+import { declarationIndex, externalReport, ExternalRegistry, importerKey, type ExternalReport, type PlanOptions } from "./imports/externals.js";
+import { isPythonFile } from "./imports/python.js";
 
 /** The pre-built page, shipped at `dist/page/` next to the CLI. */
 export const DEFAULT_PAGE_DIR = fileURLToPath(new URL("../page/", import.meta.url));
@@ -73,6 +76,8 @@ export interface BuildSummary {
   theme: string;
   /** The Steps used, per era of history (SPEC §9). */
   steps: StepEra[];
+  /** The External Dependencies declared at HEAD, with their External City or the Outskirts, and their Highway Lanes (SPEC §4, §7). */
+  externals: ExternalReport;
 }
 
 export async function build(options: BuildOptions): Promise<BuildSummary> {
@@ -94,10 +99,10 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   let read: PipelineRead;
   try {
     const previous = (await cache.checkpoints(branch)).at(-1);
-    if (previous !== undefined && scopeOfCheckpoint(previous) !== scopeOf(config.exclude)) {
+    if (previous !== undefined && scopeOfCheckpoint(previous) !== scopeOf(config.exclude, config.externals)) {
       warnings.push("the exclude rules changed since the last build, so the City is rebuilt in full and its layout changes");
     }
-    read = await readPipeline(options.repoDir, head, branch, cache, pipelineOptions(options.repoDir, seed, theme, config.exclude));
+    read = await readPipeline(options.repoDir, head, branch, cache, pipelineOptions(options.repoDir, seed, theme, config.exclude, config.externals));
     await cache.checkpoint(
       branch,
       head,
@@ -116,6 +121,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     warnings.push(`${read.missingBlobs} file versions could not be read and were counted as empty (missing objects; is this a partial clone?)`);
   }
   const { pipeline } = read;
+  const externals = externalsReport(pipeline.externals, pipeline.graph, config.externals);
   const rawTimeline = pipeline.timeline.result();
   const commits = rawTimeline.commitDays.length;
   options.onPhase?.("Naming");
@@ -158,6 +164,26 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     );
   }
 
+  // The External Cities (SPEC §7): names, presence, Highways and the horizon, dated to Steps. Their hidden Real names
+  // join the hidden terms the final scan checks the whole output for.
+  const cities = externalCities({
+    registry: pipeline.externals,
+    plan: pipeline.externals.plan(),
+    dependencies: externals.dependencies,
+    villages: layout.villages,
+    districts: layout.districts.map((d) => ({ key: d.key, village: d.village })),
+    stepOf: (commit) => plan.stepOf[commit] ?? 0,
+    naming: {
+      config,
+      theme,
+      seed: seedText,
+      hidden: names.hidden,
+      private: options.private,
+      taken: [places.file.city.name, ...places.file.districts.map((d) => d.name)],
+    },
+  });
+  const hidden = [...names.hidden, ...cities.hiddenKeys];
+
   options.onPhase?.("Writing site");
   const sizes = await writeSite(
     outDir,
@@ -166,7 +192,8 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     worldFor(plan.stepOf),
     names.table,
     places,
-    (staging) => scanOutput(staging, names.hidden),
+    (staging) => scanOutput(staging, hidden),
+    `${JSON.stringify(cities.file)}\n`,
   );
   const entry = relative(options.repoDir, outDir);
   const inside = entry !== "" && !entry.startsWith("..") && !isAbsolute(entry);
@@ -176,6 +203,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     commits,
     files: rawTimeline.fileCount,
     steps: stepEras(plan, commits, choice.recentFrom),
+    externals,
     outDir,
     configSources: config.sources,
     revealed: names.revealed,
@@ -194,14 +222,40 @@ export function claimsAtSteps(layout: LayoutResult, stepOf: Uint32Array): Layout
 }
 
 /** The pipeline's options for one run: the City seed, blob text for config files, the exclude globs, and the Category and Theme hues. */
-function pipelineOptions(repoDir: string, seed: number, theme: Theme, exclude: string[]): PipelineOptions {
+function pipelineOptions(repoDir: string, seed: number, theme: Theme, exclude: string[], externals?: PlanOptions): PipelineOptions {
   return {
     seed,
     exclude,
+    ...(externals === undefined ? {} : { externals }),
     readText: readBlobText(repoDir),
     categoryOf: (path) => categoryOf(path),
     hueOf: (role) => hueFor(theme, role),
   };
+}
+
+/**
+ * The External Dependency report at the end of the Timeline: the dependencies declared at HEAD (from the registry's
+ * open spans), matched to the packages the import graph holds. An import that no declaration matches is dropped; a
+ * declaration with no import still counts, with one Lane. Cities come from everything the history declared.
+ */
+export function externalsReport(
+  registry: ExternalRegistry,
+  graph: { importedPackages(): [string, string[]][] },
+  options: PlanOptions = {},
+): ExternalReport {
+  const current = registry.currentlyDeclared();
+  const match = declarationIndex(current);
+  const importers = new Map<string, number>();
+  for (const [file, names] of graph.importedPackages()) {
+    const ecosystem = isPythonFile(file) ? "python" : "npm";
+    for (const name of names) {
+      const hit = match(ecosystem, name);
+      if (hit === undefined) continue;
+      const key = importerKey(hit.ecosystem, hit.name);
+      importers.set(key, (importers.get(key) ?? 0) + 1);
+    }
+  }
+  return externalReport(current, registry.everDeclared(), importers, options);
 }
 
 /** Reads a blob's text from the object database, for the import graph's config files. */

@@ -22,6 +22,7 @@ export async function writeSite(
   names: StringTable,
   places: PlaceTable,
   check: (stagingDir: string) => Promise<void>,
+  externals?: string,
 ): Promise<SizeReport> {
   await assertReplaceable(outDir);
   const staging = `${outDir}.staging`;
@@ -35,6 +36,7 @@ export async function writeSite(
   await writeFile(join(staging, "world.bin"), world);
   await writeFile(join(staging, "strings.json"), encodeStrings(names));
   await writeFile(join(staging, "places.json"), encodePlaces(places));
+  if (externals !== undefined) await writeFile(join(staging, "externals.json"), externals);
   const sizes = sizeReport(world, plans);
 
   try {
