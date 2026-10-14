@@ -312,6 +312,16 @@ They appear only when opted in in config. There are four levels:
 
 All bots are grouped as **Automation**.
 
+**As built (#54):**
+- Names come from the author's mailmapped name and email. The email is used only as a key in the local cache and is never written to the output.
+- **anonymous:** "Contributor N", with N counted over people in first-commit order. Automation is not numbered.
+- **generated:** a person name from the Theme's `personNames` (a given and a family name), unique in the City and leak-checked. A Theme without `personNames` uses built-in neutral names. *Interpretation:* `personNames` is a new Theme field.
+- **real:** the mailmapped name, shown as a reveal. Under `--private` a Generated name stands in, and a name that holds a hidden term falls back to a Generated name. *Interpretation:* the `real` level is itself the reveal, so it needs no `reveal` rule.
+- Contributor rules set Pseudonyms only (`pseudonym`); a rule matches a Contributor by its name or its email. `reveal` and `allow` do not apply to Contributors.
+- Concept Pseudonyms apply to Contributors' names and to commit messages.
+- All bots form one Automation Contributor. *Interpretation:* a bot is one whose name ends in `[bot]` or matches a known bot name or email.
+- Known limitation, not yet decided: a grouped Step (§9) is credited to its newest commit's author, for counts, ranking and highlights. Real names skip the near-miss check that Generated names pass.
+
 ### Generated names
 | Thing | Form | Example (medieval) |
 |---|---|---|
@@ -591,6 +601,13 @@ Opt-in only.
 - **Colours:** the **top 8** people each get a colour (clear of paving and countryside), everyone else is grey, and Automation has its own grey.
 - **Legend:** the top 8 with commit counts, "+N more people" and Automation. Hover or tap lights up a person's Buildings from the last 120 commits.
 - **Commit messages** (a separate opt-in): a caption with the date, Contributor and message. Above about 6 commits in 2 s it becomes a summary: "23 commits by 4 people · latest: …".
+
+**As built (#54):**
+- **Pins:** one cone per Building a commit changed (added, deleted, re-floored, relocated or renovated), up to 12 per commit. A pin settles in over about one commit, holds, and fades out by six commits. It hovers over the Building's roof at that moment.
+- **Colours:** the top 8 people by commits get the hues 0, 50, 175, 200, 227, 252, 285 and 310, at HSL saturation 0.78 and lightness 0.52. The rest are grey (#6b7785) and Automation has its own grey (#b4bcc6). *Interpretation:* "clear of paving and countryside" means at least 5° of hue from every paving hue of the built-in Themes, and no colour in the green band 60°–170°. Hue alone cannot give eight people 10°, so the separation between them also relies on saturation (pins are saturated; paving is medium-low). *Not verified visually.*
+- **Legend:** the top 8 with commit counts, "+N more people" and Automation. Hover, focus or tap lights up a person's Buildings from the last 120 commits, uncapped; tap again clears it.
+- **Caption:** the date, Contributor and message of the current Step's newest commit. *Interpretation:* the summary counts real commits passed in the 2 s of viewing at the current speed (two times the Steps per second), and applies only when every Step in that window is a single commit. A grouped history keeps its per-Step caption at normal speed. The summary reads "N commits by M people · latest: …".
+- **Messages:** the subject line, with email addresses removed, Concept Pseudonyms applied and a 160-character cap. A message that holds a hidden term is not shown.
 
 ### Labels
 - **What:** District and External City labels show display names, with the District's colour on their edge.

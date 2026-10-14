@@ -44,9 +44,13 @@
 
 **Timeline**: The ordered sequence of commits that the City animates through and that the viewer can scrub.
 
-**Contributor**: A person who authored commits. Contributors are absent from the City unless the user opts in, and then they appear under a Real name or a Pseudonym.
+**Contributor**: A person who authored commits. Contributors are absent from the City unless the user opts in, and then they appear under a Real name (`real` level, from `.mailmap`), a Generated name (`generated` level, a person name from the Theme), or a Pseudonym. At the `anonymous` level a Contributor is numbered by first commit ("Contributor 9"), which is a Label-style fallback. *As built (#54): a Pseudonym rule for a Contributor matches its name or email; the Real name is never shown under `--private`.*
 
-**Automation**: Every bot that authored commits (release, dependency and CI bots), shown together as a single Contributor.
+**Automation**: Every bot that authored commits (release, dependency and CI bots), shown together as a single Contributor named "Automation", with its own grey. *As built (#54): a bot is one whose name ends in `[bot]` or matches a known bot name or email; this is an interpretation of "bot", and it can miss a bot with another name.*
+
+**Pin**: The marker drawn over a Building that a commit changed (added, deleted, re-floored, relocated or renovated), coloured by its Contributor. A commit draws up to 12 Pins, which settle in over about one commit, hold, and fade out by six commits. *As built (#54).*
+
+**Legend**: The key for Contributors' colours: the top 8 people by commits, with their commit counts, "+N more people", and Automation. Hovering, focusing or tapping an entry lights up that person's Buildings from the last 120 commits; tapping again clears it. *As built (#54).*
 
 **Real name**: The actual name of a file, Module or concept as it appears in the repo.
 

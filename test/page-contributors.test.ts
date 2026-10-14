@@ -1,6 +1,10 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   AUTOMATION_COLOUR,
+  GREEN_BAND,
+  PAVING_CLEARANCE,
+  PERSON_SEPARATION,
   captionLine,
   changesIndex,
   OTHER_COLOUR,
@@ -11,6 +15,7 @@ import {
   rankPeople,
   summaryLine,
   TOP_PEOPLE,
+  isSummary,
   windowOf,
 } from "../src/page/contributors.js";
 import { EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_LANGUAGE, EVENT_SCAFFOLD_ON, type Chunk } from "../src/shared/format.js";
@@ -67,6 +72,66 @@ describe("rankPeople", () => {
   });
 });
 
+/** Hue in degrees, from a 0xRRGGBB colour: the standard RGB-to-hue formula. */
+function hueOf(hex: number): number {
+  const r = ((hex >> 16) & 255) / 255;
+  const g = ((hex >> 8) & 255) / 255;
+  const b = (hex & 255) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const d = max - min;
+  if (d === 0) return 0;
+  let h: number;
+  if (max === r) h = ((g - b) / d) % 6;
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return (h * 60 + 360) % 360;
+}
+
+function hueDistance(a: number, b: number): number {
+  const d = Math.abs(a - b) % 360;
+  return Math.min(d, 360 - d);
+}
+
+/** Every paving hue of the built-in themes, read from their palettes. */
+function pavingHues(): number[] {
+  const themes = ["modern", "medieval"].map((name) =>
+    JSON.parse(readFileSync(new URL(`../themes/${name}.json`, import.meta.url), "utf8")),
+  );
+  return themes.flatMap((theme) => Object.values(theme.palette as Record<string, { hue: number }>).map((swatch) => swatch.hue));
+}
+
+describe("top people's colours", () => {
+  // The expected hues are written out here, not read from the code, so a changed palette must change this list too.
+  const expectedHues = [0, 50, 175, 200, 227, 252, 285, 310];
+
+  it("are the chosen hues, to within the eight-bit rounding of a colour", () => {
+    expect(PERSON_COLOURS).toHaveLength(TOP_PEOPLE);
+    PERSON_COLOURS.forEach((colour, i) => {
+      expect(hueDistance(hueOf(colour), expectedHues[i]!)).toBeLessThanOrEqual(2);
+    });
+  });
+
+  it("keep the clearance from every built-in paving hue and stay out of the green band", () => {
+    const paving = pavingHues();
+    expect(paving.length).toBeGreaterThan(0);
+    for (const colour of PERSON_COLOURS) {
+      const hue = hueOf(colour);
+      expect(Math.min(...paving.map((p) => hueDistance(hue, p)))).toBeGreaterThanOrEqual(PAVING_CLEARANCE - 1);
+      expect(hue < GREEN_BAND[0] || hue > GREEN_BAND[1]).toBe(true);
+    }
+  });
+
+  it("are separated from each other, so the legend's swatches stay told apart", () => {
+    const hues = PERSON_COLOURS.map(hueOf);
+    for (let i = 0; i < hues.length; i++) {
+      for (let j = i + 1; j < hues.length; j++) {
+        expect(hueDistance(hues[i]!, hues[j]!)).toBeGreaterThanOrEqual(PERSON_SEPARATION - 1);
+      }
+    }
+  });
+});
+
 describe("pinScale", () => {
   it("is absent before its commit and after its life", () => {
     expect(pinScale(-0.5)).toBe(0);
@@ -118,8 +183,21 @@ describe("windowOf", () => {
   it("counts the commits and people in a range of Steps", () => {
     const ofStep = Uint32Array.from([0, 1, 1, 2, 0]);
     const stepCommits = Uint32Array.from([1, 2, 3, 4, 1]);
-    expect(windowOf(ofStep, stepCommits, 1, 3)).toEqual({ commits: 9, people: 2 });
-    expect(windowOf(ofStep, stepCommits, 0, 4)).toEqual({ commits: 11, people: 3 });
+    expect(windowOf(ofStep, stepCommits, 1, 3)).toEqual({ commits: 9, people: 2, perCommit: false });
+    expect(windowOf(ofStep, stepCommits, 0, 4)).toEqual({ commits: 11, people: 3, perCommit: false });
+  });
+
+  it("summarises a fast stretch of per-commit Steps, and never a grouped history at normal speed", () => {
+    const ofStep = Uint32Array.from({ length: 40 }, (_, i) => i % 3);
+    // Per commit: 8 Steps of one commit in a 2 s window at 4 Steps/s, so 8 commits pass: a summary.
+    const perCommit = Uint32Array.from({ length: 40 }, () => 1);
+    expect(isSummary(windowOf(ofStep, perCommit, 20, 27))).toBe(true);
+    // Normal speed (2 Steps/s, so 4 Steps in 2 s): not a summary even with per-commit Steps.
+    expect(isSummary(windowOf(ofStep, perCommit, 20, 23))).toBe(false);
+    // Grouped history: 12 commits per Step at normal speed passes 48 commits, yet the caption stays per Step.
+    const grouped = Uint32Array.from({ length: 40 }, () => 12);
+    expect(isSummary(windowOf(ofStep, grouped, 20, 23))).toBe(false);
+    expect(isSummary(windowOf(ofStep, grouped, 20, 27))).toBe(false);
   });
 });
 

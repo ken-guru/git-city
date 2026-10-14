@@ -1,5 +1,5 @@
 import type { Scene } from "three";
-import { type ChangeIndex, captionLine, OTHER_COLOUR, rankPeople, SUMMARY_COMMITS, SUMMARY_SECONDS, summaryLine, windowOf } from "./contributors.js";
+import { type ChangeIndex, captionLine, isSummary, OTHER_COLOUR, rankPeople, SUMMARY_SECONDS, summaryLine, windowOf } from "./contributors.js";
 import { type Timelines } from "./state.js";
 import { PinLayer, highlightSpots, visiblePins } from "./pins.js";
 import { renderLegend } from "./legend.js";
@@ -74,7 +74,7 @@ export function createContributorView(
         ? windowOf(columns.ofStep, world.stepCommits, commit - Math.ceil(commitsPerSecond * SUMMARY_SECONDS) + 1, commit)
         : undefined;
       const line =
-        stretch !== undefined && stretch.commits > SUMMARY_COMMITS
+        stretch !== undefined && isSummary(stretch)
           ? summaryLine(stretch.commits, stretch.people, latest)
           : captionLine({ date: when, contributor: nameOf(whoAt(commit)), message: latest });
       caption.textContent = line;

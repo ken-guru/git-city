@@ -18,10 +18,24 @@ export const SUMMARY_COMMITS = 6;
 export const SUMMARY_SECONDS = 2;
 
 /**
- * Colours for the top people: saturated, and none in the yellow-green to green band that paving and countryside use
- * (SPEC §8, §11). Checking them against the paving on screen is a visual step the headless tests cannot do.
+ * The green band that paving never uses and that the countryside's greens sit in, in hue degrees (SPEC §8). This is
+ * the assumption behind the colour choice: the band is 60 to 170.
  */
-export const PERSON_COLOURS: readonly number[] = [0xe63946, 0xf77f00, 0xd62fa0, 0x7b2ff7, 0x1d4ed8, 0x00a8c6, 0xffb703, 0x8d5524];
+export const GREEN_BAND: readonly [number, number] = [60, 170];
+/**
+ * The smallest hue distance from any built-in Theme's paving hue that the top people's colours keep. Hue alone cannot
+ * give more than this to eight people: a 10-degree floor fits six colours, so the colours rely on saturation too (pins
+ * are fully saturated, paving is medium-low saturation).
+ */
+export const PAVING_CLEARANCE = 5;
+/** The least hue distance between any two top people's colours, so the legend's swatches stay told apart. */
+export const PERSON_SEPARATION = 25;
+/**
+ * The top people's colours, in rank order: HSL at saturation 0.78 and lightness 0.52, for the hues 0, 50, 175, 200, 227,
+ * 252, 285 and 310. These are the largest set of eight that keeps PAVING_CLEARANCE from every paving hue, stays out of
+ * GREEN_BAND and keeps PERSON_SEPARATION between themselves. The tests check each of these claims against the themes.
+ */
+export const PERSON_COLOURS: readonly number[] = [0xe42525, 0xe4c425, 0x25e4d4, 0x25a4e4, 0x254ee4, 0x4b25e4, 0xb425e4, 0xe425c4];
 /** Everyone outside the top people. */
 export const OTHER_COLOUR = 0x6b7785;
 /** Automation has its own grey. */
@@ -123,15 +137,34 @@ export function pinScale(age: number): number {
   return grow * fade;
 }
 
-/** Commits and distinct people in the Steps from `first` to `last`, inclusive. */
-export function windowOf(ofStep: Uint32Array, stepCommits: Uint32Array, first: number, last: number): { commits: number; people: number } {
+/**
+ * Real commits and distinct people in the Steps from `first` to `last`, inclusive. `perCommit` is true when every Step
+ * in the window is a single commit: a grouped Step (SPEC §9) passes many commits at once and is not summarised.
+ */
+export function windowOf(
+  ofStep: Uint32Array,
+  stepCommits: Uint32Array,
+  first: number,
+  last: number,
+): { commits: number; people: number; perCommit: boolean } {
   let commits = 0;
+  let perCommit = true;
   const who = new Set<number>();
   for (let step = Math.max(0, first); step <= Math.min(last, ofStep.length - 1); step++) {
-    commits += stepCommits[step] ?? 0;
+    const count = stepCommits[step] ?? 0;
+    commits += count;
+    if (count !== 1) perCommit = false;
     who.add(ofStep[step]!);
   }
-  return { commits, people: who.size };
+  return { commits, people: who.size, perCommit };
+}
+
+/**
+ * Whether the caption is a summary (SPEC §11): more than SUMMARY_COMMITS real commits in the window, on per-commit
+ * Steps. A grouped history keeps its per-Step caption at normal speed.
+ */
+export function isSummary(window: { commits: number; perCommit: boolean }): boolean {
+  return window.perCommit && window.commits > SUMMARY_COMMITS;
 }
 
 /** The caption under the ribbon: the date, the Contributor and the message, leaving out what is absent. */
