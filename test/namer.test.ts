@@ -58,6 +58,13 @@ describe("ThemeNamer", () => {
     expect(name.endsWith(` ${modern.roleNouns.fallback}`)).toBe(true);
   });
 
+  it("finds the one free word-piece pair in a small pool, rather than giving up", () => {
+    const { prefixes, suffixes } = modern.wordPieces;
+    const only = `${prefixes[prefixes.length - 1]}${suffixes[suffixes.length - 1]}`;
+    const name = namer({ accept: (c) => c === only }).name({ kind: "city", birthOrder: 0, role: null });
+    expect(name).toBe(only);
+  });
+
   it("gives up with an error when no candidate is ever accepted", () => {
     expect(() => namer({ accept: () => false }).name({ kind: "city", birthOrder: 0, role: null })).toThrow(NamerError);
   });

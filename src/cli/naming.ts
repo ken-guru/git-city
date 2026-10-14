@@ -94,7 +94,6 @@ export function labelFor(path: string, id: number): string {
 /** Words the Labels themselves are built from; a hidden name equal to one of these is not scanned for. */
 const LABEL_WORDS = new Set([...Object.values(TYPE_BY_EXTENSION), "Other", "file"].map((w) => w.toLowerCase()));
 
-/** Names every file (by id, in birth order). The only way to produce a StringTable. */
 /** The Concept policies of a config: pseudonym replacements, hidden words, and every Concept not revealed. */
 function conceptPolicies(rules: Config["rules"], ignoreReveal: boolean) {
   const concepts = conceptWords(rules).map((word) => ({ word, policy: resolveConcept(rules, word, { ignoreReveal }) }));
@@ -106,6 +105,7 @@ function conceptPolicies(rules: Config["rules"], ignoreReveal: boolean) {
   return { concepts, pseudonymConcepts, hiddenConcepts, unrevealedConcepts };
 }
 
+/** Names every file (by id, in birth order). The only way to produce a StringTable. */
 export function nameFiles(paths: readonly string[], config: Config, options: NameOptions = {}): NamingResult {
   const ignoreReveal = options.private === true;
   const rules = config.rules;
@@ -183,6 +183,9 @@ export interface PlaceOptions extends NameOptions {
   hidden: readonly string[];
 }
 
+/** Neighbourhood slots reserved per District when deriving a Neighbourhood's birth order. */
+const NEIGHBOURHOOD_SLOTS = 65_536;
+
 /** The places.json content. Only the naming step's table can be passed in. */
 export interface PlaceTable {
   readonly file: PlacesFile;
@@ -230,14 +233,15 @@ export function namePlaces(districts: readonly PlaceInput[], config: Config, opt
   const cityName = namer.name({ kind: "city", birthOrder: 0, role: null });
   taken.add(cityName.toLowerCase());
 
-  let neighbourhoodOrder = 0;
   const places: DistrictPlace[] = districts.map((d, id) => {
     const generated = namer.name({ kind: "district", birthOrder: id, role: d.role });
     taken.add(generated.toLowerCase());
     const shown = displayName({ ...districtFixed[id]!, generated, label: `District ${id + 1}` });
     const neighbourhoods: NeighbourhoodPlace[] = d.neighbourhoods.map((_, i) => {
       const fixed = neighbourhoodFixed[id]![i]!;
-      const street = namer.name({ kind: "neighbourhood", birthOrder: neighbourhoodOrder++, role: null });
+      // A Neighbourhood's birth order is its District's id and its own index, so adding a Neighbourhood
+      // elsewhere never changes this one's street name.
+      const street = namer.name({ kind: "neighbourhood", birthOrder: id * NEIGHBOURHOOD_SLOTS + i, role: null });
       taken.add(street.toLowerCase());
       const text = displayName({ ...fixed, generated: street, label: street });
       return { id: i, name: text.text, source: sourceIndex(text.source) };

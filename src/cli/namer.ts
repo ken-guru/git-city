@@ -39,13 +39,30 @@ export class ThemeNamer implements Namer {
     // A District with no usable noun is named by its proper name alone: still leak-checked, never an error.
     const noun = metadata.kind === "district" ? this.nounFor(metadata.role) : undefined;
     const suffixes = metadata.kind === "neighbourhood" ? theme.streetSuffixes : undefined;
+    const tailFor = (attempt: number) => noun ?? suffixes?.[draw(this.key(metadata, attempt, "tail"), suffixes.length)];
+    const join = (proper: string, tail: string | undefined) => (tail === undefined ? proper : `${proper} ${tail}`);
+
+    // Seeded draws first, so a City's names are stable and varied.
     for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-      const proper = this.properName(metadata, attempt);
-      const tail = noun ?? suffixes?.[draw(this.key(metadata, attempt, "tail"), suffixes.length)];
-      const candidate = tail === undefined ? proper : `${proper} ${tail}`;
+      const candidate = join(this.properName(metadata, attempt), tailFor(attempt));
       if (this.options.accept(candidate)) return candidate;
     }
-    throw new NamerError(`no free ${metadata.kind} name after ${ATTEMPTS} tries`);
+    // The pool of word pieces is finite, so try every combination in order before giving up.
+    const { prefixes, suffixes: suffixPieces } = theme.wordPieces;
+    const tail = tailFor(0);
+    for (const prefix of prefixes) {
+      for (const suffix of suffixPieces) {
+        const candidate = join(`${prefix}${suffix}`, tail);
+        if (this.options.accept(candidate)) return candidate;
+      }
+    }
+    // Then a numeral on the first candidate, which keeps the name unique and leak-checked.
+    const base = join(`${prefixes[0]}${suffixPieces[0]}`, tail);
+    for (let n = 2; n < ATTEMPTS + 2; n++) {
+      const candidate = `${base} ${n}`;
+      if (this.options.accept(candidate)) return candidate;
+    }
+    throw new NamerError(`no free ${metadata.kind} name in this City`);
   }
 
   /**

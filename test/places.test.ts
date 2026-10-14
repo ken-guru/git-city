@@ -88,6 +88,12 @@ describe("namePlaces", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
+  it("keeps a Neighbourhood's street name when another District gains a Neighbourhood", () => {
+    const before = places(["a/x.ts", "b/x.ts"], [district("a", null, ["a"]), district("b", null, ["b"])]);
+    const after = places(["a/x.ts", "a/sub/y.ts", "b/x.ts"], [district("a", null, ["a", "a/sub"]), district("b", null, ["b"])]);
+    expect(after.file.districts[1]!.neighbourhoods[0]!.name).toBe(before.file.districts[1]!.neighbourhoods[0]!.name);
+  });
+
   it("fixes one Role noun for every District with that Role", () => {
     const districts = [district("a", "ui"), district("b", "ui"), district("c", "ui")];
     const nouns = places(["a/x.ts", "b/x.ts", "c/x.ts"], districts).file.districts.map((d) => d.generated.split(" ").slice(-1)[0]);
