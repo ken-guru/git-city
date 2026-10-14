@@ -63,6 +63,19 @@ describe("chunk planning", () => {
     expect(chunks.map((c) => c.firstCommit)).toEqual([0, 1, 2, 3, 4, 5]);
   });
 
+  it("never lets a multi-commit chunk run past the byte limit, even when sizes are checked coarsely", () => {
+    const events: [number, number, EventKind, number][] = [];
+    for (let c = 0; c < 900; c++) events.push([c, c % 40, EVENT_FLOORS, ((c * 37) % 97) + 1]);
+    const chunkBytes = 700;
+    const chunks = planChunks(input(900, events, 40), { chunkBytes, checkEvery: 100 });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    chunks.forEach((chunk, i) => {
+      const length = (chunks[i + 1]?.firstCommit ?? 900) - chunk.firstCommit;
+      if (length > 1) expect(chunk.compressedBytes, `chunk at commit ${chunk.firstCommit}`).toBeLessThan(chunkBytes);
+    });
+  });
+
   it("keeps earlier chunks byte-identical when the Timeline grows, so a re-run rewrites only the last chunk", () => {
     const events: [number, number, EventKind, number][] = [];
     for (let c = 0; c < 4000; c += 7) events.push([c, c % 3, EVENT_FLOORS, (c % 5) + 1]);

@@ -11,7 +11,7 @@ import type { TimelineData } from "./timeline.js";
 const CHUNK_COMMITS = 2000;
 /** ...or once a chunk compresses to about this many bytes (SPEC §9). */
 const CHUNK_BYTES = 256 * 1024;
-/** The compressed size is checked at this many commits apart, so a chunk can run this far past CHUNK_BYTES. */
+/** The compressed size is checked at this many commits apart; the cut is then found exactly by bisection. */
 const CHECK_EVERY = 100;
 /** The world file plus the first chunk, compressed, must fit this (SPEC §9 budget). */
 export const FIRST_PLAY_BUDGET_BYTES = 1024 * 1024;
@@ -55,26 +55,62 @@ export function planChunks(timeline: ChunkInput, limits: ChunkLimits = {}): Plan
   let start = 0;
   do {
     const snapshot = snapshotOf(state);
-    let end = start;
-    let bytes: Uint8Array;
-    let compressedBytes: number;
-    for (;;) {
-      end = Math.min(commits, end + checkEvery, start + chunkCommits);
-      bytes = encodeRange(timeline, snapshot, start, end, firstEvent);
-      compressedBytes = deflateSync(bytes).length;
-      if (end === commits || end - start === chunkCommits) break;
-      if (compressedBytes >= chunkBytes) break;
-    }
+    const chunk = chunkFrom(timeline, snapshot, start, { commits, chunkCommits, chunkBytes, checkEvery }, firstEvent);
     plans.push({
       firstCommit: start,
-      bytes,
-      hash: createHash("sha256").update(bytes).digest().subarray(0, CHUNK_HASH_BYTES),
-      compressedBytes,
+      bytes: chunk.bytes,
+      hash: createHash("sha256").update(chunk.bytes).digest().subarray(0, CHUNK_HASH_BYTES),
+      compressedBytes: chunk.compressedBytes,
     });
-    applyEvents(state, timeline, firstEvent[start]!, firstEvent[end]!);
-    start = end;
+    applyEvents(state, timeline, firstEvent[start]!, firstEvent[chunk.end]!);
+    start = chunk.end;
   } while (start < commits);
   return plans;
+}
+
+interface EncodedChunk {
+  end: number;
+  bytes: Uint8Array;
+  compressedBytes: number;
+}
+
+/**
+ * The chunk that starts at `start`, running as far as the commit limit and the byte limit allow. The size is checked
+ * every `checkEvery` commits, and the last step is bisected, so the chunk stays under `chunkBytes` unless it holds a
+ * single commit. The cut depends only on the commits from `start` on.
+ */
+function chunkFrom(
+  timeline: ChunkInput,
+  snapshot: ChunkSnapshot,
+  start: number,
+  limits: { commits: number; chunkCommits: number; chunkBytes: number; checkEvery: number },
+  firstEvent: Uint32Array,
+): EncodedChunk {
+  const encode = (end: number): EncodedChunk => {
+    const bytes = encodeRange(timeline, snapshot, start, end, firstEvent);
+    return { end, bytes, compressedBytes: deflateSync(bytes).length };
+  };
+  const limit = Math.min(limits.commits, start + limits.chunkCommits);
+  // A chunk always holds at least one commit, even one that is on its own over the byte limit.
+  let fit = encode(start + 1);
+  while (fit.end < limit) {
+    const next = Math.min(limit, fit.end + limits.checkEvery);
+    const over = encode(next);
+    if (over.compressedBytes < limits.chunkBytes) {
+      fit = over;
+      continue;
+    }
+    let low = fit;
+    let high = next;
+    while (high - low.end > 1) {
+      const mid = Math.floor((low.end + high) / 2);
+      const candidate = encode(mid);
+      if (candidate.compressedBytes < limits.chunkBytes) low = candidate;
+      else high = mid;
+    }
+    return low;
+  }
+  return fit;
 }
 
 /**

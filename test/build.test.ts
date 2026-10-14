@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,6 +14,25 @@ function fixture(): FixtureRepo {
   const repo = new FixtureRepo();
   cleanups.push(() => repo.remove());
   return repo;
+}
+
+/** Adds `count` one-file commits to main, numbered from `from`, with `git fast-import` (fast enough for 2,000+ commits). */
+function addCommits(repo: FixtureRepo, from: number, count: number): void {
+  const stream: string[] = [];
+  for (let i = from; i < from + count; i++) {
+    const message = `commit ${i}`;
+    stream.push(
+      "commit refs/heads/main",
+      `mark :${i + 1}`,
+      `committer Test <test@example.com> ${1704067200 + i * 3600} +0000`,
+      `data ${message.length}`,
+      message,
+    );
+    if (i === from && from > 0) stream.push("from refs/heads/main^0");
+    const content = `${i}\n`;
+    stream.push(`M 100644 inline f${i}.txt`, `data ${content.length}`, content);
+  }
+  execFileSync("git", ["-C", repo.dir, "fast-import", "--quiet"], { input: `${stream.join("\n")}\n` });
 }
 
 async function buildSite(repo: FixtureRepo, options: { branch?: string } = {}) {
@@ -143,6 +163,34 @@ describe("git-city build", () => {
     );
     expect(readFileSync(join(precious, "notes.txt"), "utf8")).toBe("keep me");
   });
+});
+
+describe("re-runs over several chunks", () => {
+  it("a re-run into the same folder matches a fresh build, chunk for chunk", async () => {
+    const repo = fixture();
+    addCommits(repo, 0, 2100);
+    const root = mkdtempSync(join(tmpdir(), "git-city-rerun-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const pageDir = join(root, "page");
+    mkdirSync(pageDir);
+    writeFileSync(join(pageDir, "index.html"), "<!doctype html>stub page");
+    const outDir = join(root, "site");
+    const freshDir = join(root, "fresh");
+
+    await build({ repoDir: repo.dir, outDir, pageDir });
+    // The first chunk holds commits 0 to 1999 and is unchanged by these 30 new commits, so the re-run reuses it.
+    addCommits(repo, 2100, 30);
+    await build({ repoDir: repo.dir, outDir, pageDir });
+    await build({ repoDir: repo.dir, outDir: freshDir, pageDir });
+
+    const chunkNames = (dir: string) => readdirSync(join(dir, "chunks")).sort();
+    expect(chunkNames(freshDir)).toHaveLength(2);
+    expect(chunkNames(outDir)).toEqual(chunkNames(freshDir));
+    for (const name of chunkNames(freshDir)) {
+      expect(readFileSync(join(outDir, "chunks", name)), name).toEqual(readFileSync(join(freshDir, "chunks", name)));
+    }
+    expect(readFileSync(join(outDir, "world.bin"))).toEqual(readFileSync(join(freshDir, "world.bin")));
+  }, 60_000);
 });
 
 /** [commit added, commit deleted or null] for every file, sorted. */
