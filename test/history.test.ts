@@ -107,6 +107,7 @@ describe("renames", () => {
 
     expect(renamed!.deleted).toEqual(["old.txt"]);
     expect(renamed!.added).toEqual(["new.txt"]);
+    expect(renamed!.renamed).toEqual([{ from: "old.txt", to: "new.txt" }]);
     expect(renamed!.writes).toEqual([expect.objectContaining({ path: "new.txt" })]);
     expect(renamed!.writes[0]!.facts.lines).toBe(21);
   });
