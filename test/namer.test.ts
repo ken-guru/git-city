@@ -53,9 +53,22 @@ describe("ThemeNamer", () => {
     expect(name).not.toMatch(/gate/i);
   });
 
-  it("falls back to the fallback noun when a Role's own noun is refused", () => {
-    const name = namer({ accept: (c) => !c.includes("Checkpoint") }).name({ kind: "district", birthOrder: 1, role: "auth" });
+  it("falls back to the fallback noun when a Role's own noun would leak", () => {
+    const leaks = (text: string) => text.endsWith(modern.roleNouns.auth);
+    const name = namer({ leaks }).name({ kind: "district", birthOrder: 1, role: "auth" });
     expect(name.endsWith(` ${modern.roleNouns.fallback}`)).toBe(true);
+  });
+
+  it("gives a District its proper name alone only when both its noun and the fallback would leak", () => {
+    const leaks = (text: string) => text.endsWith(modern.roleNouns.auth) || text.endsWith(modern.roleNouns.fallback);
+    const name = namer({ leaks }).name({ kind: "district", birthOrder: 1, role: "auth" });
+    expect(name.split(" ")).toHaveLength(1);
+  });
+
+  it("keeps a District's Role noun when another name already uses that word", () => {
+    const taken = new Set([modern.roleNouns.auth.toLowerCase()]);
+    const name = namer({ accept: (c) => !taken.has(c.toLowerCase()) }).name({ kind: "district", birthOrder: 2, role: "auth" });
+    expect(name.endsWith(` ${modern.roleNouns.auth}`)).toBe(true);
   });
 
   it("finds the one free word-piece pair in a small pool, rather than giving up", () => {

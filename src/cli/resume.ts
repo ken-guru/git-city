@@ -1,6 +1,7 @@
 import type { CacheSession } from "./cache.js";
 import { git } from "./git.js";
 import { type CommitRecord, COMMITS_PER_BATCH, HistoryError, type HistoryReport, readCommitBatch } from "./history.js";
+import type { LayoutSnapshot } from "./layout.js";
 import { TimelineBuilder } from "./timeline.js";
 
 /** The first-parent chain ending at `head`, oldest commit first. */
@@ -21,6 +22,8 @@ export interface TimelineRead {
   read: number;
   /** The checkpoint this run resumed from, if any. */
   resumedFrom?: string;
+  /** The layout saved with that checkpoint, if it has one. Its commits are the ones before `chain.length - replayed`. */
+  layout?: LayoutSnapshot;
 }
 
 /**
@@ -36,6 +39,7 @@ export async function readTimeline(repoDir: string, head: string, branch: string
   let missingBlobs = 0;
   let start = 0;
   let resumedFrom: string | undefined;
+  let layout: LayoutSnapshot | undefined;
   const checkpoints = await cache.checkpoints(branch);
   for (let i = checkpoints.length - 1; i >= 0; i--) {
     const checkpoint = checkpoints[i]!;
@@ -47,6 +51,7 @@ export async function readTimeline(repoDir: string, head: string, branch: string
     missingBlobs = checkpoint.missingBlobs;
     start = at + 1;
     resumedFrom = checkpoint.commit;
+    layout = await cache.loadLayout(branch, checkpoint);
     break;
   }
 
@@ -67,6 +72,7 @@ export async function readTimeline(repoDir: string, head: string, branch: string
     replayed: chain.length - start,
     read,
     resumedFrom,
+    layout,
   };
 }
 

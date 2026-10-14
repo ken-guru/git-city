@@ -165,6 +165,28 @@ export interface LayoutResult {
   lots: LotRecord[];
 }
 
+/** A District as the snapshot holds it: its sets and maps as entry lists. */
+type SnapshotDistrict = Omit<DistrictState, "neighbourhoods" | "scores"> & { neighbourhoods: string[]; scores: [Role, number][] };
+
+/** The layout's whole state at a point in history, JSON-safe (SPEC §3, layer 3: persisted layout and chosen Roles). */
+export interface LayoutSnapshot {
+  /** The seed the layout was made with. A snapshot only resumes under the same seed. */
+  seed: number;
+  manifestDirs: [string, number][];
+  manifestPaths: string[];
+  standingDirs: [string, number][];
+  inPlace: string[];
+  districts: SnapshotDistrict[];
+  vanishedManifests: string[];
+  nextDistrictIndex: number;
+  villages: VillageRecord[];
+  blocks: BlockRecord[];
+  lots: LotRecord[];
+  blockAt: [string, number][];
+  blockSlots: boolean[][];
+  ownedBlocks: [string, number[]][];
+}
+
 interface DistrictState {
   key: string;
   /** Birth order of the District: never reused, so a District that merged back and returned is a new one. */
@@ -212,6 +234,55 @@ export class LayoutBuilder {
     this.categoryOf = options.categoryOf ?? guessCategory;
     this.widthStepOf = options.widthStepOf ?? (() => 0);
     this.terrain = options.terrain ?? countryside(options.seed);
+  }
+
+  /**
+   * The whole state, as JSON-safe values, so a run can resume from it. It holds every District's chosen Role and
+   * the Role scores behind it, so the Role hysteresis carries across runs.
+   */
+  snapshot(): LayoutSnapshot {
+    return {
+      seed: this.options.seed,
+      manifestDirs: [...this.manifestDirs],
+      manifestPaths: [...this.manifestPaths],
+      standingDirs: [...this.standingDirs],
+      inPlace: [...this.inPlace],
+      districts: [...this.districts.values()].map((d) => ({
+        ...d,
+        neighbourhoods: [...d.neighbourhoods],
+        scores: [...d.scores],
+      })),
+      vanishedManifests: [...this.vanishedManifests],
+      nextDistrictIndex: this.nextDistrictIndex,
+      villages: structuredClone(this.villages),
+      blocks: structuredClone(this.blocks),
+      lots: structuredClone(this.lots),
+      blockAt: [...this.blockAt],
+      blockSlots: structuredClone(this.blockSlots),
+      ownedBlocks: [...this.ownedBlocks].map(([owner, ids]) => [owner, [...ids]]),
+    };
+  }
+
+  /** A builder holding `snapshot`, or undefined when the snapshot was made with another seed and cannot be reused. */
+  static restore(options: LayoutOptions, snapshot: LayoutSnapshot): LayoutBuilder | undefined {
+    if (snapshot.seed !== options.seed) return undefined;
+    const builder = new LayoutBuilder(options);
+    for (const [dir, count] of snapshot.manifestDirs) builder.manifestDirs.set(dir, count);
+    for (const path of snapshot.manifestPaths) builder.manifestPaths.add(path);
+    for (const [dir, count] of snapshot.standingDirs) builder.standingDirs.set(dir, count);
+    for (const dir of snapshot.inPlace) builder.inPlace.add(dir);
+    for (const d of snapshot.districts) {
+      builder.districts.set(d.key, { ...d, neighbourhoods: new Set(d.neighbourhoods), scores: new Map(d.scores) });
+    }
+    for (const dir of snapshot.vanishedManifests) builder.vanishedManifests.add(dir);
+    builder.nextDistrictIndex = snapshot.nextDistrictIndex;
+    builder.villages.push(...structuredClone(snapshot.villages));
+    builder.blocks.push(...structuredClone(snapshot.blocks));
+    builder.lots.push(...structuredClone(snapshot.lots));
+    for (const [cell, id] of snapshot.blockAt) builder.blockAt.set(cell, id);
+    builder.blockSlots.push(...structuredClone(snapshot.blockSlots));
+    for (const [owner, ids] of snapshot.ownedBlocks) builder.ownedBlocks.set(owner, [...ids]);
+    return builder;
   }
 
   apply(change: LayoutChange): void {

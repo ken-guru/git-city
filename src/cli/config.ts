@@ -66,6 +66,7 @@ export function parseConfig(text: string, source: string): Config {
 
   const rules = root.rules === undefined ? [] : parseRules(root.rules, source);
   const naming = root.naming === undefined ? {} : parseNaming(root.naming, source);
+  checkSections(root, source);
   if (root.theme !== undefined && typeof root.theme !== "string") throw new ConfigError(`${source}: "theme" must be a string`);
   const theme = root.theme as string | undefined;
   return { rules, naming, sources: [source], ...(theme === undefined ? {} : { theme }) };
@@ -135,6 +136,30 @@ function parseRule(entry: unknown, where: string): Rule {
 function rejectKeys(entry: Record<string, unknown>, keys: string[], action: string, where: string): void {
   for (const key of keys) {
     if (entry[key] !== undefined) throw new ConfigError(`${where}: "${key}" is only allowed with another action, not "${action}"`);
+  }
+}
+
+/** The contributor levels of config.schema.json. */
+const CONTRIBUTOR_LEVELS = ["off", "anonymous", "generated", "real"];
+
+/**
+ * Checks the sections other tickets will read, so a wrong type is caught now and matches the schema
+ * (schema/git-city.config.schema.json). Their values are not used yet.
+ */
+function checkSections(root: Record<string, unknown>, source: string): void {
+  const level = root.contributors;
+  if (level !== undefined && !(typeof level === "string" && CONTRIBUTOR_LEVELS.includes(level))) {
+    throw new ConfigError(`${source}: "contributors" must be one of ${CONTRIBUTOR_LEVELS.join(", ")}`);
+  }
+  for (const key of ["commitMessages", "exactTimes"] as const) {
+    if (root[key] !== undefined && typeof root[key] !== "boolean") throw new ConfigError(`${source}: "${key}" must be true or false`);
+  }
+  const exclude = root.exclude;
+  if (exclude !== undefined && !(Array.isArray(exclude) && exclude.every((item) => typeof item === "string"))) {
+    throw new ConfigError(`${source}: "exclude" must be a list of strings`);
+  }
+  for (const key of ["externals", "scale", "tuning"] as const) {
+    if (root[key] !== undefined && !isObject(root[key])) throw new ConfigError(`${source}: "${key}" must be an object`);
   }
 }
 

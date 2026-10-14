@@ -5,7 +5,7 @@ import { CacheSession } from "./cache.js";
 import { loadConfig } from "./config.js";
 import { gitMaybe } from "./git.js";
 import { type HistoryReport, isShallowRepository, readHistory, resolveTimelineHead } from "./history.js";
-import { layoutHistory, type LayoutChange, type LayoutResult } from "./layout.js";
+import { type LayoutChange, LayoutBuilder, type LayoutResult, type Role } from "./layout.js";
 import { categoryOf } from "./model.js";
 import { type NearMiss, nameFiles, namePlaces, type PlaceInput, type Revealed } from "./naming.js";
 import { seedNumber } from "./namer.js";
@@ -69,34 +69,43 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   if (await isShallowRepository(options.repoDir)) {
     warnings.push("this is a shallow clone, so the City shows only the history it holds; run git fetch --unshallow for all of it");
   }
+  const config = loadConfig(await configFiles(options.repoDir, options.configPath));
+  const theme = loadTheme(options.theme ?? config.theme ?? DEFAULT_THEME);
+  const seedText = options.seed ?? config.naming.seed ?? (await rootCommit(options.repoDir, head));
+  const layoutOptions = {
+    seed: seedNumber(seedText),
+    categoryOf: (path: string) => categoryOf(path),
+    hueOf: (role: Role) => hueFor(theme, role),
+  };
+
   const cache = await CacheSession.open(options.repoDir, { fresh: options.fresh, wait: options.wait });
   let timeline: TimelineRead;
+  let data: TimelineData;
+  let layout: LayoutResult;
   try {
     timeline = await readTimeline(options.repoDir, head, branch, cache);
-    await cache.checkpoint(branch, head, timeline.builder, new Set(timeline.chain), timeline.missingBlobs);
+    data = timeline.builder.result();
+    // The layout resumes from the checkpoint's saved state, so Role hysteresis and every Lot carry over. It only
+    // replays the commits after the checkpoint; without a usable saved state (or under another seed) it replays all.
+    const resumed = timeline.layout ? LayoutBuilder.restore(layoutOptions, timeline.layout) : undefined;
+    const layoutBuilder = resumed ?? new LayoutBuilder(layoutOptions);
+    const firstNew = resumed ? timeline.chain.length - timeline.replayed : 0;
+    for (const change of changesFromTimeline(data).slice(firstNew)) layoutBuilder.apply(change);
+    await cache.checkpoint(branch, head, timeline.builder, new Set(timeline.chain), timeline.missingBlobs, layoutBuilder.snapshot());
+    layout = layoutBuilder.result();
   } finally {
     await cache.close();
   }
   if (timeline.missingBlobs > 0) {
     warnings.push(`${timeline.missingBlobs} file versions could not be read and were counted as empty (missing objects; is this a partial clone?)`);
   }
-  const data = timeline.builder.result();
 
-  const config = loadConfig(await configFiles(options.repoDir, options.configPath));
   const names = nameFiles(data.filePaths, config, { private: options.private });
-  const theme = loadTheme(options.theme ?? config.theme ?? DEFAULT_THEME);
-  const seedText = options.seed ?? config.naming.seed ?? (await rootCommit(options.repoDir, head));
   if (options.strict && names.nearMisses.length > 0) {
     throw new PrivacyError(
       `${names.nearMisses.length} near-miss${names.nearMisses.length === 1 ? "" : "es"} found; --strict fails the build`,
     );
   }
-
-  const layout = layoutHistory(changesFromTimeline(data), {
-    seed: seedNumber(seedText),
-    categoryOf: (path) => categoryOf(path),
-    hueOf: (role) => hueFor(theme, role),
-  });
   const places = namePlaces(placeInputs(layout), config, {
     theme,
     seed: seedText,

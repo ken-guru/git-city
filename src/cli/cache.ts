@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { type FileFacts, MISSING_FACTS } from "./facts.js";
 import { git } from "./git.js";
 import type { CommitRecord } from "./history.js";
+import type { LayoutSnapshot } from "./layout.js";
 import type { TimelineBuilder, TimelineSnapshot } from "./timeline.js";
 
 /** Folder under the git common directory that holds the cache, shared by all worktrees. */
@@ -197,6 +198,11 @@ export class CacheSession {
     return readJson<TimelineSnapshot>(stateFile(this.dir, branch, checkpoint.commit));
   }
 
+  /** The layout saved with a checkpoint's run state, or undefined when that state has none (an older run). */
+  async loadLayout(branch: string, checkpoint: Checkpoint): Promise<LayoutSnapshot | undefined> {
+    return (await readJson<{ layout?: LayoutSnapshot }>(stateFile(this.dir, branch, checkpoint.commit)))?.layout;
+  }
+
   /**
    * Saves the run state at `head` (layer 3), then advances the branch's checkpoints.
    * Checkpoints whose commit is no longer on the first-parent chain are dropped.
@@ -207,6 +213,7 @@ export class CacheSession {
     builder: TimelineBuilder,
     chain: ReadonlySet<string>,
     missingBlobs: number,
+    layout?: LayoutSnapshot,
   ): Promise<void> {
     const existing = await this.checkpoints(branch);
     if (existing.at(-1)?.commit === head && existsSync(stateFile(this.dir, branch, head))) return;
@@ -214,7 +221,7 @@ export class CacheSession {
     const all = [...live, { commit: head, missingBlobs }];
     const keep = all.slice(-MAX_CHECKPOINTS);
 
-    await writeAtomic(stateFile(this.dir, branch, head), JSON.stringify(builder.snapshot()));
+    await writeAtomic(stateFile(this.dir, branch, head), JSON.stringify({ ...builder.snapshot(), layout }));
     await writeAtomic(join(this.dir, "commits", "index.json"), JSON.stringify(Object.fromEntries(this.commitIndex)));
     await writeAtomic(runPath(this.dir, branch), JSON.stringify({ checkpoints: keep } satisfies { checkpoints: Checkpoint[] }));
     for (const dropped of existing.filter((c) => !keep.some((k) => k.commit === c.commit))) {

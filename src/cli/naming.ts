@@ -211,9 +211,9 @@ export function namePlaces(districts: readonly PlaceInput[], config: Config, opt
 
   // Names already taken in the City, lower-cased. Revealed and pseudonymous names are taken before any Generated name.
   const taken = new Set<string>();
-  const accept = (candidate: string) =>
-    !taken.has(candidate.toLowerCase()) && !containsAny(candidate, hidden) && findNearMisses(candidate, hidden).length === 0;
-  const namer = new ThemeNamer({ theme: options.theme, seed: options.seed, accept });
+  const leaks = (text: string) => containsAny(text, hidden) || findNearMisses(text, hidden).length > 0;
+  const accept = (candidate: string) => !taken.has(candidate.toLowerCase()) && !leaks(candidate);
+  const namer = new ThemeNamer({ theme: options.theme, seed: options.seed, accept, leaks });
 
   /** The fixed part of a display name: the Pseudonym, else the Real name when revealed. */
   const fixedParts = (policy: ItemPolicy, realText: string | undefined) => {
