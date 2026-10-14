@@ -90,6 +90,7 @@ describe("settingsFor", () => {
       expect(far.windowFar).toBeLessThanOrEqual(near.windowFar);
       expect(far.propFar).toBeLessThanOrEqual(near.propFar);
       expect(far.labelFar).toBeLessThanOrEqual(near.labelFar);
+      expect(far.massFar).toBeLessThanOrEqual(near.massFar);
       expect(far.sceneryFar).toBeLessThanOrEqual(near.sceneryFar);
       expect(far.sceneryFloor).toBeLessThanOrEqual(near.sceneryFloor);
       expect(far.pixelRatioCap).toBeLessThanOrEqual(near.pixelRatioCap);

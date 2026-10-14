@@ -3,6 +3,7 @@ import {
   EVENT_ADD,
   EVENT_DELETE,
   EVENT_FLOORS,
+  EVENT_LANGUAGE,
   EVENT_SCAFFOLD_OFF,
   EVENT_SCAFFOLD_ON,
   type Chunk,
@@ -19,6 +20,7 @@ import {
   KIND_BUILD,
   KIND_CHANGE,
   KIND_DEMOLISH,
+  languageAt,
   scaffoldPose,
   TRANSITION_COMMITS,
 } from "../src/page/state.js";
@@ -191,5 +193,42 @@ describe("page grid", () => {
     expect(slots[3]).toEqual({ column: 3, row: 0 });
     expect(slots[4]).toEqual({ column: 0, row: 1 });
     expect(new Set(slots.map((s) => `${s.column},${s.row}`)).size).toBe(10);
+  });
+});
+
+describe("language changes", () => {
+  it("eases the colour from the birth language to the new one, from the commit of the change", () => {
+    const { languages } = buildTimelines(chunkOf([[5, 0, EVENT_LANGUAGE, 3]]), 1, Uint8Array.of(1));
+    const segments = languages[0]!;
+    expect(languageAt(segments, 1, 4)).toEqual({ from: 1, to: 1, share: 1 }); // before the change: birth language, no easing
+    expect(languageAt(segments, 1, 5)).toEqual({ from: 1, to: 3, share: 0 });
+    expect(languageAt(segments, 1, 6.5).share).toBeCloseTo(1 - (1 - 1.5 / 4) ** 3);
+    expect(languageAt(segments, 1, 9)).toEqual({ from: 1, to: 3, share: 1 });
+  });
+
+  it("starts a file's language from its birth language when it is added in the chunk", () => {
+    const add: [number, number, number, number] = [2, 0, EVENT_ADD, 1];
+    const { languages } = buildTimelines(chunkOf([add, [4, 0, EVENT_LANGUAGE, 2], [8, 0, EVENT_LANGUAGE, 5]]), 1, Uint8Array.of(7));
+    expect(languages[0]!.map((s) => [s.from, s.to])).toEqual([
+      [7, 2],
+      [2, 5],
+    ]);
+  });
+
+  it("uses the snapshot language as the starting point of a chunk, so the chunk stands alone", () => {
+    const snapshot: ChunkSnapshot = { ...EMPTY_SNAPSHOT, file: Uint32Array.of(0), floors: Uint8Array.of(2), scaffolded: Uint8Array.of(0), buildingType: Uint8Array.of(0), language: Uint8Array.of(4) };
+    const { languages } = buildTimelines(chunkOf([[12, 0, EVENT_LANGUAGE, 6]], 10, snapshot), 1, Uint8Array.of(0));
+    expect(languageAt(languages[0]!, 0, 10)).toMatchObject({ from: 4, to: 4 });
+    expect(languageAt(languages[0]!, 0, 12)).toEqual({ from: 4, to: 6, share: 0 });
+  });
+
+  it("changes the colour at once when the language before the change is not known", () => {
+    const { languages } = buildTimelines(chunkOf([[3, 0, EVENT_LANGUAGE, 2]]), 1);
+    expect(languages[0]!.map((s) => [s.from, s.to])).toEqual([[2, 2]]);
+  });
+
+  it("eases from the birth language when the file was born before the chunk without a snapshot entry", () => {
+    const { languages } = buildTimelines(chunkOf([[3, 0, EVENT_LANGUAGE, 2]]), 1, Uint8Array.of(5));
+    expect(languages[0]!.map((s) => [s.from, s.to])).toEqual([[5, 2]]);
   });
 });

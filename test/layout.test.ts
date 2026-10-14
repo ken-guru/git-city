@@ -256,6 +256,23 @@ describe("Roles and paving", () => {
   });
 });
 
+describe("Block ownership", () => {
+  it("names the District that owns each Block, by its birth index", () => {
+    const history = new Changes().commit(["src/a.ts", "lib/b.ts", "lib/c.ts"]);
+    const { districts, blocks, lots } = layoutHistory(history.list, { seed: 7 });
+    // File 0 is src/a.ts; files 1 and 2 are in lib. Every Lot's Block must belong to its file's District.
+    const keyOf = new Map<number, string>([
+      [0, "src"],
+      [1, "lib"],
+      [2, "lib"],
+    ]);
+    for (const lot of lots) {
+      const block = blocks[lot.block]!;
+      expect(districts.find((d) => d.index === block.district)!.key).toBe(keyOf.get(lot.file));
+    }
+  });
+});
+
 describe("Cut points and re-runs", () => {
   /** A deterministic history with manifests appearing and vanishing partway through. */
   function generated(): LayoutChange[] {
@@ -292,7 +309,9 @@ describe("Cut points and re-runs", () => {
       const built = new Set(list.slice(0, cut).flatMap((c) => c.added.map((a) => a.file)));
       const expected = full.lots.filter((l) => built.has(l.file));
       expect(prefix.lots).toEqual(expected);
-      expect(prefix.blocks).toEqual(full.blocks.slice(0, prefix.blocks.length));
+      // A Block's owning District is the owner as of the end of the run, which later commits may change, so it is left out here.
+      const withoutOwner = ({ district: _owner, ...block }: (typeof full.blocks)[number]) => block;
+      expect(prefix.blocks.map(withoutOwner)).toEqual(full.blocks.slice(0, prefix.blocks.length).map(withoutOwner));
     }
   });
 

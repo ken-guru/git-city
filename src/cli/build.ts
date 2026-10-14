@@ -6,7 +6,7 @@ import { loadConfig } from "./config.js";
 import { gitMaybe, git } from "./git.js";
 import { isShallowRepository, resolveTimelineHead } from "./history.js";
 import { categoryOf } from "./model.js";
-import { type LayoutResult } from "./layout.js";
+import { NO_DISTRICT, type LayoutResult } from "./layout.js";
 import { type NearMiss, nameFiles, namePlaces, type PlaceInput, type Revealed } from "./naming.js";
 import { seedNumber } from "./namer.js";
 import { type PipelineOptions } from "./pipeline.js";
@@ -160,6 +160,7 @@ export function roadsOf(layout: LayoutResult, links: { from: string; to: string;
 
 /** The layout as the world file holds it: villages, Blocks, Lots, Roads and per-file width steps. */
 export function worldLayout(layout: LayoutResult, roads: RoadNetwork, citySeed: number, widthStep: Uint8Array): WorldLayout {
+  const positionOf = new Map(layout.districts.map((d, position) => [d.index, position] as const));
   return {
     citySeed,
     widthStep,
@@ -174,6 +175,8 @@ export function worldLayout(layout: LayoutResult, roads: RoadNetwork, citySeed: 
       z: Float32Array.from(layout.blocks, (b) => b.z),
       claimed: Uint32Array.from(layout.blocks, (b) => b.claimedAt),
       brick: Uint8Array.from(layout.blocks, (b) => (b.brickOffset > 0 ? 1 : 0)),
+      // The places file numbers Districts by their position in the layout's list, so Blocks name that position.
+      district: Uint32Array.from(layout.blocks, (b) => positionOf.get(b.district) ?? NO_DISTRICT),
     },
     lots: {
       file: Uint32Array.from(layout.lots, (l) => l.file),

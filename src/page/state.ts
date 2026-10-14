@@ -1,4 +1,4 @@
-import { type Chunk, EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_SCAFFOLD_OFF, EVENT_SCAFFOLD_ON } from "../shared/format.js";
+import { type Chunk, EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_LANGUAGE, EVENT_SCAFFOLD_OFF, EVENT_SCAFFOLD_ON } from "../shared/format.js";
 
 /**
  * Time is measured in commits: commit i's changes begin at t = i.
@@ -32,6 +32,13 @@ export interface BuildingSegment {
 export interface ScaffoldSegment {
   start: number;
   up: boolean;
+}
+
+/** A language change that starts at commit `start`: the roof and trim colour eases from `from` to `to`. */
+export interface LanguageSegment {
+  start: number;
+  from: number;
+  to: number;
 }
 
 export interface BuildingPose {
@@ -99,25 +106,36 @@ function latestAt<T extends { start: number }>(list: readonly T[], t: number): T
 export interface Timelines {
   buildings: BuildingSegment[][];
   scaffolds: ScaffoldSegment[][];
+  languages: LanguageSegment[][];
 }
 
 /**
  * Adds a chunk's segments after the ones already held. Chunks must come in commit order, so each file's
  * segments stay sorted for `latestAt`.
  */
-export function appendTimelines(target: Timelines, chunk: Chunk): void {
-  const part = buildTimelines(chunk, target.buildings.length);
+export function appendTimelines(target: Timelines, chunk: Chunk, birthLanguage?: Uint8Array): void {
+  const part = buildTimelines(chunk, target.buildings.length, birthLanguage);
   part.buildings.forEach((segments, file) => {
     for (const segment of segments) target.buildings[file]!.push(segment);
   });
   part.scaffolds.forEach((segments, file) => {
     for (const segment of segments) target.scaffolds[file]!.push(segment);
   });
+  part.languages.forEach((segments, file) => {
+    for (const segment of segments) target.languages[file]!.push(segment);
+  });
 }
 
-export function buildTimelines(chunk: Chunk, fileCount: number): Timelines {
+/**
+ * Builds every file's segments from one chunk. `birthLanguage` gives each file's language when it was born
+ * (the world file's language column): an ADD starts the file's language from it, so its first change eases from there.
+ */
+export function buildTimelines(chunk: Chunk, fileCount: number, birthLanguage?: Uint8Array): Timelines {
   const buildings: BuildingSegment[][] = Array.from({ length: fileCount }, () => []);
   const scaffolds: ScaffoldSegment[][] = Array.from({ length: fileCount }, () => []);
+  const languages: LanguageSegment[][] = Array.from({ length: fileCount }, () => []);
+  // The language each file has now, or undefined when the chunk has not said yet.
+  const language: (number | undefined)[] = new Array(fileCount).fill(undefined);
   // Files standing at the chunk's start hold their snapshot Floors and scaffolding from its first commit.
   // A chunk loads on its own, so these segments start where the chunk does and sort ahead of its events.
   const { snapshot } = chunk;
@@ -125,6 +143,8 @@ export function buildTimelines(chunk: Chunk, fileCount: number): Timelines {
     const floors = snapshot.floors[i]!;
     buildings[file]!.push({ start: chunk.firstCommit, kind: KIND_CHANGE, from: floors, to: floors });
     if (snapshot.scaffolded[i]) scaffolds[file]!.push({ start: chunk.firstCommit, up: true });
+    languages[file]!.push({ start: chunk.firstCommit, from: snapshot.language[i]!, to: snapshot.language[i]! });
+    language[file] = snapshot.language[i];
   });
 
   chunk.eventFile.forEach((file, i) => {
@@ -134,6 +154,7 @@ export function buildTimelines(chunk: Chunk, fileCount: number): Timelines {
     switch (chunk.eventKind[i]) {
       case EVENT_ADD:
         list.push({ start, kind: KIND_BUILD, from: 0, to: value });
+        language[file] = birthLanguage?.[file];
         break;
       case EVENT_FLOORS: {
         const from = displayedFloors(latestAt(list, start)!, start);
@@ -151,9 +172,31 @@ export function buildTimelines(chunk: Chunk, fileCount: number): Timelines {
       case EVENT_SCAFFOLD_OFF:
         scaffolds[file]!.push({ start, up: false });
         break;
+      case EVENT_LANGUAGE: {
+        // A file's language is known from its snapshot or birth; without either, the colour changes at once.
+        const from = language[file] ?? birthLanguage?.[file] ?? value;
+        languages[file]!.push({ start, from, to: value });
+        language[file] = value;
+        break;
+      }
     }
   });
-  return { buildings, scaffolds };
+  return { buildings, scaffolds, languages };
+}
+
+/**
+ * The language colour of a file at time `t`: the segment in force eases from its `from` to its `to` over
+ * `duration` commits. `birth` is the language before any segment. Returns the two languages and the eased share.
+ */
+export function languageAt(
+  segments: readonly LanguageSegment[],
+  birth: number,
+  t: number,
+  duration: number = TRANSITION_COMMITS,
+): { from: number; to: number; share: number } {
+  const segment = latestAt(segments, t);
+  if (!segment) return { from: birth, to: birth, share: 1 };
+  return { from: segment.from, to: segment.to, share: easeOutCubic(clamp01((t - segment.start) / duration)) };
 }
 
 /** Where a Building is at time `t`. A Building whose demolition has finished collapses its Lot. */

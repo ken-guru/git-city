@@ -13,7 +13,19 @@ import {
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { BUILDING_TYPES, type BuildingType, LANGUAGES } from "../shared/buildings.js";
 import { type LodSettings, settingsFor } from "./lod.js";
-import { type BuildingSegment, buildingPose, durationFor, FOUNDATION_SHARE, KIND_CHANGE, KIND_NONE, type ScaffoldSegment, scaffoldPose } from "./state.js";
+import {
+  type BuildingSegment,
+  buildingPose,
+  durationFor,
+  FOUNDATION_SHARE,
+  KIND_CHANGE,
+  KIND_NONE,
+  type LanguageSegment,
+  languageAt,
+  type ScaffoldSegment,
+  scaffoldPose,
+} from "./state.js";
+import type { Spot } from "./lots.js";
 
 /**
  * The modular kit. Every Building type is one unit-height body (y 0..1) plus props on its roof (y from 1 up).
@@ -281,19 +293,31 @@ function cityMaterial(uniforms: CityUniforms, color: number, mode: "building" | 
   return material;
 }
 
+/** Linear blend of two colours given as 0xRRGGBB, by `share` from 0 (`a`) to 1 (`b`). */
+export function mixColour(a: number, b: number, share: number): number {
+  const channel = (shift: number) => {
+    const from = (a >> shift) & 255;
+    const to = (b >> shift) & 255;
+    return Math.round(from + (to - from) * share) & 255;
+  };
+  return (channel(16) << 16) | (channel(8) << 8) | channel(0);
+}
+
 function rgb(hex: number): [number, number, number] {
   return [((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255];
 }
 
 export interface CityData {
   fileCount: number;
+  /** Birth Building type and language of each file (the world file's columns); changes come from the timelines. */
   buildingType: Uint8Array;
   language: Uint8Array;
   seed: Uint32Array;
   buildings: BuildingSegment[][];
   scaffolds: ScaffoldSegment[][];
-  /** Where a file's Lot is on the ground. */
-  place: (file: number) => { x: number; z: number };
+  languages: LanguageSegment[][];
+  /** Where a file stands on the ground, or undefined when it has no Lot (it is then never drawn). */
+  place: (file: number) => Spot | undefined;
 }
 
 interface TypeMesh {
@@ -321,6 +345,8 @@ export class CityBuildings {
   private readonly uniforms: CityUniforms;
   private readonly place: CityData["place"];
   private readonly data: CityData;
+  /** The colour each file's instance last received, so only changed colours are written. */
+  private readonly lastColour = new Map<number, number>();
 
   constructor(scene: Scene, data: CityData, theme: keyof typeof PALETTE) {
     this.data = data;
@@ -407,12 +433,27 @@ export class CityBuildings {
     this.uniforms.uPropFar.value = detail.propFar;
   }
 
-  /** Puts a file's instance on its Lot, or collapses it to nothing. */
+  /** Puts a file's instance on its Lot, or collapses it to nothing (also when the file has no Lot). */
   private setPlacement(mesh: InstancedMesh, instance: number, file: number, visible: boolean) {
-    const { x, z } = this.place(file);
-    const scale = visible ? 1 : 0;
-    this.matrix.makeScale(scale, scale, scale).setPosition(x, 0, z);
+    const spot = this.place(file);
+    const scale = visible && spot ? 1 : 0;
+    this.matrix.makeScale(scale, scale, scale).setPosition(spot?.x ?? 0, 0, spot?.z ?? 0);
     mesh.setMatrixAt(instance, this.matrix);
+  }
+
+  /** The roof and trim colour of a file at `t`: it eases from one language to the next when the language changes. */
+  private setLanguage(attribute: InstancedBufferAttribute, i: number, f: number, t: number, duration: number): void {
+    const segments = this.data.languages[f]!;
+    if (segments.length === 0) return;
+    const birth = this.data.language[f]!;
+    const { from, to, share } = languageAt(segments, birth, t, duration);
+    const colour = LANGUAGES[to]?.colour ?? 0;
+    const previous = LANGUAGES[from]?.colour ?? colour;
+    const mixed = mixColour(previous, colour, share);
+    if (this.lastColour.get(f) === mixed) return;
+    this.lastColour.set(f, mixed);
+    const [r, g, b] = rgb(mixed);
+    attribute.setXYZ(i, r, g, b);
   }
 
   /** Sets every instance for time `t` (in commits) and at `commitsPerSecond` speed. */
@@ -425,6 +466,7 @@ export class CityBuildings {
       const { files, start, kind, from, to } = type;
       files.forEach((f, i) => {
         const pose = buildingPose(this.data.buildings[f]!, t, duration);
+        this.setLanguage(type.language, i, f, t, duration);
         start.setX(i, Math.max(-1e6, pose.start));
         // A hidden Lot has no transition; it is collapsed by its matrix, so any kind will do. Use a change to keep the shader on one branch.
         kind.setX(i, pose.kind === KIND_NONE ? KIND_CHANGE : pose.kind);
@@ -451,6 +493,7 @@ export class CityBuildings {
         this.setPlacement(this.scaffold, f, f, pose.visible);
       }
     }
+    for (const type of this.types) type.language.needsUpdate = true;
     this.scaffoldAttrs.start.needsUpdate = this.scaffoldAttrs.from.needsUpdate = true;
     this.scaffoldAttrs.to.needsUpdate = this.scaffoldAttrs.height.needsUpdate = true;
     this.scaffold.instanceMatrix.needsUpdate = true;

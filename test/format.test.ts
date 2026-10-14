@@ -26,7 +26,7 @@ const emptyLayout = {
   citySeed: 0,
   widthStep: new Uint8Array(3),
   villages: { x: new Float32Array(0), z: new Float32Array(0), angle: new Float32Array(0) },
-  blocks: { village: new Uint32Array(0), x: new Float32Array(0), z: new Float32Array(0), claimed: new Uint32Array(0), brick: new Uint8Array(0) },
+  blocks: { village: new Uint32Array(0), x: new Float32Array(0), z: new Float32Array(0), claimed: new Uint32Array(0), brick: new Uint8Array(0), district: new Uint32Array(0) },
   lots: { file: new Uint32Array(0), block: new Uint32Array(0), slot: new Uint8Array(0), slots: new Uint8Array(0) },
   roads: { a: new Uint32Array(0), b: new Uint32Array(0), forward: new Uint8Array(0), backward: new Uint8Array(0), track: new Uint8Array(0) },
 };
@@ -106,6 +106,7 @@ describe("layout section of the world file", () => {
       z: Float32Array.of(0, 0.5, 9),
       claimed: Uint32Array.of(0, 4, 7),
       brick: Uint8Array.of(0, 1, 0),
+      district: Uint32Array.of(0, 1, 0xffffffff),
     },
     lots: { file: Uint32Array.of(0, 1), block: Uint32Array.of(0, 2), slot: Uint8Array.of(0, 4), slots: Uint8Array.of(2, 4) },
     roads: { a: Uint32Array.of(0), b: Uint32Array.of(1), forward: Uint8Array.of(2), backward: Uint8Array.of(0), track: Uint8Array.of(0) },
@@ -132,6 +133,7 @@ describe("layout section of the world file", () => {
     expect([...world.blocks.z]).toEqual([0, 0.5, 9]);
     expect([...world.blocks.claimed]).toEqual([0, 4, 7]);
     expect([...world.blocks.brick]).toEqual([0, 1, 0]);
+    expect([...world.blocks.district]).toEqual([0, 1, 0xffffffff]);
     expect([...world.lots.slot]).toEqual([0, 4]);
     expect([...world.lots.slots]).toEqual([2, 4]);
     expect([...world.roads.forward]).toEqual([2]);

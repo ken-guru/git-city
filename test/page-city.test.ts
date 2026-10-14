@@ -33,6 +33,7 @@ function syntheticCity(fileCount: number): CityData {
     seed,
     buildings,
     scaffolds,
+    languages: Array.from({ length: fileCount }, (_, f) => (f % 3 === 0 ? [{ start: 300, from: 0, to: 2 }] : [])),
     place: (file) => {
       const { column, row } = gridSlot(file, columns);
       return { x: column * 1.5, z: row * 1.5 };

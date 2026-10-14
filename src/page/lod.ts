@@ -25,6 +25,8 @@ export interface LodSettings {
   /** Scenery thins linearly to `sceneryFloor` of its items at `sceneryFar`. */
   sceneryFar: number;
   sceneryFloor: number;
+  /** Blocks beyond this distance draw as simple masses. */
+  massFar: number;
   /** Labels are hidden beyond this distance. */
   labelFar: number;
   /** Highest device pixel ratio the renderer uses. */
@@ -32,9 +34,9 @@ export interface LodSettings {
 }
 
 const SETTINGS: readonly LodSettings[] = [
-  { windowNear: 14, windowFar: 40, propFar: Number.POSITIVE_INFINITY, sceneryFar: 150, sceneryFloor: 1, labelFar: Number.POSITIVE_INFINITY, pixelRatioCap: 2 },
-  { windowNear: 10, windowFar: 24, propFar: 40, sceneryFar: 80, sceneryFloor: 0.5, labelFar: 80, pixelRatioCap: 1.5 },
-  { windowNear: 6, windowFar: 16, propFar: 24, sceneryFar: 50, sceneryFloor: 0.2, labelFar: 50, pixelRatioCap: 1 },
+  { windowNear: 14, windowFar: 40, propFar: Number.POSITIVE_INFINITY, sceneryFar: 150, sceneryFloor: 1, massFar: 240, labelFar: Number.POSITIVE_INFINITY, pixelRatioCap: 2 },
+  { windowNear: 10, windowFar: 24, propFar: 40, sceneryFar: 80, sceneryFloor: 0.5, massFar: 160, labelFar: 80, pixelRatioCap: 1.5 },
+  { windowNear: 6, windowFar: 16, propFar: 24, sceneryFar: 50, sceneryFloor: 0.2, massFar: 100, labelFar: 50, pixelRatioCap: 1 },
 ];
 
 export function settingsFor(level: number): LodSettings {

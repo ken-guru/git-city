@@ -140,10 +140,15 @@ export interface BlockRecord {
   /** World position in Block widths: the village centre plus the Block's grid offset, turned by the village angle. */
   x: number;
   z: number;
+  /** Birth index (see `DistrictRecord.index`) of the District that owns the Block now, or NO_DISTRICT. */
+  district: number;
 }
 
-/** A Block as the layout keeps it: its world position is worked out when the result is read. */
-type StoredBlock = Omit<BlockRecord, "x" | "z">;
+/** Marks a Block whose owner is no District in the result. */
+export const NO_DISTRICT = 0xffffffff;
+
+/** A Block as the layout keeps it: its world position and owner are worked out when the result is read. */
+type StoredBlock = Omit<BlockRecord, "x" | "z" | "district">;
 
 /**
  * A Lot a Building stood on. A Building that is relocated gets a new record under the same file id;
@@ -290,10 +295,18 @@ export class LayoutBuilder {
         role: d.role,
         paving: paving(this.options.seed, d.index, d.role, this.options.hueOf, d.lightnessOffset),
       }));
+    // A Block belongs to the District its Neighbourhood is in now, which whole-directory moves and renames can change.
+    const birth = new Map(districts.map((d) => [d.key, d.index] as const));
+    const blockDistricts = new Map<number, number>();
+    for (const [owner, ids] of this.ownedBlocks) {
+      const [key] = JSON.parse(owner) as [string, string];
+      const index = birth.get(key);
+      if (index !== undefined) for (const id of ids) blockDistricts.set(id, index);
+    }
     return {
       districts,
       villages: this.villages.map((v) => ({ ...v })),
-      blocks: this.blocks.map((b) => ({ ...b, ...this.worldPosition(b) })),
+      blocks: this.blocks.map((b) => ({ ...b, ...this.worldPosition(b), district: blockDistricts.get(b.id) ?? NO_DISTRICT })),
       lots: this.lots.map((l) => ({ ...l })),
     };
   }

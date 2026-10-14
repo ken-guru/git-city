@@ -3,6 +3,7 @@ import {
   Color,
   ConeGeometry,
   Float32BufferAttribute,
+  InstancedBufferAttribute,
   InstancedMesh,
   Matrix4,
   Mesh,
@@ -18,6 +19,7 @@ import {
   type Point,
   sceneryFade,
   STYLE_A,
+  TERRAIN,
   type StyleColours,
   type Swatch,
   unit,
@@ -47,6 +49,21 @@ export interface CountrysideScene {
   keepOut: number;
   /** Claimed Blocks, as Block-grid cells. Scenery next to them fades out. */
   claimed?: Point[];
+  /** The level of detail the page starts at: how far trees thin, and how many are kept at the far end. */
+  detail?: CountrysideDetail;
+}
+
+/** The level-of-detail values scenery uses (see `LodSettings`). */
+export interface CountrysideDetail {
+  sceneryFar: number;
+  sceneryFloor: number;
+}
+
+export interface CountrysideHandle {
+  /** The land the scenery was drawn from, so the Blocks and Roads sit on the same ground. */
+  land: Countryside;
+  /** Applies a level of detail: a lower level thins the trees sooner with distance. */
+  setDetail(detail: CountrysideDetail): void;
 }
 
 /**
@@ -54,16 +71,22 @@ export interface CountrysideScene {
  * and mountains (instanced). Every position is a pure function of the seed, so nothing here needs data
  * from the world file beyond the seed.
  */
-export function addCountryside(scene: Scene, options: CountrysideScene): void {
+export function addCountryside(scene: Scene, options: CountrysideScene): CountrysideHandle {
   const land = countryside(options.seed);
   const colours = STYLE_A[options.theme];
   const claimed = options.claimed ?? [];
   const inKeepOut = (c: number, r: number) => Math.hypot(c, r) * CELL < options.keepOut;
+  const claimedCells = new Set(claimed.map((p) => cellKey(p.col, p.row)));
+  // Scenery is full beyond the fade radius, so only the rings inside it need searching.
   const fadeAt = (c: number, r: number) => {
-    if (claimed.length === 0) return 1;
-    let nearest = Infinity;
-    for (const p of claimed) nearest = Math.min(nearest, Math.max(Math.abs(p.col - c), Math.abs(p.row - r)));
-    return sceneryFade(nearest);
+    for (let d = 0; d < TERRAIN.fadeRadius; d++) {
+      if (ringHasClaim(claimedCells, c, r, d)) return sceneryFade(d);
+    }
+    return 1;
+  };
+  const thinning = {
+    uSceneryFar: { value: options.detail?.sceneryFar ?? DEFAULT_DETAIL.sceneryFar },
+    uSceneryFloor: { value: options.detail?.sceneryFloor ?? DEFAULT_DETAIL.sceneryFloor },
   };
 
   scene.add(ground(land, colours, inKeepOut));
@@ -71,8 +94,38 @@ export function addCountryside(scene: Scene, options: CountrysideScene): void {
   // Banks follow the ground beside them, so a hill next to a river does not bury its bank.
   scene.add(ribbons(land, BANK_HALF, BANK_Y, colours.sand, true));
   scene.add(fields(land, colours, options.seed, inKeepOut, fadeAt));
-  scene.add(trees(land, colours, options.seed, inKeepOut, fadeAt));
+  scene.add(trees(land, colours, options.seed, inKeepOut, fadeAt, thinning));
   scene.add(mountains(land, colours, options.seed));
+  return {
+    land,
+    setDetail(detail) {
+      thinning.uSceneryFar.value = detail.sceneryFar;
+      thinning.uSceneryFloor.value = detail.sceneryFloor;
+    },
+  };
+}
+
+const DEFAULT_DETAIL: CountrysideDetail = { sceneryFar: 150, sceneryFloor: 1 };
+
+function cellKey(col: number, row: number): number {
+  return col * 1_000_003 + row;
+}
+
+/** Whether a cell at Chebyshev distance `d` from (col, row) is claimed. Distance 0 is the cell itself. */
+function ringHasClaim(claimed: ReadonlySet<number>, col: number, row: number, d: number): boolean {
+  for (let dc = -d; dc <= d; dc++) {
+    for (let dr = -d; dr <= d; dr++) {
+      if (Math.max(Math.abs(dc), Math.abs(dr)) !== d) continue;
+      if (claimed.has(cellKey(col + dc, row + dr))) return true;
+    }
+  }
+  return false;
+}
+
+/** Uniforms that thin the trees with distance from the camera. */
+interface ThinningUniforms {
+  uSceneryFar: { value: number };
+  uSceneryFloor: { value: number };
 }
 
 function ground(land: Countryside, colours: StyleColours, inKeepOut: (c: number, r: number) => boolean): Mesh {
@@ -153,10 +206,12 @@ function trees(
   seed: number,
   inKeepOut: (c: number, r: number) => boolean,
   fadeAt: (c: number, r: number) => number,
+  thinning: ThinningUniforms,
 ): InstancedMesh {
   const cone = new ConeGeometry(0.5, 1.4, 5);
   cone.translate(0, 0.7, 0);
-  const mesh = new InstancedMesh(cone, material(), MAX_TREES);
+  const mesh = new InstancedMesh(cone, thinningMaterial(thinning), MAX_TREES);
+  const roll = new Float32Array(MAX_TREES);
   const matrix = new Matrix4();
   const position = new Vector3();
   const scale = new Vector3();
@@ -177,14 +232,38 @@ function trees(
         matrix.compose(position, rotation, scale);
         mesh.setMatrixAt(count, matrix);
         mesh.setColorAt(count, toColor(colours.forest, (unit(seed, 12, c, r * 4 + k) - 0.5) * 0.06));
+        // The tree's fixed roll: at a distance only the trees with a low roll stay (see `sceneryKept`).
+        roll[count] = unit(seed, 14, c, r * 4 + k);
         count++;
       }
     }
   }
+  mesh.geometry.setAttribute("aRoll", new InstancedBufferAttribute(roll, 1));
   mesh.count = count;
   mesh.instanceMatrix.needsUpdate = true;
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   return mesh;
+}
+
+/**
+ * Trees thin with distance on the GPU: a tree is dropped when its roll is at or above the share kept at its
+ * distance from the camera. This is `sceneryKept` (lod.ts) evaluated per vertex, so it stays in step with it.
+ */
+function thinningMaterial(thinning: ThinningUniforms): MeshLambertMaterial {
+  const m = material();
+  m.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, thinning);
+    shader.vertexShader = shader.vertexShader
+      .replace("#include <common>", `#include <common>\nattribute float aRoll;\nuniform float uSceneryFar;\nuniform float uSceneryFloor;`)
+      .replace(
+        "#include <begin_vertex>",
+        `#include <begin_vertex>
+        float thinning = clamp(-(modelViewMatrix * instanceMatrix * vec4(transformed, 1.0)).z / uSceneryFar, 0.0, 1.0);
+        float kept = 1.0 - (1.0 - uSceneryFloor) * thinning;
+        if (aRoll >= kept) transformed = vec3(0.0);`,
+      );
+  };
+  return m;
 }
 
 /** Mountains: instanced cones, snowless, rising only beyond the mountain start. */

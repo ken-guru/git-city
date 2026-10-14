@@ -4,7 +4,7 @@
  * All integers are little-endian; arrays are stored column by column.
  */
 
-export const FORMAT_VERSION = 4;
+export const FORMAT_VERSION = 5;
 
 const WORLD_MAGIC = 0x57435447; // "GTCW"
 const CHUNK_MAGIC = 0x43435447; // "GTCC"
@@ -64,8 +64,11 @@ export interface World {
   widthStep: Uint8Array;
   /** Villages, in founding order. Position is in Block widths; the angle turns the village's Block grid. */
   villages: { x: Float32Array; z: Float32Array; angle: Float32Array };
-  /** Blocks, in claim order. Position is in Block widths; `claimed` is the commit that claimed each Block. */
-  blocks: { village: Uint32Array; x: Float32Array; z: Float32Array; claimed: Uint32Array; brick: Uint8Array };
+  /**
+   * Blocks, in claim order. Position is in Block widths; `claimed` is the commit that claimed each Block;
+   * `district` is the position of the District that owns it in the places file (0xffffffff for none).
+   */
+  blocks: { village: Uint32Array; x: Float32Array; z: Float32Array; claimed: Uint32Array; brick: Uint8Array; district: Uint32Array };
   /** Lots, in birth order. Each `slots` run is a contiguous run of unit slots within its Block. */
   lots: { file: Uint32Array; block: Uint32Array; slot: Uint8Array; slots: Uint8Array };
   /** The Road network between villages, one entry per Road. */
@@ -117,7 +120,7 @@ export function chunkName(index: number, hash: Uint8Array): string {
 const FILE_ATTRIBUTE_BYTES = 1 + 1 + 4;
 
 const VILLAGE_BYTES = 3 * 4;
-const BLOCK_BYTES = 4 + 4 + 4 + 4 + 1;
+const BLOCK_BYTES = 4 + 4 + 4 + 4 + 1 + 4;
 const LOT_BYTES = 4 + 4 + 1 + 1;
 const ROAD_BYTES = 4 + 4 + 1 + 1 + 1;
 
@@ -161,6 +164,7 @@ export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { c
     w.f32(blocks.z[i]!);
     w.u32(blocks.claimed[i]!);
     w.bytes(blocks.brick.subarray(i, i + 1));
+    w.u32(blocks.district[i]!);
   }
   w.u32(lots.file.length);
   for (let i = 0; i < lots.file.length; i++) {
@@ -212,6 +216,7 @@ export function decodeWorld(bytes: Uint8Array): World {
     z: new Float32Array(blockCount),
     claimed: new Uint32Array(blockCount),
     brick: new Uint8Array(blockCount),
+    district: new Uint32Array(blockCount),
   };
   for (let i = 0; i < blockCount; i++) {
     blocks.village[i] = r.u32();
@@ -219,6 +224,7 @@ export function decodeWorld(bytes: Uint8Array): World {
     blocks.z[i] = r.f32();
     blocks.claimed[i] = r.u32();
     blocks.brick[i] = r.bytes(1)[0]!;
+    blocks.district[i] = r.u32();
   }
   const lotCount = r.u32();
   const lots = { file: new Uint32Array(lotCount), block: new Uint32Array(lotCount), slot: new Uint8Array(lotCount), slots: new Uint8Array(lotCount) };
