@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type LayoutChange, layoutHistory } from "../src/cli/layout.js";
+import { type LayoutChange, type LotRecord, footprintSlots, layoutHistory } from "../src/cli/layout.js";
 
 /**
  * Seams under test (pre-agreed with the ticket): the layout module's public interface,
@@ -11,6 +11,20 @@ class Changes {
   private nextFile = 0;
   private readonly standing = new Map<string, number>();
   readonly list: LayoutChange[] = [];
+
+  /** Renames standing files: same file id, as the history reports a rename. */
+  rename(pairs: [string, string][]): this {
+    const change: LayoutChange = { added: [], deleted: [], moved: [] };
+    for (const [from, to] of pairs) {
+      const file = this.standing.get(from);
+      if (file === undefined) continue;
+      this.standing.delete(from);
+      this.standing.set(to, file);
+      change.moved!.push({ file, from, to });
+    }
+    this.list.push(change);
+    return this;
+  }
 
   commit(added: string[], deleted: string[] = []): this {
     const change: LayoutChange = { added: [], deleted: [] };
@@ -265,5 +279,84 @@ describe("Cut points and re-runs", () => {
     const list = generated();
     const options = { seed: 99 };
     expect(layoutHistory(list, options)).toEqual(layoutHistory(list, options));
+  });
+});
+
+describe("Identity across history", () => {
+  const placements = (lots: LotRecord[], file: number) => lots.filter((l) => l.file === file);
+
+  it("rebuilds a Relocated file on a new Lot in the target Neighbourhood, under the same file id", () => {
+    const history = new Changes()
+      .commit(["a/x.ts", "a/y.ts", "a/z.ts", "b/w.ts"])
+      .rename([["a/x.ts", "b/x.ts"]]);
+
+    const { lots, blocks } = layoutHistory(history.list, { seed: 1 });
+
+    const [old, moved] = placements(lots, 0);
+    expect(blocks[old!.block]!.neighbourhood).toBe("a");
+    // The Relocation takes a Lot in the Block its target Neighbourhood already fills.
+    expect(blocks[moved!.block]!.neighbourhood).toBe("b");
+    expect(moved!.block).toBe(placements(lots, 3)[0]!.block);
+    expect(lots.length).toBe(5);
+  });
+
+  it("changes nothing for a rename within a directory", () => {
+    const before = layoutHistory(new Changes().commit(["a/x.ts", "a/y.ts"]).list, { seed: 1 });
+    const after = layoutHistory(new Changes().commit(["a/x.ts", "a/y.ts"]).rename([["a/x.ts", "a/renamed.ts"]]).list, { seed: 1 });
+    expect(after).toEqual(before);
+  });
+
+  it("relabels a Neighbourhood's Blocks and rebuilds nothing when a whole directory moves", () => {
+    const base = new Changes().commit(["src/auth/a.ts", "src/auth/b.ts", "src/auth/c.ts", "src/auth/d.ts", "src/auth/e.ts", "src/other.ts"]);
+    const before = layoutHistory(base.list, { seed: 1 });
+    const after = layoutHistory(
+      base.rename([
+        ["src/auth/a.ts", "src/identity/a.ts"],
+        ["src/auth/b.ts", "src/identity/b.ts"],
+        ["src/auth/c.ts", "src/identity/c.ts"],
+        ["src/auth/d.ts", "src/identity/d.ts"],
+        ["src/auth/e.ts", "src/identity/e.ts"],
+      ]).list,
+      { seed: 1 },
+    );
+    expect(after.lots).toEqual(before.lots);
+    expect(after.blocks.length).toBe(before.blocks.length);
+    const authBlocks = before.blocks.filter((b) => b.neighbourhood === "src/auth").map((b) => b.id);
+    expect(authBlocks.length).toBeGreaterThan(0);
+    for (const id of authBlocks) expect(after.blocks[id]!.neighbourhood).toBe("src/identity");
+  });
+
+  it("treats a move of fewer than 80% of a directory's files as Relocations", () => {
+    const history = new Changes()
+      .commit(["src/auth/a.ts", "src/auth/b.ts", "src/auth/c.ts", "src/auth/d.ts", "src/auth/e.ts"])
+      .rename([["src/auth/a.ts", "src/identity/a.ts"], ["src/auth/b.ts", "src/identity/b.ts"], ["src/auth/c.ts", "src/identity/c.ts"]]);
+    const { lots, blocks } = layoutHistory(history.list, { seed: 1 });
+    expect(lots.length).toBe(8);
+    for (const file of [0, 1, 2]) expect(blocks[placements(lots, file)[1]!.block]!.neighbourhood).toBe("src/identity");
+  });
+
+  it("makes a re-added file at the same path a new Building on a new Lot", () => {
+    const history = new Changes().commit(["a/x.ts"]).commit([], ["a/x.ts"]).commit(["a/x.ts"]);
+    const { lots } = layoutHistory(history.list, { seed: 1 });
+    expect(lots.map((l) => l.file)).toEqual([0, 1]);
+    expect(lots.map((l) => [l.block, l.slot])).toEqual([[0, 0], [0, 2]]);
+  });
+
+  it("merges a District back when its manifest is removed, so its files join the parent District's Neighbourhood", () => {
+    const history = new Changes()
+      .commit(["packages/web/a.ts", "packages/web/b.ts"])
+      .commit(["packages/web/package.json"])
+      .commit([], ["packages/web/package.json"])
+      .commit(["packages/web/c.ts"]);
+    const { districts, lots, blocks } = layoutHistory(history.list, { seed: 1 });
+    expect(districts.some((d) => d.key === "packages/web")).toBe(false);
+    expect(blocks[lots[2]!.block]!.neighbourhood).toBe("packages/web");
+  });
+
+  it("clamps a Building's footprint to its Lot when it outgrows the Lot", () => {
+    const lot: LotRecord = { file: 0, block: 0, slot: 0, slots: 2 };
+    expect(footprintSlots(lot, 0)).toBe(2);
+    expect(footprintSlots(lot, 3)).toBe(2);
+    expect(footprintSlots({ ...lot, slots: 4 }, 3)).toBe(4);
   });
 });

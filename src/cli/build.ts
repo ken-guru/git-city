@@ -1,17 +1,19 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CacheSession } from "./cache.js";
 import { loadConfig } from "./config.js";
-import { type HistoryReport, isShallowRepository, readHistory, resolveTimelineHead } from "./history.js";
-import { EVENT_ADD, EVENT_DELETE } from "../shared/format.js";
 import { gitMaybe } from "./git.js";
+import { type HistoryReport, isShallowRepository, readHistory, resolveTimelineHead } from "./history.js";
 import { layoutHistory, type LayoutChange, type LayoutResult } from "./layout.js";
-import { type NearMiss, nameFiles, namePlaces, type PlaceInput, type Revealed } from "./naming.js";
 import { categoryOf } from "./model.js";
+import { type NearMiss, nameFiles, namePlaces, type PlaceInput, type Revealed } from "./naming.js";
 import { seedNumber } from "./namer.js";
 import { PrivacyError, scanOutput } from "./privacy.js";
+import { readTimeline, type TimelineRead } from "./resume.js";
 import { DEFAULT_THEME, hueFor, loadTheme } from "./theme.js";
-import { type TimelineData, TimelineBuilder } from "./timeline.js";
+import { TimelineBuilder, type TimelineData } from "./timeline.js";
+import { EVENT_ADD, EVENT_DELETE } from "../shared/format.js";
 import { writeSite } from "./write.js";
 
 /** The pre-built page, shipped at `dist/page/` next to the CLI. */
@@ -37,6 +39,10 @@ export interface BuildOptions {
   theme?: string;
   /** `--seed`: the seed for Generated names. Wins over `naming.seed`. */
   seed?: string;
+  /** `--fresh`: rebuild the cache from scratch. */
+  fresh?: boolean;
+  /** `--wait`: wait for another run to finish instead of failing. */
+  wait?: boolean;
 }
 
 export interface BuildSummary {
@@ -63,13 +69,18 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   if (await isShallowRepository(options.repoDir)) {
     warnings.push("this is a shallow clone, so the City shows only the history it holds; run git fetch --unshallow for all of it");
   }
-  const builder = new TimelineBuilder();
-  const report: HistoryReport = { missingBlobs: 0 };
-  for await (const commit of readHistory(options.repoDir, head, report)) builder.add(commit);
-  if (report.missingBlobs > 0) {
-    warnings.push(`${report.missingBlobs} file versions could not be read and were counted as empty (missing objects; is this a partial clone?)`);
+  const cache = await CacheSession.open(options.repoDir, { fresh: options.fresh, wait: options.wait });
+  let timeline: TimelineRead;
+  try {
+    timeline = await readTimeline(options.repoDir, head, branch, cache);
+    await cache.checkpoint(branch, head, timeline.builder, new Set(timeline.chain), timeline.missingBlobs);
+  } finally {
+    await cache.close();
   }
-  const data = builder.result();
+  if (timeline.missingBlobs > 0) {
+    warnings.push(`${timeline.missingBlobs} file versions could not be read and were counted as empty (missing objects; is this a partial clone?)`);
+  }
+  const data = timeline.builder.result();
 
   const config = loadConfig(await configFiles(options.repoDir, options.configPath));
   const names = nameFiles(data.filePaths, config, { private: options.private });

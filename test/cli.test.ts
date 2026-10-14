@@ -1,5 +1,5 @@
 import { execSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -116,6 +116,25 @@ describe("the git-city binary", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("unknown command: demolish");
+  });
+
+  it("exits 3 while another run holds the lock; --fresh and cache status work", () => {
+    const fixture = new FixtureRepo().write("a.txt").commit("first");
+    cleanupRepos.push(fixture);
+    const cacheDir = join(fixture.dir, ".git", "git-city");
+    mkdirSync(cacheDir, { recursive: true });
+    writeFileSync(join(cacheDir, "lock"), String(process.pid));
+
+    const locked = run("build", "-C", fixture.dir, "--out", join(fixture.dir, "site"));
+    expect(locked.status).toBe(3);
+    expect(locked.stderr).toContain("--wait");
+
+    rmSync(join(cacheDir, "lock"));
+    const built = run("build", "-C", fixture.dir, "--fresh", "--out", join(fixture.dir, "site"));
+    expect(built.status).toBe(0);
+    const status = run("cache", "status", "-C", fixture.dir);
+    expect(status.status).toBe(0);
+    expect(status.stdout).toMatch(/checkpoints for main: 1/);
   });
 });
 

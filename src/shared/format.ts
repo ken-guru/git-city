@@ -13,14 +13,29 @@ export const SECONDS_PER_DAY = 86_400;
 
 /**
  * Event kinds. A value column carries one number per event:
- * ADD: the Floors the Building starts with; FLOORS: the new Floors; the others ignore it.
+ * ADD: the Floors the Building starts with; FLOORS: the new Floors;
+ * RELOCATE and RENOVATE: the new Building type index; LANGUAGE: the new language index; the others ignore it.
  */
 export const EVENT_ADD = 1;
 export const EVENT_DELETE = 2;
 export const EVENT_FLOORS = 3;
 export const EVENT_SCAFFOLD_ON = 4;
 export const EVENT_SCAFFOLD_OFF = 5;
-export type EventKind = typeof EVENT_ADD | typeof EVENT_DELETE | typeof EVENT_FLOORS | typeof EVENT_SCAFFOLD_ON | typeof EVENT_SCAFFOLD_OFF;
+/** The same Building, moved to another directory: torn down and rebuilt on a new Lot. */
+export const EVENT_RELOCATE = 6;
+/** The Building type changed: rebuilt as the new type on the same Lot. */
+export const EVENT_RENOVATE = 7;
+/** The language changed: the roof and trim colour eases. */
+export const EVENT_LANGUAGE = 8;
+export type EventKind =
+  | typeof EVENT_ADD
+  | typeof EVENT_DELETE
+  | typeof EVENT_FLOORS
+  | typeof EVENT_SCAFFOLD_ON
+  | typeof EVENT_SCAFFOLD_OFF
+  | typeof EVENT_RELOCATE
+  | typeof EVENT_RENOVATE
+  | typeof EVENT_LANGUAGE;
 
 export interface ChunkRef {
   /** Sequence number of the chunk's first commit. */
