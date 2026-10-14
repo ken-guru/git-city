@@ -12,7 +12,7 @@ import {
 } from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { BUILDING_TYPES, type BuildingType, LANGUAGES } from "../shared/buildings.js";
-import { type BuildingSegment, buildingPose, durationFor, FOUNDATION_SHARE, KIND_CHANGE, type ScaffoldSegment, scaffoldPose } from "./state.js";
+import { type BuildingSegment, buildingPose, durationFor, FOUNDATION_SHARE, KIND_CHANGE, KIND_NONE, type ScaffoldSegment, scaffoldPose } from "./state.js";
 
 /**
  * The modular kit. Every Building type is one unit-height body (y 0..1) plus props on its roof (y from 1 up).
@@ -400,7 +400,8 @@ export class CityBuildings {
       files.forEach((f, i) => {
         const pose = buildingPose(this.data.buildings[f]!, t, duration);
         start.setX(i, Math.max(-1e6, pose.start));
-        kind.setX(i, pose.kind === 0 ? KIND_CHANGE : pose.kind);
+        // A hidden Lot has no transition; it is collapsed by its matrix, so any kind will do. Use a change to keep the shader on one branch.
+        kind.setX(i, pose.kind === KIND_NONE ? KIND_CHANGE : pose.kind);
         from.setX(i, pose.from);
         to.setX(i, pose.to);
         if (pose.visible !== Boolean(this.onBuilding[f])) {
