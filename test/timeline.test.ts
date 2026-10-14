@@ -4,7 +4,7 @@ import { TimelineBuilder } from "../src/cli/timeline.js";
 import { EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_SCAFFOLD_OFF, EVENT_SCAFFOLD_ON } from "../src/shared/format.js";
 
 function commit(day: number, change: Partial<Omit<CommitRecord, "day">> = {}): CommitRecord {
-  return { day, added: [], deleted: [], modified: [], ...change };
+  return { day, added: [], deleted: [], modified: [], writes: [], ...change };
 }
 
 function run(commits: CommitRecord[]) {
