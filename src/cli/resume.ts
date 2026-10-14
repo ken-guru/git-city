@@ -1,6 +1,6 @@
 import type { CacheSession } from "./cache.js";
 import { git } from "./git.js";
-import { type CommitRecord, COMMITS_PER_BATCH, type HistoryReport, readCommitBatch } from "./history.js";
+import { type CommitRecord, COMMITS_PER_BATCH, HistoryError, type HistoryReport, readCommitBatch } from "./history.js";
 import { TimelineBuilder } from "./timeline.js";
 
 /** The first-parent chain ending at `head`, oldest commit first. */
@@ -77,13 +77,19 @@ async function batchRecords(
   cache: CacheSession,
   report: HistoryReport,
 ): Promise<{ records: CommitRecord[]; fresh: { hash: string; commit: CommitRecord }[] }> {
-  const unread = hashes.filter((hash) => !cache.hasCommit(hash));
+  const cached = new Map<string, CommitRecord>();
+  const unread: string[] = [];
+  for (const hash of hashes) {
+    const record = cache.hasCommit(hash) ? await cache.commitRecord(hash) : undefined;
+    if (record) cached.set(hash, record);
+    else unread.push(hash);
+  }
   const fresh = await readCommitBatch(repoDir, unread, cache.facts, report);
   const byHash = new Map(fresh.map((entry) => [entry.hash, entry.commit]));
-  const records: CommitRecord[] = [];
-  for (const hash of hashes) {
-    const record = byHash.get(hash) ?? (await cache.commitRecord(hash));
-    records.push(record);
-  }
+  const records = hashes.map((hash) => {
+    const record = cached.get(hash) ?? byHash.get(hash);
+    if (!record) throw new HistoryError(`git log did not return commit ${hash}`);
+    return record;
+  });
   return { records, fresh };
 }

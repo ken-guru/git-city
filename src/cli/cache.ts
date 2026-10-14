@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import type { FileFacts } from "./facts.js";
+import { type FileFacts, MISSING_FACTS } from "./facts.js";
 import { git } from "./git.js";
 import type { CommitRecord } from "./history.js";
 import type { TimelineBuilder, TimelineSnapshot } from "./timeline.js";
@@ -78,7 +78,8 @@ export class CacheSession {
   /** Facts by blob ID: loaded from disk, then extended by this run. */
   readonly facts: Map<string, FileFacts>;
   private readonly onDisk: ReadonlySet<string>;
-  private readonly learned = new Set<string>();
+  /** Blobs whose facts this run has already written to layer 1. */
+  private readonly writtenThisRun = new Set<string>();
   private readonly commitIndex: Map<string, string>;
   private chunk: { name: string; records: Map<string, SerializedCommit> } | undefined;
 
@@ -118,17 +119,16 @@ export class CacheSession {
   }
 
   /** A commit record from layer 2. */
-  async commitRecord(hash: string): Promise<CommitRecord> {
+  async commitRecord(hash: string): Promise<CommitRecord | undefined> {
     const name = this.commitIndex.get(hash);
-    if (name === undefined) throw new CacheError(`no cached record for commit ${hash}`);
+    if (name === undefined) return undefined;
     if (this.chunk?.name !== name) {
       const file = await readJson<CommitChunk>(join(this.dir, "commits", name));
-      if (!file) throw new CacheError(`cache chunk is missing or unreadable: commits/${name}`);
+      if (!file) return undefined; // a bad chunk is a miss: the caller reads the commit from git
       this.chunk = { name, records: new Map(file.records.map((r) => [r.hash, r.commit])) };
     }
     const raw = this.chunk.records.get(hash);
-    if (raw === undefined) throw new CacheError(`cache chunk commits/${name} does not hold ${hash}`);
-    return decodeCommit(raw);
+    return raw === undefined ? undefined : decodeCommit(raw);
   }
 
   /**
@@ -136,20 +136,22 @@ export class CacheSession {
    * The chunks land on disk before the checkpoint advances; the commit index is written at checkpoint time.
    */
   async saveBatch(fresh: readonly { hash: string; commit: CommitRecord }[]): Promise<void> {
-    if (fresh.length === 0) return;
+    // A commit with an unreadable blob is not cached: the blob may be readable on a later run.
+    const cacheable = fresh.filter(({ commit }) => !commit.writes.some((w) => w.facts === MISSING_FACTS));
     const learned: [string, FileFacts][] = [];
-    for (const { commit } of fresh) {
+    for (const { commit } of cacheable) {
       for (const write of commit.writes) {
-        if (write.facts.kind === "submodule" || this.onDisk.has(write.blob) || this.learned.has(write.blob)) continue;
-        this.learned.add(write.blob);
+        if (write.facts.kind === "submodule" || this.onDisk.has(write.blob) || this.writtenThisRun.has(write.blob)) continue;
+        this.writtenThisRun.add(write.blob);
         learned.push([write.blob, write.facts]);
       }
     }
     if (learned.length > 0) await writeChunk(join(this.dir, "facts"), learned);
+    if (cacheable.length === 0) return;
 
-    const records = fresh.map(({ hash, commit }) => ({ hash, commit: encodeCommit(commit) }));
+    const records = cacheable.map(({ hash, commit }) => ({ hash, commit: encodeCommit(commit) }));
     const name = await writeChunk(join(this.dir, "commits"), { records } satisfies CommitChunk);
-    for (const { hash } of fresh) this.commitIndex.set(hash, name);
+    for (const { hash } of cacheable) this.commitIndex.set(hash, name);
   }
 
   /** Checkpoints for a branch, oldest first. */
@@ -174,7 +176,7 @@ export class CacheSession {
     missingBlobs: number,
   ): Promise<void> {
     const existing = await this.checkpoints(branch);
-    if (existing.at(-1)?.commit === head) return;
+    if (existing.at(-1)?.commit === head && existsSync(stateFile(this.dir, branch, head))) return;
     const live = existing.filter((c) => chain.has(c.commit) && c.commit !== head);
     const all = [...live, { commit: head, missingBlobs }];
     const keep = all.slice(-MAX_CHECKPOINTS);
@@ -185,7 +187,6 @@ export class CacheSession {
     for (const dropped of existing.filter((c) => !keep.some((k) => k.commit === c.commit))) {
       await rm(stateFile(this.dir, branch, dropped.commit), { force: true });
     }
-    for (const cp of all.filter((c) => !keep.includes(c))) await rm(stateFile(this.dir, branch, cp.commit), { force: true });
   }
 }
 

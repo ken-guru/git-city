@@ -100,21 +100,21 @@ export class TimelineBuilder {
 
   static restore(s: TimelineSnapshot): TimelineBuilder {
     const b = new TimelineBuilder();
-    b.days.push(...s.days);
+    appendAll(b.days, s.days);
     for (const [path, file] of s.standing) b.standing.set(path, file);
-    b.alive.push(...s.alive);
-    b.floors.push(...s.floors);
-    b.changeDays.push(...s.changeDays.map((days) => [...days]));
+    appendAll(b.alive, s.alive);
+    appendAll(b.floors, s.floors);
+    appendAll(b.changeDays, s.changeDays.map((days) => [...days]));
     for (const file of s.scaffolded) b.scaffolded.add(file);
-    b.buildingType.push(...s.buildingType);
-    b.language.push(...s.language);
-    b.seed.push(...s.seed);
+    appendAll(b.buildingType, s.buildingType);
+    appendAll(b.language, s.language);
+    appendAll(b.seed, s.seed);
     b.nextFile = s.nextFile;
-    b.filePaths.push(...s.filePaths);
-    b.eventCommit.push(...s.eventCommit);
-    b.eventFile.push(...s.eventFile);
-    b.eventKind.push(...(s.eventKind as EventKind[]));
-    b.eventValue.push(...s.eventValue);
+    appendAll(b.filePaths, s.filePaths);
+    appendAll(b.eventCommit, s.eventCommit);
+    appendAll(b.eventFile, s.eventFile);
+    appendAll(b.eventKind, (s.eventKind as EventKind[]));
+    appendAll(b.eventValue, s.eventValue);
     return b;
   }
 
@@ -185,4 +185,9 @@ export interface TimelineSnapshot {
   eventFile: number[];
   eventKind: number[];
   eventValue: number[];
+}
+
+/** Appends by loop: spreading a long array into push() overflows the call stack on long histories. */
+function appendAll<T>(target: T[], items: readonly T[]): void {
+  for (const item of items) target.push(item);
 }
