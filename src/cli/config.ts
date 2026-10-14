@@ -30,6 +30,8 @@ export interface Config {
   /** Rules in file order: the last matching rule wins. */
   rules: Rule[];
   naming: { seed?: string };
+  /** The Theme named in the config. The `--theme` flag wins over it. */
+  theme?: string;
   /** The files the config was read from, in merge order. */
   sources: string[];
 }
@@ -64,7 +66,9 @@ export function parseConfig(text: string, source: string): Config {
 
   const rules = root.rules === undefined ? [] : parseRules(root.rules, source);
   const naming = root.naming === undefined ? {} : parseNaming(root.naming, source);
-  return { rules, naming, sources: [source] };
+  if (root.theme !== undefined && typeof root.theme !== "string") throw new ConfigError(`${source}: "theme" must be a string`);
+  const theme = root.theme as string | undefined;
+  return { rules, naming, sources: [source], ...(theme === undefined ? {} : { theme }) };
 }
 
 /**
@@ -83,6 +87,7 @@ export function loadConfig(paths: readonly string[]): Config {
     const config = parseConfig(text, path);
     merged.rules.push(...config.rules);
     merged.naming = { ...merged.naming, ...config.naming };
+    if (config.theme !== undefined) merged.theme = config.theme;
     merged.sources.push(path);
   }
   return merged;

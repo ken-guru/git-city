@@ -1,5 +1,9 @@
+import { NAME_SOURCES, PLACES_FORMAT_VERSION, type DistrictPlace, type NeighbourhoodPlace, type PlacesFile } from "../shared/places.js";
 import type { Config } from "./config.js";
+import type { Role } from "./layout.js";
+import { ThemeNamer } from "./namer.js";
 import { conceptWords, resolveConcept, resolveItem, type ItemPolicy } from "./rules.js";
+import type { Theme } from "./theme.js";
 
 /**
  * The naming step: the only producer of `strings.json`. Every human-readable
@@ -90,17 +94,23 @@ export function labelFor(path: string, id: number): string {
 /** Words the Labels themselves are built from; a hidden name equal to one of these is not scanned for. */
 const LABEL_WORDS = new Set([...Object.values(TYPE_BY_EXTENSION), "Other", "file"].map((w) => w.toLowerCase()));
 
-/** Names every file (by id, in birth order). The only way to produce a StringTable. */
-export function nameFiles(paths: readonly string[], config: Config, options: NameOptions = {}): NamingResult {
-  const ignoreReveal = options.private === true;
-  const rules = config.rules;
-
+/** The Concept policies of a config: pseudonym replacements, hidden words, and every Concept not revealed. */
+function conceptPolicies(rules: Config["rules"], ignoreReveal: boolean) {
   const concepts = conceptWords(rules).map((word) => ({ word, policy: resolveConcept(rules, word, { ignoreReveal }) }));
   const pseudonymConcepts = concepts
     .flatMap((c) => (c.policy.name.mode === "pseudonym" ? [{ word: c.word, as: c.policy.name.as }] : []))
     .sort((a, b) => b.word.length - a.word.length);
   const hiddenConcepts = concepts.filter((c) => c.policy.name.mode === "hidden").map((c) => c.word);
   const unrevealedConcepts = concepts.filter((c) => c.policy.name.mode !== "reveal");
+  return { concepts, pseudonymConcepts, hiddenConcepts, unrevealedConcepts };
+}
+
+/** Names every file (by id, in birth order). The only way to produce a StringTable. */
+export function nameFiles(paths: readonly string[], config: Config, options: NameOptions = {}): NamingResult {
+  const ignoreReveal = options.private === true;
+  const rules = config.rules;
+
+  const { pseudonymConcepts, hiddenConcepts, unrevealedConcepts } = conceptPolicies(rules, ignoreReveal);
 
   const items = paths.map((path, id) => {
     const policy: ItemPolicy = resolveItem(rules, { path }, { ignoreReveal });
@@ -151,6 +161,118 @@ export function nameFiles(paths: readonly string[], config: Config, options: Nam
 /** The strings.json text. Only the naming step's table can be passed in. */
 export function encodeStrings(table: StringTable): string {
   return `${JSON.stringify(table.strings)}\n`;
+}
+
+/** One District as the layout knows it: structure only, with its Real names still unshown. */
+export interface PlaceInput {
+  /** The Module's directory, "." for files directly in the root. */
+  key: string;
+  role: Role | null;
+  /** Neighbourhood directories, in the order the layout met them. */
+  neighbourhoods: string[];
+  /** Village anchor, in Block-grid cells. */
+  anchor: { col: number; row: number };
+  colour: { hue: number; saturation: number; lightness: number };
+}
+
+export interface PlaceOptions extends NameOptions {
+  theme: Theme;
+  /** The seed text for Generated names. Never written to the output. */
+  seed: string;
+  /** The hidden terms from `nameFiles`: every Generated name must avoid them. */
+  hidden: readonly string[];
+}
+
+/** Neighbourhood slots reserved per District when deriving a Neighbourhood's birth order. */
+const NEIGHBOURHOOD_SLOTS = 65_536;
+
+/** The places.json content. Only the naming step's table can be passed in. */
+export interface PlaceTable {
+  readonly file: PlacesFile;
+  readonly [SEALED]: true;
+}
+
+/**
+ * The naming step for Districts, Neighbourhoods and the City. Display names follow the same precedence as
+ * files; Generated names come from the Namer and must be unique in the City and free of hidden terms.
+ */
+export function namePlaces(districts: readonly PlaceInput[], config: Config, options: PlaceOptions): PlaceTable {
+  const ignoreReveal = options.private === true;
+  const rules = config.rules;
+  const { pseudonymConcepts, hiddenConcepts } = conceptPolicies(rules, ignoreReveal);
+  const hidden = [...options.hidden];
+
+  // Names already taken in the City, lower-cased. Revealed and pseudonymous names are taken before any Generated name.
+  const taken = new Set<string>();
+  const accept = (candidate: string) =>
+    !taken.has(candidate.toLowerCase()) && !containsAny(candidate, hidden) && findNearMisses(candidate, hidden).length === 0;
+  const namer = new ThemeNamer({ theme: options.theme, seed: options.seed, accept });
+
+  /** The fixed part of a display name: the Pseudonym, else the Real name when revealed. */
+  const fixedParts = (policy: ItemPolicy, realText: string | undefined) => {
+    const pseudonym = policy.name.mode === "pseudonym" ? replaceConcepts(policy.name.as, pseudonymConcepts) : undefined;
+    let real: string | undefined;
+    if (policy.name.mode === "reveal" && realText !== undefined) {
+      const candidate = replaceConcepts(realText, pseudonymConcepts);
+      if (!containsAny(candidate, hiddenConcepts)) real = candidate;
+    }
+    return { pseudonym, real };
+  };
+
+  const districtFixed = districts.map((d) => {
+    const policy = resolveItem(rules, { module: d.key }, { ignoreReveal });
+    return fixedParts(policy, d.key === "." ? undefined : d.key);
+  });
+  const neighbourhoodFixed = districts.map((d) =>
+    d.neighbourhoods.map((dir) => fixedParts(resolveItem(rules, { path: dir }, { ignoreReveal }), dir === "." ? undefined : dir)),
+  );
+  for (const fixed of [...districtFixed, ...neighbourhoodFixed.flat()]) {
+    for (const text of [fixed.pseudonym, fixed.real]) if (text !== undefined) taken.add(text.toLowerCase());
+  }
+
+  const cityName = namer.name({ kind: "city", birthOrder: 0, role: null });
+  taken.add(cityName.toLowerCase());
+
+  const places: DistrictPlace[] = districts.map((d, id) => {
+    const generated = namer.name({ kind: "district", birthOrder: id, role: d.role });
+    taken.add(generated.toLowerCase());
+    const shown = displayName({ ...districtFixed[id]!, generated, label: `District ${id + 1}` });
+    const neighbourhoods: NeighbourhoodPlace[] = d.neighbourhoods.map((_, i) => {
+      const fixed = neighbourhoodFixed[id]![i]!;
+      // A Neighbourhood's birth order is its District's id and its own index, so adding a Neighbourhood
+      // elsewhere never changes this one's street name.
+      const street = namer.name({ kind: "neighbourhood", birthOrder: id * NEIGHBOURHOOD_SLOTS + i, role: null });
+      taken.add(street.toLowerCase());
+      const text = displayName({ ...fixed, generated: street, label: street });
+      return { id: i, name: text.text, source: sourceIndex(text.source) };
+    });
+    return {
+      id,
+      name: shown.text,
+      source: sourceIndex(shown.source),
+      generated,
+      colour: d.colour,
+      anchor: d.anchor,
+      neighbourhoods,
+    };
+  });
+
+  const file: PlacesFile = {
+    formatVersion: PLACES_FORMAT_VERSION,
+    city: { name: cityName, source: sourceIndex("generated") },
+    districts: places,
+  };
+  return { file, [SEALED]: true } as PlaceTable;
+}
+
+/** Index of a name's source in NAME_SOURCES. A label is never a place's name, so it counts as generated. */
+function sourceIndex(source: "pseudonym" | "real" | "generated" | "label"): number {
+  return NAME_SOURCES.indexOf(source === "label" ? "generated" : source);
+}
+
+/** The places.json text. Only the naming step's table can be passed in. */
+export function encodePlaces(table: PlaceTable): string {
+  return `${JSON.stringify(table.file)}\n`;
 }
 
 /**

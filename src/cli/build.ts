@@ -1,12 +1,19 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { CacheSession } from "./cache.js";
 import { loadConfig } from "./config.js";
 import { gitMaybe } from "./git.js";
 import { type HistoryReport, isShallowRepository, readHistory, resolveTimelineHead } from "./history.js";
-import { nameFiles, type NearMiss, type Revealed } from "./naming.js";
+import { layoutHistory, type LayoutChange, type LayoutResult } from "./layout.js";
+import { categoryOf } from "./model.js";
+import { type NearMiss, nameFiles, namePlaces, type PlaceInput, type Revealed } from "./naming.js";
+import { seedNumber } from "./namer.js";
 import { PrivacyError, scanOutput } from "./privacy.js";
-import { TimelineBuilder } from "./timeline.js";
+import { readTimeline, type TimelineRead } from "./resume.js";
+import { DEFAULT_THEME, hueFor, loadTheme } from "./theme.js";
+import { TimelineBuilder, type TimelineData } from "./timeline.js";
+import { EVENT_ADD, EVENT_DELETE } from "../shared/format.js";
 import { writeSite } from "./write.js";
 
 /** The pre-built page, shipped at `dist/page/` next to the CLI. */
@@ -28,6 +35,14 @@ export interface BuildOptions {
   strict?: boolean;
   /** `--private`: every reveal is ignored. */
   private?: boolean;
+  /** `--theme`: the Theme to name and colour the City with. Wins over the config. */
+  theme?: string;
+  /** `--seed`: the seed for Generated names. Wins over `naming.seed`. */
+  seed?: string;
+  /** `--fresh`: rebuild the cache from scratch. */
+  fresh?: boolean;
+  /** `--wait`: wait for another run to finish instead of failing. */
+  wait?: boolean;
 }
 
 export interface BuildSummary {
@@ -43,6 +58,8 @@ export interface BuildSummary {
   nearMisses: NearMiss[];
   /** Non-fatal problems to show the user, such as a shallow clone. */
   warnings: string[];
+  /** The Theme the names and colours came from. */
+  theme: string;
 }
 
 export async function build(options: BuildOptions): Promise<BuildSummary> {
@@ -52,23 +69,42 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   if (await isShallowRepository(options.repoDir)) {
     warnings.push("this is a shallow clone, so the City shows only the history it holds; run git fetch --unshallow for all of it");
   }
-  const builder = new TimelineBuilder();
-  const report: HistoryReport = { missingBlobs: 0 };
-  for await (const commit of readHistory(options.repoDir, head, report)) builder.add(commit);
-  if (report.missingBlobs > 0) {
-    warnings.push(`${report.missingBlobs} file versions could not be read and were counted as empty (missing objects; is this a partial clone?)`);
+  const cache = await CacheSession.open(options.repoDir, { fresh: options.fresh, wait: options.wait });
+  let timeline: TimelineRead;
+  try {
+    timeline = await readTimeline(options.repoDir, head, branch, cache);
+    await cache.checkpoint(branch, head, timeline.builder, new Set(timeline.chain), timeline.missingBlobs);
+  } finally {
+    await cache.close();
   }
-  const data = builder.result();
+  if (timeline.missingBlobs > 0) {
+    warnings.push(`${timeline.missingBlobs} file versions could not be read and were counted as empty (missing objects; is this a partial clone?)`);
+  }
+  const data = timeline.builder.result();
 
   const config = loadConfig(await configFiles(options.repoDir, options.configPath));
   const names = nameFiles(data.filePaths, config, { private: options.private });
+  const theme = loadTheme(options.theme ?? config.theme ?? DEFAULT_THEME);
+  const seedText = options.seed ?? config.naming.seed ?? (await rootCommit(options.repoDir, head));
   if (options.strict && names.nearMisses.length > 0) {
     throw new PrivacyError(
       `${names.nearMisses.length} near-miss${names.nearMisses.length === 1 ? "" : "es"} found; --strict fails the build`,
     );
   }
 
-  await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, names.table, (staging) =>
+  const layout = layoutHistory(changesFromTimeline(data), {
+    seed: seedNumber(seedText),
+    categoryOf: (path) => categoryOf(path),
+    hueOf: (role) => hueFor(theme, role),
+  });
+  const places = namePlaces(placeInputs(layout), config, {
+    theme,
+    seed: seedText,
+    hidden: names.hidden,
+    private: options.private,
+  });
+
+  await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, names.table, places, (staging) =>
     scanOutput(staging, names.hidden),
   );
   return {
@@ -80,7 +116,41 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     revealed: names.revealed,
     nearMisses: names.nearMisses,
     warnings,
+    theme: theme.name,
   };
+}
+
+/** The first root commit of the Timeline. It seeds Generated names and is never written to the output. */
+async function rootCommit(repoDir: string, head: string): Promise<string> {
+  const roots = (await gitMaybe(repoDir, ["rev-list", "--max-parents=0", head]))?.split("\n").filter((l) => l !== "").sort();
+  return roots?.[0] ?? head;
+}
+
+/** The layout's changes, one per commit, from the Timeline's add and delete events. */
+export function changesFromTimeline(data: TimelineData): LayoutChange[] {
+  const changes: LayoutChange[] = Array.from({ length: data.commitDays.length }, () => ({ added: [], deleted: [] }));
+  for (let i = 0; i < data.eventCommit.length; i++) {
+    const file = data.eventFile[i]!;
+    const path = data.filePaths[file]!;
+    const change = changes[data.eventCommit[i]!]!;
+    if (data.eventKind[i] === EVENT_ADD) change.added.push({ file, path });
+    else if (data.eventKind[i] === EVENT_DELETE) change.deleted.push({ file, path });
+  }
+  return changes;
+}
+
+/** What the naming step needs about each District: structure only. */
+function placeInputs(layout: LayoutResult): PlaceInput[] {
+  return layout.districts.map((d) => {
+    const village = layout.villages[d.village]!;
+    return {
+      key: d.key,
+      role: d.role,
+      neighbourhoods: d.neighbourhoods,
+      anchor: { col: village.col, row: village.row },
+      colour: d.paving,
+    };
+  });
 }
 
 /** The config files to read: `--config` alone, or the shared file then the personal one. */

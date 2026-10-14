@@ -1,13 +1,22 @@
 import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, PerspectiveCamera, PlaneGeometry, Scene, WebGLRenderer } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { decodeChunk, decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
+import { type PlacesFile, parsePlaces } from "../shared/places.js";
 import { CityBuildings } from "./buildings.js";
+import { addCountryside } from "./countryside.js";
+import { cityTitle, createDistrictLabels } from "./labels.js";
+import { LodController, settingsFor } from "./lod.js";
 import { buildTimelines, gridColumns, gridSlot, TRANSITION_COMMITS } from "./state.js";
 
 /** Tuning values for the City. The player and camera tickets replace the rest. */
 const TUNING = {
   commitsPerSecond: 2,
   lotSpacing: 1.5,
+  /** World distance between Block-grid cells, where District labels are anchored. */
+  blockSpacing: 6,
+  /** District labels are hidden beyond this many City extents from the camera, at a height of `labelHeight`. */
+  labelDistance: 1.5,
+  labelHeight: 3,
   groundMargin: 4,
   cameraFov: 45,
   /** Camera offset from the grid centre, as a multiple of the grid's extent plus a fixed distance. */
@@ -65,17 +74,23 @@ async function main() {
   const firstChunk = world.chunks[0];
   if (!firstChunk) throw new Error("world.bin lists no chunks");
   const chunk = decodeChunk(await fetchBytes(`chunks/${firstChunk.name}`));
-  play(world, buildTimelines(chunk, world.fileCount));
+  // Without places.json the City still plays, just without District labels.
+  let places: PlacesFile | undefined;
+  try {
+    places = parsePlaces(new TextDecoder().decode(await fetchBytes("places.json", { cache: "no-store" })));
+  } catch (e) {
+    console.warn("District names could not be loaded", e);
+  }
+  play(world, buildTimelines(chunk, world.fileCount), places);
 }
 
-function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
+function play(world: World, timelines: ReturnType<typeof buildTimelines>, places?: PlacesFile) {
   const commitCount = world.commitDays.length;
   const endTime = commitCount - 1 + TRANSITION_COMMITS;
   const columns = gridColumns(world.fileCount);
   const extent = columns * TUNING.lotSpacing;
 
   const renderer = new WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
   document.body.prepend(renderer.domElement);
 
   const scene = new Scene();
@@ -89,6 +104,12 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
   const ground = new Mesh(new PlaneGeometry(extent + TUNING.groundMargin, extent + TUNING.groundMargin), new MeshLambertMaterial({ color: colours.ground }));
   ground.rotation.x = -Math.PI / 2;
   scene.add(ground);
+  addCountryside(scene, {
+    // The world file has no City seed yet, so the first file's seed stands in: stable for the repo's life.
+    seed: world.seed[0] ?? 0,
+    theme: colours === PALETTE.dark ? "dark" : "light",
+    keepOut: extent / 2 + TUNING.groundMargin,
+  });
 
   const origin = ((columns - 1) * TUNING.lotSpacing) / 2;
   const place = (file: number) => {
@@ -115,13 +136,29 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
   const controls = new OrbitControls(camera, renderer.domElement);
   controls.enableDamping = true;
 
+  const labels = places
+    ? createDistrictLabels(scene, places, TUNING.blockSpacing, extent * TUNING.labelDistance, TUNING.labelHeight)
+    : undefined;
+  if (labels) document.body.append(labels.element);
+  if (places) document.title = cityTitle(places);
+
   function resize() {
     renderer.setSize(innerWidth, innerHeight);
+    labels?.setSize(innerWidth, innerHeight);
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
   }
   addEventListener("resize", resize);
-  resize();
+
+  // Level of detail follows the measured frame rate. A new level changes what is drawn, not the data.
+  const lod = new LodController();
+  function applyDetail() {
+    const detail = settingsFor(lod.level);
+    city.setDetail(detail);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, detail.pixelRatioCap));
+    resize();
+  }
+  applyDetail();
 
   let time = 0;
   let playing = false;
@@ -144,6 +181,7 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
   }
 
   renderer.setAnimationLoop((now) => {
+    if (lod.frame(now)) applyDetail();
     const seconds = Math.min(0.1, (now - last) / 1000);
     last = now;
     if (playing) {
@@ -153,6 +191,8 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
     draw(time);
     controls.update();
     renderer.render(scene, camera);
+    labels?.update(camera);
+    labels?.render(scene, camera);
   });
 }
 

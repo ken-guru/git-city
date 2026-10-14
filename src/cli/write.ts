@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { CHUNK_HASH_BYTES, chunkName, encodeChunk, encodeWorld } from "../shared/format.js";
-import { encodeStrings, type StringTable } from "./naming.js";
+import { encodePlaces, encodeStrings, type PlaceTable, type StringTable } from "./naming.js";
 import type { TimelineData } from "./timeline.js";
 
 export class OutputError extends Error {}
@@ -18,6 +18,7 @@ export async function writeSite(
   pageDir: string,
   timeline: TimelineData,
   names: StringTable,
+  places: PlaceTable,
   check: (stagingDir: string) => Promise<void>,
 ): Promise<void> {
   await assertReplaceable(outDir);
@@ -49,6 +50,7 @@ export async function writeSite(
     }),
   );
   await writeFile(join(staging, "strings.json"), encodeStrings(names));
+  await writeFile(join(staging, "places.json"), encodePlaces(places));
 
   try {
     await check(staging);

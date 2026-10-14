@@ -12,6 +12,7 @@ import {
 } from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { BUILDING_TYPES, type BuildingType, LANGUAGES } from "../shared/buildings.js";
+import { type LodSettings, settingsFor } from "./lod.js";
 import { type BuildingSegment, buildingPose, durationFor, FOUNDATION_SHARE, KIND_CHANGE, KIND_NONE, type ScaffoldSegment, scaffoldPose } from "./state.js";
 
 /**
@@ -23,32 +24,35 @@ import { type BuildingSegment, buildingPose, durationFor, FOUNDATION_SHARE, KIND
 /** World units per Floor, and the plinth under every Building. */
 export const FLOOR_HEIGHT = 1;
 export const FOUNDATION_HEIGHT = 0.2;
-/** Window columns per wall unit, and the distances (world units) over which windows fade out. */
+/** Window columns per wall unit. Fade distances come from the level of detail (see `settingsFor`). */
 const WINDOW_COLUMNS = 3;
-const WINDOW_NEAR = 14;
-const WINDOW_FAR = 40;
 
-/** Vertex flags: `aRoof` 1 lifts a vertex with the roof; `aTrim` is 0 wall, 1 language colour, 2 fixed (crane). */
-function flagged(geometry: BufferGeometry, roof: boolean, trim: number): BufferGeometry {
+/**
+ * Vertex flags: `aRoof` 1 lifts a vertex with the roof; `aTrim` is 0 wall, 1 language colour, 2 fixed (crane);
+ * `aProp` 1 marks a roof prop, which level of detail hides at a distance.
+ */
+function flagged(geometry: BufferGeometry, roof: boolean, trim: number, prop = false): BufferGeometry {
   const count = geometry.getAttribute("position").count;
   geometry.setAttribute("aRoof", new Float32BufferAttribute(new Array(count).fill(roof ? 1 : 0), 1));
   geometry.setAttribute("aTrim", new Float32BufferAttribute(new Array(count).fill(trim), 1));
+  geometry.setAttribute("aProp", new Float32BufferAttribute(new Array(count).fill(prop ? 1 : 0), 1));
   return geometry;
 }
 
 interface PartOptions {
   roof?: boolean;
   trim?: number;
+  prop?: boolean;
 }
 
 /** A box whose base sits on `base`. */
-function box(w: number, h: number, d: number, x: number, base: number, z: number, { roof = false, trim = 0 }: PartOptions = {}) {
-  return flagged(new BoxGeometry(w, h, d).translate(x, base + h / 2, z), roof, trim);
+function box(w: number, h: number, d: number, x: number, base: number, z: number, { roof = false, trim = 0, prop = false }: PartOptions = {}) {
+  return flagged(new BoxGeometry(w, h, d).translate(x, base + h / 2, z), roof, trim, prop);
 }
 
 /** A cylinder whose base sits on `base`. A zero top radius makes a cone. */
 function cylinder(rTop: number, rBottom: number, h: number, segments: number, x: number, base: number, z: number, opts: PartOptions = {}) {
-  return flagged(new CylinderGeometry(rTop, rBottom, h, segments).translate(x, base + h / 2, z), opts.roof ?? false, opts.trim ?? 0);
+  return flagged(new CylinderGeometry(rTop, rBottom, h, segments).translate(x, base + h / 2, z), opts.roof ?? false, opts.trim ?? 0, opts.prop ?? false);
 }
 
 /** A four-sided pitched roof on `base`, turned so its edges run along the footprint. */
@@ -56,7 +60,7 @@ function pitch(radius: number, h: number, base: number) {
   return flagged(new CylinderGeometry(0, radius, h, 4).rotateY(Math.PI / 4).translate(0, base + h / 2, 0), true, 1);
 }
 
-const PROP = { roof: true, trim: 1 } as const;
+const PROP = { roof: true, trim: 1, prop: true } as const;
 
 const KITS: Record<BuildingType, () => BufferGeometry[]> = {
   office: () => [box(0.9, 1, 0.9, 0, 0, 0), box(0.3, 0.12, 0.3, 0, 1, 0, PROP), box(0.04, 0.35, 0.04, 0, 1.12, 0, PROP)],
@@ -122,6 +126,10 @@ export interface CityUniforms {
   uDust: { value: [number, number, number] };
   uSteel: { value: [number, number, number] };
   uCrane: { value: [number, number, number] };
+  /** Level of detail: windows fade between these distances, and roof props hide beyond `uPropFar`. */
+  uWindowNear: { value: number };
+  uWindowFar: { value: number };
+  uPropFar: { value: number };
 }
 
 const DECLARATIONS = /* glsl */ `
@@ -133,9 +141,11 @@ attribute float aFrom;
 attribute float aTo;
 attribute float aHeight;
 attribute float aSeed;
+attribute float aProp;
 attribute vec3 aLanguage;
 uniform float uTime;
 uniform float uDuration;
+uniform float uPropFar;
 uniform vec3 uGlass;
 uniform vec3 uLit;
 uniform vec3 uDust;
@@ -159,6 +169,9 @@ const float FOUNDATION_SHARE = ${FOUNDATION_SHARE.toFixed(4)};
 
 /** Building vertices: a build (kind 1), a change (kind 2) or a demolition (kind 3), eased from uTime. */
 const BUILDING_VERTEX = /* glsl */ `
+  // Level of detail: a roof prop beyond uPropFar collapses onto its roof point. The distance is to the Lot.
+  float lodDistance = length((modelViewMatrix * vec4(instanceMatrix[3].xyz, 1.0)).xyz);
+  if (aProp > 0.5 && lodDistance > uPropFar) transformed = vec3(0.0, 1.0, 0.0);
   float p = clamp((uTime - aStart) / uDuration, 0.0, 1.0);
   float e = 1.0 - pow(1.0 - p, 3.0);
   float height;
@@ -198,6 +211,8 @@ const SCAFFOLD_VERTEX = /* glsl */ `
 `;
 
 const FRAGMENT_HELPERS = /* glsl */ `
+uniform float uWindowNear;
+uniform float uWindowFar;
 uniform vec3 uGlass;
 uniform vec3 uLit;
 uniform vec3 uDust;
@@ -228,7 +243,7 @@ float hash12(vec2 p) {
 const BUILDING_FRAGMENT = /* glsl */ `
   vec3 base = vTrim > 1.5 ? uCrane : (vTrim > 0.5 ? vLang : uWall);
   if (vTrim < 0.5) {
-    float fade = 1.0 - smoothstep(${WINDOW_NEAR.toFixed(1)}, ${WINDOW_FAR.toFixed(1)}, vDistance);
+    float fade = 1.0 - smoothstep(uWindowNear, uWindowFar, vDistance);
     if (fade > 0.0) {
       vec3 n = normalize(vNormalObj);
       float along = abs(n.x) > 0.5 ? vLocal.z : vLocal.x;
@@ -311,6 +326,7 @@ export class CityBuildings {
     this.data = data;
     this.place = data.place;
     const colours = PALETTE[theme];
+    const detail = settingsFor(0);
     this.uniforms = {
       uTime: { value: 0 },
       uDuration: { value: durationFor(2) },
@@ -319,6 +335,9 @@ export class CityBuildings {
       uDust: { value: rgb(colours.dust) },
       uSteel: { value: rgb(colours.steel) },
       uCrane: { value: rgb(CRANE) },
+      uWindowNear: { value: detail.windowNear },
+      uWindowFar: { value: detail.windowFar },
+      uPropFar: { value: detail.propFar },
     };
     this.slot = new Int32Array(data.fileCount);
     this.onBuilding = new Uint8Array(data.fileCount);
@@ -379,6 +398,13 @@ export class CityBuildings {
     this.objects.push(this.scaffold);
 
     for (const object of this.objects) scene.add(object);
+  }
+
+  /** Applies one level of detail's distances to every Building. Changes only what is drawn, never placement or timing. */
+  setDetail(detail: LodSettings): void {
+    this.uniforms.uWindowNear.value = detail.windowNear;
+    this.uniforms.uWindowFar.value = detail.windowFar;
+    this.uniforms.uPropFar.value = detail.propFar;
   }
 
   /** Puts a file's instance on its Lot, or collapses it to nothing. */

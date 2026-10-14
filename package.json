@@ -10,6 +10,7 @@
   "files": [
     "dist",
     "schema",
+    "themes",
     "THIRD_PARTY_NOTICES.md"
   ],
   "repository": {
@@ -40,6 +41,6 @@
     "vitest": "^5.0.4"
   },
   "dependencies": {
-    "web-tree-sitter": "^0.27.0"
+    "web-tree-sitter": "0.27.0"
   }
 }
