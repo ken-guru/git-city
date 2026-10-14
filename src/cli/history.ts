@@ -1,5 +1,6 @@
 import { SECONDS_PER_DAY } from "../shared/format.js";
 import { type FileFacts, resolveBlobFacts, SUBMODULE_FACTS } from "./facts.js";
+import { extractImports, extractorFor } from "./imports/extract.js";
 import { gitMaybe, gitStream } from "./git.js";
 
 /** Commits parsed before their blobs are read. Bounds memory; the whole history is never held. */
@@ -151,14 +152,24 @@ async function completeBatch(
   report: HistoryReport,
 ): Promise<{ hash: string; commit: CommitRecord }[]> {
   const unknown = new Set<string>();
+  /** The first path each blob is written under, for the blobs an import extractor reads. */
+  const extractedPath = new Map<string, string>();
   for (const commit of batch) {
     for (const write of commit.writes) {
-      if (write.mode !== SUBMODULE_MODE && !known.has(write.blob)) unknown.add(write.blob);
+      if (write.mode === SUBMODULE_MODE) continue;
+      if (!known.has(write.blob)) unknown.add(write.blob);
+      if (extractorFor(write.path) && !extractedPath.has(write.blob)) extractedPath.set(write.blob, write.path);
     }
   }
   if (unknown.size > 0) {
-    const resolved = await resolveBlobFacts(repoDir, [...unknown]);
-    for (const [blob, facts] of resolved.facts) known.set(blob, facts);
+    const wanted = new Set([...unknown].filter((blob) => extractedPath.has(blob)));
+    const resolved = await resolveBlobFacts(repoDir, [...unknown], wanted);
+    for (const [blob, facts] of resolved.facts) {
+      const text = resolved.texts.get(blob);
+      const path = extractedPath.get(blob);
+      const imports = text !== undefined && path !== undefined && facts.kind === "text" ? await extractImports(path, text) : undefined;
+      known.set(blob, imports === undefined ? facts : { ...facts, imports });
+    }
     report.missingBlobs += resolved.missing;
   }
   return batch.map((commit) => ({
@@ -174,6 +185,12 @@ async function completeBatch(
         blob: write.blob,
         facts: write.mode === SUBMODULE_MODE ? SUBMODULE_FACTS : known.get(write.blob)!,
       })),
+      lines: new Map(
+        commit.writes.map((write) => [
+          write.path,
+          write.mode === SUBMODULE_MODE ? 0 : known.get(write.blob)!.lineEquivalent,
+        ]),
+      ),
     },
   }));
 }

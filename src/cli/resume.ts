@@ -1,7 +1,7 @@
 import type { CacheSession } from "./cache.js";
 import { git } from "./git.js";
 import { type CommitRecord, COMMITS_PER_BATCH, HistoryError, type HistoryReport, readCommitBatch } from "./history.js";
-import { TimelineBuilder } from "./timeline.js";
+import { Pipeline, type PipelineOptions } from "./pipeline.js";
 
 /** The first-parent chain ending at `head`, oldest commit first. */
 export async function firstParentChain(repoDir: string, head: string): Promise<string[]> {
@@ -9,13 +9,13 @@ export async function firstParentChain(repoDir: string, head: string): Promise<s
   return out === "" ? [] : out.split("\n");
 }
 
-export interface TimelineRead {
-  builder: TimelineBuilder;
+export interface PipelineRead {
+  pipeline: Pipeline;
   /** The first-parent chain that was read, oldest first. */
   chain: string[];
   /** Blobs unreadable across the whole history, including those counted by earlier runs. */
   missingBlobs: number;
-  /** Commits this run replayed into the Timeline (after any checkpoint it resumed from). */
+  /** Commits this run replayed into the pipeline (after any checkpoint it resumed from). */
   replayed: number;
   /** Commits this run read from git; the rest came from the cache. */
   read: number;
@@ -24,15 +24,21 @@ export interface TimelineRead {
 }
 
 /**
- * Builds the Timeline for `head`, reusing the cache. Resumes from the newest checkpoint still on the
- * first-parent chain (so a rewrite rolls back to it), takes cached commit records where it has them,
- * and reads the rest from git in batches.
+ * Runs the pipeline over the history ending at `head`, reusing the cache. Resumes from the newest checkpoint still on
+ * the first-parent chain (so a rewrite rolls back to it) that has both its run state and its layout, takes cached
+ * commit records where it has them, and reads the rest from git in batches.
  */
-export async function readTimeline(repoDir: string, head: string, branch: string, cache: CacheSession): Promise<TimelineRead> {
+export async function readPipeline(
+  repoDir: string,
+  head: string,
+  branch: string,
+  cache: CacheSession,
+  options: PipelineOptions,
+): Promise<PipelineRead> {
   const chain = await firstParentChain(repoDir, head);
   const position = new Map(chain.map((hash, i) => [hash, i]));
 
-  let builder = new TimelineBuilder();
+  let pipeline = Pipeline.fresh(options);
   let missingBlobs = 0;
   let start = 0;
   let resumedFrom: string | undefined;
@@ -42,8 +48,11 @@ export async function readTimeline(repoDir: string, head: string, branch: string
     const at = position.get(checkpoint.commit);
     if (at === undefined) continue;
     const state = await cache.loadState(branch, checkpoint);
-    if (state === undefined) continue; // the checkpoint's state is gone: fall back to an older one
-    builder = TimelineBuilder.restore(state);
+    const layout = await cache.loadLayout(branch, checkpoint);
+    if (state === undefined || layout === undefined) continue; // a missing layer: fall back to an older checkpoint
+    const restored = Pipeline.restore(options, state, layout);
+    if (restored === undefined) continue;
+    pipeline = restored;
     missingBlobs = checkpoint.missingBlobs;
     start = at + 1;
     resumedFrom = checkpoint.commit;
@@ -55,13 +64,13 @@ export async function readTimeline(repoDir: string, head: string, branch: string
   for (let i = start; i < chain.length; i += COMMITS_PER_BATCH) {
     const hashes = chain.slice(i, i + COMMITS_PER_BATCH);
     const { records, fresh } = await batchRecords(repoDir, hashes, cache, report);
-    for (const record of records) builder.add(record);
+    for (const record of records) await pipeline.add(record);
     await cache.saveBatch(fresh);
     read += fresh.length;
   }
 
   return {
-    builder,
+    pipeline,
     chain,
     missingBlobs: missingBlobs + report.missingBlobs,
     replayed: chain.length - start,

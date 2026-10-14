@@ -5,19 +5,21 @@ import { dirname, join, resolve } from "node:path";
 import { type FileFacts, MISSING_FACTS } from "./facts.js";
 import { git } from "./git.js";
 import type { CommitRecord } from "./history.js";
-import type { TimelineBuilder, TimelineSnapshot } from "./timeline.js";
+import type { LayoutSnapshot } from "./layout.js";
+import type { RunState } from "./pipeline.js";
 
 /** Folder under the git common directory that holds the cache, shared by all worktrees. */
 export const CACHE_FOLDER = "git-city";
 
 /**
  * One version stamp per layer. Bump a layer's stamp when its contents would mean something different.
- * Layer 1 feeds layer 2, and layer 2 feeds layer 3, so a changed stamp also clears the layers after it.
+ * Each layer feeds the next (facts, commits, run, layout), so a changed stamp also clears the layers after it.
  */
 export const LAYER_STAMPS = {
-  facts: "facts-1",
-  commits: "commits-2",
-  run: "run-2",
+  facts: "facts-2",
+  commits: "commits-3",
+  run: "run-3",
+  layout: "layout-1",
 } as const;
 export type Layer = keyof typeof LAYER_STAMPS;
 const LAYERS = Object.keys(LAYER_STAMPS) as Layer[];
@@ -27,6 +29,7 @@ const LAYER_DIRS: Record<Layer, string[]> = {
   facts: ["facts"],
   commits: ["commits"],
   run: ["runs", "states"],
+  layout: ["layouts"],
 };
 
 /** Checkpoints kept per branch. Older ones roll back less after a rewrite, but cost disk. */
@@ -159,33 +162,43 @@ export class CacheSession {
     return (await readJson<{ checkpoints: Checkpoint[] }>(runPath(this.dir, branch)))?.checkpoints ?? [];
   }
 
-  /** The run state saved at a checkpoint, or undefined if it is missing. */
-  async loadState(branch: string, checkpoint: Checkpoint): Promise<TimelineSnapshot | undefined> {
-    return readJson<TimelineSnapshot>(stateFile(this.dir, branch, checkpoint.commit));
+  /** The run state saved at a checkpoint (layer 3), or undefined if it is missing. */
+  async loadState(branch: string, checkpoint: Checkpoint): Promise<RunState | undefined> {
+    return readJson<RunState>(stateFile(this.dir, branch, checkpoint.commit));
+  }
+
+  /** The layout saved at a checkpoint (layer 4), or undefined if it is missing. */
+  async loadLayout(branch: string, checkpoint: Checkpoint): Promise<LayoutSnapshot | undefined> {
+    return readJson<LayoutSnapshot>(layoutFile(this.dir, branch, checkpoint.commit));
   }
 
   /**
-   * Saves the run state at `head` (layer 3), then advances the branch's checkpoints.
+   * Saves the run state and the layout at `head`, then advances the branch's checkpoints.
    * Checkpoints whose commit is no longer on the first-parent chain are dropped.
    */
   async checkpoint(
     branch: string,
     head: string,
-    builder: TimelineBuilder,
+    state: RunState,
+    layout: LayoutSnapshot,
     chain: ReadonlySet<string>,
     missingBlobs: number,
   ): Promise<void> {
     const existing = await this.checkpoints(branch);
-    if (existing.at(-1)?.commit === head && existsSync(stateFile(this.dir, branch, head))) return;
+    if (existing.at(-1)?.commit === head && existsSync(stateFile(this.dir, branch, head)) && existsSync(layoutFile(this.dir, branch, head))) {
+      return;
+    }
     const live = existing.filter((c) => chain.has(c.commit) && c.commit !== head);
     const all = [...live, { commit: head, missingBlobs }];
     const keep = all.slice(-MAX_CHECKPOINTS);
 
-    await writeAtomic(stateFile(this.dir, branch, head), JSON.stringify(builder.snapshot()));
+    await writeAtomic(stateFile(this.dir, branch, head), JSON.stringify(state));
+    await writeAtomic(layoutFile(this.dir, branch, head), JSON.stringify(layout));
     await writeAtomic(join(this.dir, "commits", "index.json"), JSON.stringify(Object.fromEntries(this.commitIndex)));
     await writeAtomic(runPath(this.dir, branch), JSON.stringify({ checkpoints: keep } satisfies { checkpoints: Checkpoint[] }));
     for (const dropped of existing.filter((c) => !keep.some((k) => k.commit === c.commit))) {
       await rm(stateFile(this.dir, branch, dropped.commit), { force: true });
+      await rm(layoutFile(this.dir, branch, dropped.commit), { force: true });
     }
   }
 }
@@ -270,6 +283,7 @@ async function reconcileStamps(dir: string, fresh: boolean): Promise<void> {
   for (const layer of LAYERS) if (stored[layer] !== LAYER_STAMPS[layer]) clear.add(layer);
   if (clear.has("facts")) clear.add("commits");
   if (clear.has("commits")) clear.add("run");
+  if (clear.has("run")) clear.add("layout");
   for (const layer of clear) {
     for (const d of LAYER_DIRS[layer]) await rm(join(dir, d), { recursive: true, force: true });
   }
@@ -301,6 +315,10 @@ function runPath(dir: string, branch: string): string {
 
 function stateFile(dir: string, branch: string, commit: string): string {
   return join(dir, "states", encodeURIComponent(branch), `${commit}.json`);
+}
+
+function layoutFile(dir: string, branch: string, commit: string): string {
+  return join(dir, "layouts", encodeURIComponent(branch), `${commit}.json`);
 }
 
 async function writeChunk(folder: string, value: unknown): Promise<string> {

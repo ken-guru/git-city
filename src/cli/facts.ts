@@ -1,3 +1,4 @@
+import type { RawImport } from "./imports/extract.js";
 import { finishGit, GitError, spawnGit } from "./git.js";
 
 /** Bytes checked for a NUL to decide a blob is binary. */
@@ -19,6 +20,11 @@ export interface FileFacts {
   lines: number;
   /** The line count the model sizes by: `lines` for text, bytes ÷ 40 for binary and LFS, 0 for submodules. */
   lineEquivalent: number;
+  /**
+   * Raw import specifiers, for a text file that an import extractor reads (TS, TSX, JS). Absent for every other file.
+   * Persisted in the facts layer, so an unchanged blob is never parsed twice.
+   */
+  imports?: RawImport[];
 }
 
 /** A submodule entry points at a commit, not a blob, so it has no size. */
@@ -31,22 +37,30 @@ export interface ResolvedFacts {
   facts: Map<string, FileFacts>;
   /** Blobs git could not read. They are recorded with zero size and lines. */
   missing: number;
+  /** The full text of each blob asked for in `wantText`, when it could be read. */
+  texts: Map<string, string>;
 }
 
 /**
  * Sizes and line counts for a set of blob IDs. Sizes come from `cat-file --batch-check`;
  * contents are streamed through `cat-file --batch` in parallel to count lines and sniff binaries.
+ * Blobs in `wantText` also have their full text returned, for the import extractors.
  */
-export async function resolveBlobFacts(repoDir: string, blobs: readonly string[]): Promise<ResolvedFacts> {
+export async function resolveBlobFacts(
+  repoDir: string,
+  blobs: readonly string[],
+  wantText: ReadonlySet<string> = new Set(),
+): Promise<ResolvedFacts> {
   const facts = new Map<string, FileFacts>();
-  if (blobs.length === 0) return { facts, missing: 0 };
+  const texts = new Map<string, string>();
+  if (blobs.length === 0) return { facts, missing: 0, texts };
 
   const sizes = await readSizes(repoDir, blobs);
   const groupSize = Math.ceil(blobs.length / CAT_FILE_PARALLELISM);
   const groups: string[][] = [];
   for (let i = 0; i < blobs.length; i += groupSize) groups.push(blobs.slice(i, i + groupSize));
 
-  const scanned = await Promise.all(groups.map((group) => scanContents(repoDir, group)));
+  const scanned = await Promise.all(groups.map((group) => scanContents(repoDir, group, (i) => wantText.has(group[i]!))));
   let missing = 0;
   scanned.forEach((results, g) => {
     results.forEach((scan, i) => {
@@ -57,10 +71,11 @@ export async function resolveBlobFacts(repoDir: string, blobs: readonly string[]
         facts.set(blob, MISSING_FACTS);
       } else {
         facts.set(blob, factsFrom(size, scan));
+        if (scan.content !== undefined) texts.set(blob, scan.content.toString("utf8"));
       }
     });
   });
-  return { facts, missing };
+  return { facts, missing, texts };
 }
 
 /** Sizes for many blobs from one `cat-file --batch-check` process. Missing blobs map to undefined. */
@@ -110,8 +125,12 @@ function recordSize(sizes: Map<string, number | undefined>, line: string): void 
  * Reads the contents of `blobs` in order from one `cat-file --batch` process.
  * Returns one scan per blob, or undefined for a blob git reports missing.
  */
-async function scanContents(repoDir: string, blobs: readonly string[]): Promise<(ContentScan | undefined)[]> {
-  const scanner = new BatchScanner(blobs.length);
+async function scanContents(
+  repoDir: string,
+  blobs: readonly string[],
+  keep: (index: number) => boolean,
+): Promise<(ContentScan | undefined)[]> {
+  const scanner = new BatchScanner(blobs.length, keep);
   for await (const chunk of catFile(repoDir, "--batch", blobs)) scanner.push(chunk);
   scanner.finish();
   return scanner.results;
@@ -126,6 +145,8 @@ export interface ContentScan {
   endsWithNewline: boolean;
   /** The first BINARY_SNIFF_BYTES bytes, enough to sniff for binary and read an LFS pointer. */
   head: Buffer;
+  /** The whole content, only when the scanner was asked to keep it. */
+  content?: Buffer;
 }
 
 /**
@@ -137,9 +158,15 @@ export class BatchScanner {
   private pending: Buffer = Buffer.alloc(0);
   private state: "header" | "body" | "terminator" = "header";
   private remaining = 0;
-  private current: { bytes: number; newlines: number; lastByte: number; headParts: Buffer[]; headLength: number } | undefined;
+  private current:
+    | { bytes: number; newlines: number; lastByte: number; headParts: Buffer[]; headLength: number; content?: Buffer[] }
+    | undefined;
 
-  constructor(private readonly expected: number) {}
+  /** `keep(i)` says whether object `i` keeps its whole content, not just its head. */
+  constructor(
+    private readonly expected: number,
+    private readonly keep: (index: number) => boolean = () => false,
+  ) {}
 
   push(chunk: Buffer): void {
     const buf = this.pending.length ? Buffer.concat([this.pending, chunk]) : chunk;
@@ -180,12 +207,20 @@ export class BatchScanner {
     }
     const [, , size] = line.split(" ");
     this.remaining = Number(size);
-    this.current = { bytes: this.remaining, newlines: 0, lastByte: 10, headParts: [], headLength: 0 };
+    this.current = {
+      bytes: this.remaining,
+      newlines: 0,
+      lastByte: 10,
+      headParts: [],
+      headLength: 0,
+      content: this.keep(this.results.length) ? [] : undefined,
+    };
     this.state = this.remaining === 0 ? "terminator" : "body";
   }
 
   private body(slice: Buffer): void {
     const cur = this.current!;
+    cur.content?.push(Buffer.from(slice));
     const sniffRoom = BINARY_SNIFF_BYTES - cur.headLength;
     if (sniffRoom > 0) {
       const head = slice.subarray(0, Math.min(sniffRoom, slice.length));
@@ -207,6 +242,7 @@ export class BatchScanner {
       newlines: cur.newlines,
       endsWithNewline: cur.bytes === 0 || cur.lastByte === 10,
       head: Buffer.concat(cur.headParts),
+      content: cur.content ? Buffer.concat(cur.content) : undefined,
     });
     this.current = undefined;
   }
