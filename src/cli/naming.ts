@@ -165,36 +165,46 @@ export function findNearMisses(text: string, terms: readonly string[]): string[]
     const target = normalize(term);
     if (target.length < 4) continue;
     const allowed = target.length >= 8 ? 2 : 1;
+    // Pigeonhole prefilter: a window within `allowed` edits of the term keeps at least one of
+    // the term's allowed+1 pieces intact, so only terms sharing such a piece need the full check.
+    if (!piecesOf(target, allowed + 1).some((piece) => shown.includes(piece))) continue;
     if (withinWindow(shown, target, allowed)) matched.push(term);
   }
   return matched;
+}
+
+/** Splits `text` into `count` contiguous pieces of near-equal length. */
+function piecesOf(text: string, count: number): string[] {
+  const pieces: string[] = [];
+  for (let i = 0; i < count; i++) {
+    pieces.push(text.slice(Math.floor((i * text.length) / count), Math.floor(((i + 1) * text.length) / count)));
+  }
+  return pieces;
 }
 
 function normalize(text: string): string {
   return text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 }
 
+/**
+ * True when some substring of `haystack` is within `allowed` edits of `needle`.
+ * Sellers' algorithm: one dynamic-programming pass, where the first row is free,
+ * so a match may start anywhere in the haystack.
+ */
 function withinWindow(haystack: string, needle: string, allowed: number): boolean {
-  for (let length = Math.max(1, needle.length - allowed); length <= needle.length + allowed; length++) {
-    for (let start = 0; start + length <= haystack.length; start++) {
-      if (editDistance(haystack.slice(start, start + length), needle) <= allowed) return true;
+  const m = needle.length;
+  let previous = Array.from({ length: m + 1 }, (_, i) => i);
+  if (previous[m]! <= allowed) return true;
+  for (let j = 1; j <= haystack.length; j++) {
+    const current = [0];
+    for (let i = 1; i <= m; i++) {
+      const cost = needle[i - 1] === haystack[j - 1] ? 0 : 1;
+      current.push(Math.min(previous[i]! + 1, current[i - 1]! + 1, previous[i - 1]! + cost));
     }
-  }
-  return false;
-}
-
-/** Levenshtein distance, two rows at a time. */
-function editDistance(a: string, b: string): number {
-  let previous = Array.from({ length: b.length + 1 }, (_, j) => j);
-  for (let i = 1; i <= a.length; i++) {
-    const current = [i];
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      current.push(Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + cost));
-    }
+    if (current[m]! <= allowed) return true;
     previous = current;
   }
-  return previous[b.length]!;
+  return false;
 }
 
 /** Folder and file names of a path, with the extension dropped from the file name. */
