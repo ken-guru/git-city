@@ -11,7 +11,7 @@ import {
   type EventKind,
 } from "../shared/format.js";
 import type { CommitRecord } from "./history.js";
-import { ancestors, wholeDirectoryMoves } from "./layout.js";
+import { ancestors, type PathMove, splitPath, wholeDirectoryMoves } from "./layout.js";
 import { buildingTypeOf, categoryOf, floorsFor, languageOf, seedFor, TUNING } from "./model.js";
 
 /**
@@ -125,7 +125,7 @@ export class TimelineBuilder {
   }
 
   /** A file keeps its id under its new path. Renames are not changes: they do not count towards scaffolding. */
-  private rename(seq: number, move: { from: string; to: string }, wholeDirectory: boolean) {
+  private rename(seq: number, move: PathMove, wholeDirectory: boolean) {
     const file = this.standing.get(move.from)!;
     this.standing.delete(move.from);
     const previous = this.standing.get(move.to);
@@ -133,7 +133,7 @@ export class TimelineBuilder {
     this.standing.set(move.to, file);
 
     // A Relocation keeps the name it was born with; any other rename shows its new path.
-    const relocated = !wholeDirectory && directoryOf(move.from) !== directoryOf(move.to);
+    const relocated = !wholeDirectory && splitPath(move.from).dir !== splitPath(move.to).dir;
     if (!relocated) this.filePaths[file] = move.to;
 
     const type = BUILDING_TYPES.indexOf(buildingTypeOf(categoryOf(move.to)));
@@ -192,8 +192,3 @@ export class TimelineBuilder {
 }
 
 export type TimelineData = ReturnType<TimelineBuilder["result"]>;
-
-function directoryOf(path: string): string {
-  const at = path.lastIndexOf("/");
-  return at === -1 ? "" : path.slice(0, at);
-}

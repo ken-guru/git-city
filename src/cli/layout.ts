@@ -9,7 +9,7 @@ export interface LayoutChange {
   added: { file: number; path: string }[];
   deleted: { file: number; path: string }[];
   /** Files that kept their identity under a new path (a rename). Same file id; a new directory means a Relocation. */
-  moved?: { file: number; from: string; to: string }[];
+  moved?: (PathMove & { file: number })[];
 }
 
 export interface LayoutOptions {
@@ -133,11 +133,14 @@ export interface LotRecord {
   slots: number;
 }
 
-/** A directory whose files moved together, as the layout relabels it: `from` is now `to`. */
-export interface DirectoryMove {
+/** A path that moved: the same file, from one path to another. */
+export interface PathMove {
   from: string;
   to: string;
 }
+
+/** A directory whose files moved together, as the layout relabels it: `from` is now `to`. */
+export type DirectoryMove = PathMove;
 
 export interface LayoutResult {
   districts: DistrictRecord[];
@@ -543,7 +546,7 @@ export function footprintSlots(lot: LotRecord, widthStep: number): number {
  * `standingUnder` counts the files standing under a directory before the commit.
  */
 export function wholeDirectoryMoves(
-  moves: readonly { from: string; to: string }[],
+  moves: readonly PathMove[],
   standingUnder: (dir: string) => number,
 ): { directories: DirectoryMove[]; covered: Set<number> } {
   const directories: DirectoryMove[] = [];
@@ -558,7 +561,7 @@ export function wholeDirectoryMoves(
       if (target !== undefined) counts.set(target, (counts.get(target) ?? 0) + 1);
     });
     for (const [target, count] of counts) {
-      if (count === 0 || count < WHOLE_DIRECTORY_SHARE * standingUnder(dir)) continue;
+      if (count < WHOLE_DIRECTORY_SHARE * standingUnder(dir)) continue;
       directories.push({ from: dir, to: target });
       moves.forEach((move, i) => {
         if (targetDirectory(dir, move) === target) covered.add(i);
@@ -570,7 +573,7 @@ export function wholeDirectoryMoves(
 }
 
 /** Where a move takes files under `dir` (keeping their path below it), or undefined when it does not. */
-function targetDirectory(dir: string, move: { from: string; to: string }): string | undefined {
+function targetDirectory(dir: string, move: PathMove): string | undefined {
   if (!within(move.from, dir) || move.from === dir) return undefined;
   const rest = move.from.slice(dir.length + 1);
   if (!move.to.endsWith("/" + rest)) return undefined;
@@ -633,7 +636,7 @@ function lessCell(col: number, row: number, other: Cell): boolean {
   return row < other.row || (row === other.row && col < other.col);
 }
 
-function splitPath(path: string): { dir: string; name: string } {
+export function splitPath(path: string): { dir: string; name: string } {
   const at = path.lastIndexOf("/");
   return at === -1 ? { dir: "", name: path } : { dir: path.slice(0, at), name: path.slice(at + 1) };
 }
