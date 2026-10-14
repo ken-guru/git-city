@@ -149,4 +149,49 @@ describe("timeline builder: identity across history", () => {
     expect(result.fileCount).toBe(2);
     expect(eventsOf(result).filter(([, , kind]) => kind === EVENT_RELOCATE || kind === EVENT_DELETE)).toEqual([]);
   });
+
+  it("renovates each Building when a whole-directory move changes its Building type, without relocating it", () => {
+    // Category depends on the directory: src/ is source code (office), docs/ is documentation (library).
+    const result = run([
+      commit(1, { added: ["src/auth/a.ts", "src/auth/b.ts"] }),
+      commit(2, {
+        deleted: ["src/auth/a.ts", "src/auth/b.ts"],
+        added: ["docs/auth/a.ts", "docs/auth/b.ts"],
+        renamed: [
+          { from: "src/auth/a.ts", to: "docs/auth/a.ts" },
+          { from: "src/auth/b.ts", to: "docs/auth/b.ts" },
+        ],
+      }),
+    ]);
+
+    expect(eventsOf(result).slice(2)).toEqual([
+      [1, 0, EVENT_RENOVATE, 2],
+      [1, 1, EVENT_RENOVATE, 2],
+    ]);
+  });
+});
+
+describe("timeline builder: layout changes", () => {
+  const rename = (from: string, to: string) => ({ deleted: [from], added: [to], renamed: [{ from, to }] });
+
+  it("returns each commit's additions, deletions and renames with their file ids, one change per commit", () => {
+    const builder = new TimelineBuilder();
+
+    const first = builder.add(commit(1, { added: ["a.ts", "b.ts"] }));
+    const second = builder.add(commit(2, rename("a.ts", "c.ts")));
+    const third = builder.add(commit(3, { deleted: ["b.ts"] }));
+
+    expect(first).toEqual({ added: [{ file: 0, path: "a.ts" }, { file: 1, path: "b.ts" }], deleted: [], moved: [] });
+    expect(second).toEqual({ added: [], deleted: [], moved: [{ file: 0, from: "a.ts", to: "c.ts" }] });
+    expect(third).toEqual({ added: [], deleted: [{ file: 1, path: "b.ts" }], moved: [] });
+  });
+
+  it("finds the file standing at a path, and none once it is gone", () => {
+    const builder = new TimelineBuilder();
+    builder.add(commit(1, { added: ["a.ts"] }));
+    builder.add(commit(2, rename("a.ts", "c.ts")));
+
+    expect(builder.fileAt("c.ts")).toBe(0);
+    expect(builder.fileAt("a.ts")).toBeUndefined();
+  });
 });

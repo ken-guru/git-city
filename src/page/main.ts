@@ -105,8 +105,8 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>, places
   ground.rotation.x = -Math.PI / 2;
   scene.add(ground);
   addCountryside(scene, {
-    // The world file has no City seed yet, so the first file's seed stands in: stable for the repo's life.
-    seed: world.seed[0] ?? 0,
+    // The City seed the CLI wrote into the world file: the same seed the layout used.
+    seed: world.citySeed,
     theme: colours === PALETTE.dark ? "dark" : "light",
     keepOut: extent / 2 + TUNING.groundMargin,
   });

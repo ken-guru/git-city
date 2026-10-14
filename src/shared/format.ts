@@ -4,7 +4,7 @@
  * All integers are little-endian; arrays are stored column by column.
  */
 
-export const FORMAT_VERSION = 2;
+export const FORMAT_VERSION = 3;
 
 const WORLD_MAGIC = 0x57435447; // "GTCW"
 const CHUNK_MAGIC = 0x43435447; // "GTCC"
@@ -58,7 +58,22 @@ export interface World {
   /** Per file: its seed. */
   seed: Uint32Array;
   chunks: ChunkRef[];
+  /** The City seed. The Countryside and the layout are both drawn from it. */
+  citySeed: number;
+  /** Per file: its width step (0 narrowest, 3 widest) at the end of the run. */
+  widthStep: Uint8Array;
+  /** Villages, in founding order. Position is in Block widths; the angle turns the village's Block grid. */
+  villages: { x: Float32Array; z: Float32Array; angle: Float32Array };
+  /** Blocks, in claim order. Position is in Block widths; `claimed` is the commit that claimed each Block. */
+  blocks: { village: Uint32Array; x: Float32Array; z: Float32Array; claimed: Uint32Array; brick: Uint8Array };
+  /** Lots, in birth order. Each `slots` run is a contiguous run of unit slots within its Block. */
+  lots: { file: Uint32Array; block: Uint32Array; slot: Uint8Array; slots: Uint8Array };
+  /** The Road network between villages, one entry per Road. */
+  roads: { a: Uint32Array; b: Uint32Array; forward: Uint8Array; backward: Uint8Array; track: Uint8Array };
 }
+
+/** The layout part of the world file: everything the CLI decides about where things stand. */
+export type WorldLayout = Pick<World, "citySeed" | "widthStep" | "villages" | "blocks" | "lots" | "roads">;
 
 /** A snapshot at the chunk's first commit plus the events inside the chunk. */
 export interface Chunk {
@@ -89,12 +104,22 @@ export function chunkName(index: number, hash: Uint8Array): string {
 
 const FILE_ATTRIBUTE_BYTES = 1 + 1 + 4;
 
+const VILLAGE_BYTES = 3 * 4;
+const BLOCK_BYTES = 4 + 4 + 4 + 4 + 1;
+const LOT_BYTES = 4 + 4 + 1 + 1;
+const ROAD_BYTES = 4 + 4 + 1 + 1 + 1;
+
 export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { chunks: { firstCommit: number; hash: Uint8Array }[] }): Uint8Array {
   const n = world.fileCount;
-  if (world.buildingType.length !== n || world.language.length !== n || world.seed.length !== n) {
+  if (world.buildingType.length !== n || world.language.length !== n || world.seed.length !== n || world.widthStep.length !== n) {
     throw new Error("per-file columns differ in length from fileCount");
   }
-  const w = new Writer(20 + world.commitDays.length * 4 + n * FILE_ATTRIBUTE_BYTES + world.chunks.length * (4 + CHUNK_HASH_BYTES));
+  const { villages, blocks, lots, roads } = world;
+  const size =
+    20 + world.commitDays.length * 4 + n * FILE_ATTRIBUTE_BYTES + world.chunks.length * (4 + CHUNK_HASH_BYTES) +
+    4 + n + 4 + villages.x.length * VILLAGE_BYTES + 4 + blocks.x.length * BLOCK_BYTES +
+    4 + lots.file.length * LOT_BYTES + 4 + roads.a.length * ROAD_BYTES;
+  const w = new Writer(size);
   w.u32(WORLD_MAGIC);
   w.u32(FORMAT_VERSION);
   w.u32(world.commitDays.length);
@@ -108,6 +133,37 @@ export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { c
     if (chunk.hash.length !== CHUNK_HASH_BYTES) throw new Error(`chunk hash must be ${CHUNK_HASH_BYTES} bytes`);
     w.u32(chunk.firstCommit);
     w.bytes(chunk.hash);
+  }
+  w.u32(world.citySeed);
+  w.bytes(world.widthStep);
+  w.u32(villages.x.length);
+  for (let i = 0; i < villages.x.length; i++) {
+    w.f32(villages.x[i]!);
+    w.f32(villages.z[i]!);
+    w.f32(villages.angle[i]!);
+  }
+  w.u32(blocks.x.length);
+  for (let i = 0; i < blocks.x.length; i++) {
+    w.u32(blocks.village[i]!);
+    w.f32(blocks.x[i]!);
+    w.f32(blocks.z[i]!);
+    w.u32(blocks.claimed[i]!);
+    w.bytes(blocks.brick.subarray(i, i + 1));
+  }
+  w.u32(lots.file.length);
+  for (let i = 0; i < lots.file.length; i++) {
+    w.u32(lots.file[i]!);
+    w.u32(lots.block[i]!);
+    w.bytes(lots.slot.subarray(i, i + 1));
+    w.bytes(lots.slots.subarray(i, i + 1));
+  }
+  w.u32(roads.a.length);
+  for (let i = 0; i < roads.a.length; i++) {
+    w.u32(roads.a[i]!);
+    w.u32(roads.b[i]!);
+    w.bytes(roads.forward.subarray(i, i + 1));
+    w.bytes(roads.backward.subarray(i, i + 1));
+    w.bytes(roads.track.subarray(i, i + 1));
   }
   return w.done();
 }
@@ -127,7 +183,70 @@ export function decodeWorld(bytes: Uint8Array): World {
     const firstCommit = r.u32();
     chunks.push({ firstCommit, name: chunkName(i, r.bytes(CHUNK_HASH_BYTES)) });
   }
-  return { formatVersion: r.formatVersion, commitDays, fileCount, buildingType, language, seed: Uint32Array.from(seed), chunks };
+  const citySeed = r.u32();
+  const widthStep = r.bytes(fileCount);
+
+  const villageCount = r.u32();
+  const villages = { x: new Float32Array(villageCount), z: new Float32Array(villageCount), angle: new Float32Array(villageCount) };
+  for (let i = 0; i < villageCount; i++) {
+    villages.x[i] = r.f32();
+    villages.z[i] = r.f32();
+    villages.angle[i] = r.f32();
+  }
+  const blockCount = r.u32();
+  const blocks = {
+    village: new Uint32Array(blockCount),
+    x: new Float32Array(blockCount),
+    z: new Float32Array(blockCount),
+    claimed: new Uint32Array(blockCount),
+    brick: new Uint8Array(blockCount),
+  };
+  for (let i = 0; i < blockCount; i++) {
+    blocks.village[i] = r.u32();
+    blocks.x[i] = r.f32();
+    blocks.z[i] = r.f32();
+    blocks.claimed[i] = r.u32();
+    blocks.brick[i] = r.bytes(1)[0]!;
+  }
+  const lotCount = r.u32();
+  const lots = { file: new Uint32Array(lotCount), block: new Uint32Array(lotCount), slot: new Uint8Array(lotCount), slots: new Uint8Array(lotCount) };
+  for (let i = 0; i < lotCount; i++) {
+    lots.file[i] = r.u32();
+    lots.block[i] = r.u32();
+    lots.slot[i] = r.bytes(1)[0]!;
+    lots.slots[i] = r.bytes(1)[0]!;
+  }
+  const roadCount = r.u32();
+  const roads = {
+    a: new Uint32Array(roadCount),
+    b: new Uint32Array(roadCount),
+    forward: new Uint8Array(roadCount),
+    backward: new Uint8Array(roadCount),
+    track: new Uint8Array(roadCount),
+  };
+  for (let i = 0; i < roadCount; i++) {
+    roads.a[i] = r.u32();
+    roads.b[i] = r.u32();
+    roads.forward[i] = r.bytes(1)[0]!;
+    roads.backward[i] = r.bytes(1)[0]!;
+    roads.track[i] = r.bytes(1)[0]!;
+  }
+
+  return {
+    formatVersion: r.formatVersion,
+    commitDays,
+    fileCount,
+    buildingType,
+    language,
+    seed: Uint32Array.from(seed),
+    chunks,
+    citySeed,
+    widthStep,
+    villages,
+    blocks,
+    lots,
+    roads,
+  };
 }
 
 export function encodeChunk(chunk: Omit<Chunk, "formatVersion">): Uint8Array {
@@ -178,6 +297,10 @@ class Writer {
     this.view.setInt32(this.at, v, true);
     this.at += 4;
   }
+  f32(v: number) {
+    this.view.setFloat32(this.at, v, true);
+    this.at += 4;
+  }
   bytes(b: Uint8Array) {
     this.buf.set(b, this.at);
     this.at += b.length;
@@ -205,6 +328,11 @@ class Reader {
   }
   i32(): number {
     const v = this.view.getInt32(this.at, true);
+    this.at += 4;
+    return v;
+  }
+  f32(): number {
+    const v = this.view.getFloat32(this.at, true);
     this.at += 4;
     return v;
   }

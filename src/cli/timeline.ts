@@ -11,7 +11,7 @@ import {
   type EventKind,
 } from "../shared/format.js";
 import type { CommitRecord } from "./history.js";
-import { ancestors, type PathMove, splitPath, wholeDirectoryMoves } from "./layout.js";
+import { ancestors, type LayoutChange, type PathMove, splitPath, wholeDirectoryMoves } from "./layout.js";
 import { buildingTypeOf, categoryOf, floorsForPath, languageOf, seedFor, TUNING } from "./model.js";
 
 /**
@@ -47,10 +47,12 @@ export class TimelineBuilder {
   private readonly eventKind: EventKind[] = [];
   private readonly eventValue: number[] = [];
 
-  add(commit: CommitRecord): void {
+  /** Applies one commit and returns what it changed, for the layout. Every commit gives a change, even an empty one. */
+  add(commit: CommitRecord): TimelineChange {
     const seq = this.days.length;
     const day = commit.day;
     this.days.push(day);
+    const change: TimelineChange = { added: [], deleted: [], moved: [] };
 
     // A rename whose old path does not stand is not a rename here: its new path is simply added.
     const renames = (commit.renamed ?? []).filter((r) => this.standing.has(r.from));
@@ -62,16 +64,16 @@ export class TimelineBuilder {
       if (renamedFrom.has(path)) continue;
       const file = this.standing.get(path);
       if (file === undefined) continue;
-      this.retire(seq, path, file);
+      this.retire(seq, path, file, change);
     }
 
-    renames.forEach((move, i) => this.rename(seq, move, whole.covered.has(i)));
+    renames.forEach((move, i) => this.rename(seq, move, whole.covered.has(i), change));
 
     const touched = new Set<number>();
     for (const path of commit.added) {
       if (renamedTo.has(path)) continue;
       const previous = this.standing.get(path);
-      if (previous !== undefined) this.retire(seq, path, previous);
+      if (previous !== undefined) this.retire(seq, path, previous, change);
 
       const file = this.nextFile++;
       this.filePaths.push(path);
@@ -88,6 +90,7 @@ export class TimelineBuilder {
       this.currentLanguage.push(language);
       this.seed.push(seedFor(file));
       this.event(seq, file, EVENT_ADD, floors);
+      change.added.push({ file, path });
       touched.add(file);
     }
 
@@ -106,6 +109,12 @@ export class TimelineBuilder {
 
     for (const file of touched) this.changeDays[file]!.push(day);
     for (const file of [...touched, ...this.scaffolded]) this.updateScaffolding(seq, file, day);
+    return change;
+  }
+
+  /** The file id standing at `path` now, or undefined when nothing stands there. */
+  fileAt(path: string): number | undefined {
+    return this.standing.get(path);
   }
 
   /** Everything the builder holds, as JSON-safe values, so a run can resume from it exactly. */
@@ -170,12 +179,13 @@ export class TimelineBuilder {
   }
 
   /** A file keeps its id under its new path. Renames are not changes: they do not count towards scaffolding. */
-  private rename(seq: number, move: PathMove, wholeDirectory: boolean) {
+  private rename(seq: number, move: PathMove, wholeDirectory: boolean, change: TimelineChange) {
     const file = this.standing.get(move.from)!;
     this.standing.delete(move.from);
     const previous = this.standing.get(move.to);
-    if (previous !== undefined) this.retire(seq, move.to, previous);
+    if (previous !== undefined) this.retire(seq, move.to, previous, change);
     this.standing.set(move.to, file);
+    change.moved.push({ file, from: move.from, to: move.to });
 
     // A Relocation keeps the name it was born with; any other rename shows its new path.
     const relocated = !wholeDirectory && splitPath(move.from).dir !== splitPath(move.to).dir;
@@ -204,11 +214,12 @@ export class TimelineBuilder {
     return (dir) => counts.get(dir) ?? 0;
   }
 
-  private retire(seq: number, path: string, file: number) {
+  private retire(seq: number, path: string, file: number, change: TimelineChange) {
     this.standing.delete(path);
     this.alive[file] = false;
     this.scaffolded.delete(file);
     this.event(seq, file, EVENT_DELETE, 0);
+    change.deleted.push({ file, path });
   }
 
   /** Scaffolding goes up at `scaffoldChanges` changes within the window, and comes down when they age out. */
@@ -237,6 +248,9 @@ export class TimelineBuilder {
 }
 
 export type TimelineData = ReturnType<TimelineBuilder["result"]>;
+
+/** What one commit changed in the Timeline's files, for the layout. */
+export type TimelineChange = Required<Omit<LayoutChange, "widths">>;
 
 /** A JSON-safe copy of a TimelineBuilder, written as a cache checkpoint. */
 export interface TimelineSnapshot {

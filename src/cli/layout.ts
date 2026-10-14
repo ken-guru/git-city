@@ -13,6 +13,8 @@ export interface LayoutChange {
   deleted: { file: number; path: string }[];
   /** Files that kept their identity under a new path (a rename). Same file id; a new directory means a Relocation. */
   moved?: (PathMove & { file: number })[];
+  /** Files whose width step (fan-in) is now `step`. Applied before this commit's Lots are placed. */
+  widths?: { file: number; step: number }[];
 }
 
 export interface LayoutOptions {
@@ -34,8 +36,8 @@ export const COHESION_SLACK = 8;
 /** A Block is 2 rows of 4 unit slots. */
 export const BLOCK_ROWS = 2;
 export const BLOCK_SLOTS_PER_ROW = 4;
-/** A Lot is sized for its width step plus this many unit slots of headroom. */
-export const LOT_HEADROOM_SLOTS = 2;
+/** The widest width step (SPEC §5: fan-in 30 and up). */
+export const MAX_WIDTH_STEP = 3;
 /** The share of a directory's files that must move to one new directory in one commit for it to count as a whole-directory move. */
 export const WHOLE_DIRECTORY_SHARE = 0.8;
 /** A District's Role switches only when another Role's score exceeds the current one by this ratio. */
@@ -50,9 +52,6 @@ interface Cell {
  * Paving: medium-low saturation and a fixed lightness, with seeded offsets of 15 and 6 points.
  * All values are fractions of the full 0 to 1 range (absolute points, not relative percentages).
  * Lightness is fixed per page theme (light and dark pages each get their own base value).
- * Known limits, for the page and later tickets: the seeded village angle is recorded but the Block grid
- * is not rotated by it; a Lot is sized from its Building's width step at birth, so a later wider step is
- * not re-sized.
  */
 const PAVING_SATURATION = 0.42;
 const PAVING_LIGHTNESS = { light: 0.55, dark: 0.34 } as const;
@@ -108,6 +107,8 @@ const MANIFEST_NAMES = new Set([
 export interface DistrictRecord {
   /** The Module's directory, "." for files directly in the root. */
   key: string;
+  /** Birth order of the District. A District that merges back and returns is a new record with a new index. */
+  index: number;
   /** The village this District is drawn in. */
   village: number;
   /** Neighbourhood names: the District's own root and each first-level directory under it. */
@@ -134,7 +135,15 @@ export interface BlockRecord {
   row: number;
   /** Horizontal offset in Block widths, so that alternate rows sit like bricks. */
   brickOffset: number;
+  /** The commit (its sequence number) that claimed this Block. */
+  claimedAt: number;
+  /** World position in Block widths: the village centre plus the Block's grid offset, turned by the village angle. */
+  x: number;
+  z: number;
 }
+
+/** A Block as the layout keeps it: its world position is worked out when the result is read. */
+type StoredBlock = Omit<BlockRecord, "x" | "z">;
 
 /**
  * A Lot a Building stood on. A Building that is relocated gets a new record under the same file id;
@@ -165,28 +174,6 @@ export interface LayoutResult {
   lots: LotRecord[];
 }
 
-/** A District as the snapshot holds it: its sets and maps as entry lists. */
-type SnapshotDistrict = Omit<DistrictState, "neighbourhoods" | "scores"> & { neighbourhoods: string[]; scores: [Role, number][] };
-
-/** The layout's whole state at a point in history, JSON-safe (SPEC §3, layer 3: persisted layout and chosen Roles). */
-export interface LayoutSnapshot {
-  /** The seed the layout was made with. A snapshot only resumes under the same seed. */
-  seed: number;
-  manifestDirs: [string, number][];
-  manifestPaths: string[];
-  standingDirs: [string, number][];
-  inPlace: string[];
-  districts: SnapshotDistrict[];
-  vanishedManifests: string[];
-  nextDistrictIndex: number;
-  villages: VillageRecord[];
-  blocks: BlockRecord[];
-  lots: LotRecord[];
-  blockAt: [string, number][];
-  blockSlots: boolean[][];
-  ownedBlocks: [string, number[]][];
-}
-
 interface DistrictState {
   key: string;
   /** Birth order of the District: never reused, so a District that merged back and returned is a new one. */
@@ -197,6 +184,28 @@ interface DistrictState {
   role: Role | null;
   /** Signed lightness offset of the paving. A District split off in place takes the opposite side from its parent's. */
   lightnessOffset: number;
+}
+
+/** A JSON-safe copy of a LayoutBuilder, for the cache's layout layer. */
+export interface LayoutSnapshot {
+  seed: number;
+  applied: number;
+  manifestDirs: [string, number][];
+  manifestPaths: string[];
+  standingDirs: [string, number][];
+  inPlace: string[];
+  districts: [string, { key: string; index: number; village: number; neighbourhoods: string[]; scores: [Role, number][]; role: Role | null; lightnessOffset: number }][];
+  vanishedManifests: string[];
+  nextDistrictIndex: number;
+  villages: VillageRecord[];
+  blocks: StoredBlock[];
+  lots: LotRecord[];
+  blockAt: [string, number][];
+  blockSlots: boolean[][];
+  ownedBlocks: [string, number[]][];
+  steps: [number, number][];
+  widest: [number, number][];
+  currentLot: [number, number][];
 }
 
 /** Whether a directory is `dir` itself or lies below it. */
@@ -220,12 +229,22 @@ export class LayoutBuilder {
   private readonly vanishedManifests = new Set<string>();
   private nextDistrictIndex = 0;
   private readonly villages: VillageRecord[] = [];
-  private readonly blocks: BlockRecord[] = [];
+  private readonly blocks: StoredBlock[] = [];
   private readonly lots: LotRecord[] = [];
   private readonly blockAt = new Map<string, number>();
   private readonly blockSlots: boolean[][] = [];
   /** Blocks each Neighbourhood owns, keyed by `ownerKey`. */
   private readonly ownedBlocks = new Map<string, number[]>();
+  /** Changes applied so far: the sequence number of the next one. */
+  private applied = 0;
+  /** The sequence number of the change being applied. */
+  private sequence = 0;
+  /** Per file: the width step it has now. */
+  private readonly steps = new Map<number, number>();
+  /** Per file: the widest width step it has had, which its Lot is sized for. */
+  private readonly widest = new Map<number, number>();
+  /** Per file: the index in `lots` of the Lot it stands on now. */
+  private readonly currentLot = new Map<number, number>();
   private readonly categoryOf: (path: string) => string;
   private readonly widthStepOf: (file: number) => number;
   private readonly terrain: Pick<Countryside, "levelAt">;
@@ -236,56 +255,8 @@ export class LayoutBuilder {
     this.terrain = options.terrain ?? countryside(options.seed);
   }
 
-  /**
-   * The whole state, as JSON-safe values, so a run can resume from it. It holds every District's chosen Role and
-   * the Role scores behind it, so the Role hysteresis carries across runs.
-   */
-  snapshot(): LayoutSnapshot {
-    return {
-      seed: this.options.seed,
-      manifestDirs: [...this.manifestDirs],
-      manifestPaths: [...this.manifestPaths],
-      standingDirs: [...this.standingDirs],
-      inPlace: [...this.inPlace],
-      districts: [...this.districts.values()].map((d) => ({
-        ...d,
-        neighbourhoods: [...d.neighbourhoods],
-        scores: [...d.scores],
-      })),
-      vanishedManifests: [...this.vanishedManifests],
-      nextDistrictIndex: this.nextDistrictIndex,
-      villages: structuredClone(this.villages),
-      blocks: structuredClone(this.blocks),
-      lots: structuredClone(this.lots),
-      blockAt: [...this.blockAt],
-      blockSlots: structuredClone(this.blockSlots),
-      ownedBlocks: [...this.ownedBlocks].map(([owner, ids]) => [owner, [...ids]]),
-    };
-  }
-
-  /** A builder holding `snapshot`, or undefined when the snapshot was made with another seed and cannot be reused. */
-  static restore(options: LayoutOptions, snapshot: LayoutSnapshot): LayoutBuilder | undefined {
-    if (snapshot.seed !== options.seed) return undefined;
-    const builder = new LayoutBuilder(options);
-    for (const [dir, count] of snapshot.manifestDirs) builder.manifestDirs.set(dir, count);
-    for (const path of snapshot.manifestPaths) builder.manifestPaths.add(path);
-    for (const [dir, count] of snapshot.standingDirs) builder.standingDirs.set(dir, count);
-    for (const dir of snapshot.inPlace) builder.inPlace.add(dir);
-    for (const d of snapshot.districts) {
-      builder.districts.set(d.key, { ...d, neighbourhoods: new Set(d.neighbourhoods), scores: new Map(d.scores) });
-    }
-    for (const dir of snapshot.vanishedManifests) builder.vanishedManifests.add(dir);
-    builder.nextDistrictIndex = snapshot.nextDistrictIndex;
-    builder.villages.push(...structuredClone(snapshot.villages));
-    builder.blocks.push(...structuredClone(snapshot.blocks));
-    builder.lots.push(...structuredClone(snapshot.lots));
-    for (const [cell, id] of snapshot.blockAt) builder.blockAt.set(cell, id);
-    builder.blockSlots.push(...structuredClone(snapshot.blockSlots));
-    for (const [owner, ids] of snapshot.ownedBlocks) builder.ownedBlocks.set(owner, [...ids]);
-    return builder;
-  }
-
   apply(change: LayoutChange): void {
+    this.sequence = this.applied++;
     const moved = change.moved ?? [];
     const whole = wholeDirectoryMoves(moved, (dir) => this.standingDirs.get(dir) ?? 0);
     for (const { path } of change.deleted) this.unstand(path);
@@ -297,6 +268,7 @@ export class LayoutBuilder {
     this.vanishedManifests.clear();
 
     for (const directory of whole.directories) this.relabel(directory);
+    for (const { file, step } of change.widths ?? []) this.widen(file, step);
     for (const { path } of change.added) this.stand(path);
     for (const { to } of moved) this.stand(to);
     for (const { file, path } of change.added) this.build(file, path);
@@ -312,6 +284,7 @@ export class LayoutBuilder {
       .sort((a, b) => a.index - b.index)
       .map((d) => ({
         key: d.key,
+        index: d.index,
         village: d.village,
         neighbourhoods: [...d.neighbourhoods],
         role: d.role,
@@ -320,9 +293,122 @@ export class LayoutBuilder {
     return {
       districts,
       villages: this.villages.map((v) => ({ ...v })),
-      blocks: this.blocks.map((b) => ({ ...b })),
+      blocks: this.blocks.map((b) => ({ ...b, ...this.worldPosition(b) })),
       lots: this.lots.map((l) => ({ ...l })),
     };
+  }
+
+  /** A file's width step now (0 when it has none). */
+  stepOf(file: number): number {
+    return this.steps.get(file) ?? 0;
+  }
+
+  /** The District a path belongs to now, by the same rule the layout uses when it places a Building. */
+  districtForPath(path: string): string {
+    const dir = splitPath(path).dir;
+    return this.districtOf(dir === "" ? [] : dir.split("/"));
+  }
+
+  /** The layout's state as JSON-safe values, for the cache's layout layer. */
+  snapshot(): LayoutSnapshot {
+    return {
+      seed: this.options.seed,
+      applied: this.applied,
+      manifestDirs: [...this.manifestDirs],
+      manifestPaths: [...this.manifestPaths],
+      standingDirs: [...this.standingDirs],
+      inPlace: [...this.inPlace],
+      districts: [...this.districts].map(([key, d]) => [
+        key,
+        {
+          key: d.key,
+          index: d.index,
+          village: d.village,
+          neighbourhoods: [...d.neighbourhoods],
+          scores: [...d.scores],
+          role: d.role,
+          lightnessOffset: d.lightnessOffset,
+        },
+      ]),
+      vanishedManifests: [...this.vanishedManifests],
+      nextDistrictIndex: this.nextDistrictIndex,
+      villages: this.villages.map((v) => ({ ...v })),
+      blocks: this.blocks.map((b) => ({ ...b })),
+      lots: this.lots.map((l) => ({ ...l })),
+      blockAt: [...this.blockAt],
+      blockSlots: this.blockSlots.map((row) => [...row]),
+      ownedBlocks: [...this.ownedBlocks].map(([owner, ids]) => [owner, [...ids]]),
+      steps: [...this.steps],
+      widest: [...this.widest],
+      currentLot: [...this.currentLot],
+    };
+  }
+
+  /**
+   * Rebuilds a builder from a snapshot, so that it lays out the next commits exactly as the run that wrote it would.
+   * Returns undefined when the snapshot was laid out from another City seed, since its Lots would not be this City's.
+   */
+  static restore(options: LayoutOptions, s: LayoutSnapshot): LayoutBuilder | undefined {
+    if (s.seed !== options.seed) return undefined;
+    const b = new LayoutBuilder(options);
+    b.applied = s.applied;
+    for (const [dir, count] of s.manifestDirs) b.manifestDirs.set(dir, count);
+    for (const path of s.manifestPaths) b.manifestPaths.add(path);
+    for (const [dir, count] of s.standingDirs) b.standingDirs.set(dir, count);
+    for (const dir of s.inPlace) b.inPlace.add(dir);
+    for (const [key, d] of s.districts) {
+      b.districts.set(key, { ...d, neighbourhoods: new Set(d.neighbourhoods), scores: new Map(d.scores) });
+    }
+    for (const dir of s.vanishedManifests) b.vanishedManifests.add(dir);
+    b.nextDistrictIndex = s.nextDistrictIndex;
+    b.villages.push(...s.villages.map((v) => ({ ...v })));
+    b.blocks.push(...s.blocks.map((blk) => ({ ...blk })));
+    b.lots.push(...s.lots.map((l) => ({ ...l })));
+    for (const [key, id] of s.blockAt) b.blockAt.set(key, id);
+    for (const row of s.blockSlots) b.blockSlots.push([...row]);
+    for (const [owner, ids] of s.ownedBlocks) b.ownedBlocks.set(owner, [...ids]);
+    for (const [file, step] of s.steps) b.steps.set(file, step);
+    for (const [file, step] of s.widest) b.widest.set(file, step);
+    for (const [file, lot] of s.currentLot) b.currentLot.set(file, lot);
+    return b;
+  }
+
+  /** A Block's world position: the village centre plus its grid offset from the anchor, turned by the village angle. */
+  private worldPosition(block: StoredBlock): { x: number; z: number } {
+    const village = this.villages[block.village]!;
+    const dc = block.col - village.col;
+    const dr = block.row - village.row;
+    const cos = Math.cos(village.angle);
+    const sin = Math.sin(village.angle);
+    return { x: village.col + cos * dc - sin * dr, z: village.row + sin * dc + cos * dr };
+  }
+
+  /**
+   * A file's width step changed. Its Lot grows in place to the widest step's size when the slots beside it are free;
+   * otherwise the Lot stays and the footprint is clamped to it (see footprintSlots).
+   */
+  private widen(file: number, step: number): void {
+    if ((this.steps.get(file) ?? 0) === step) return;
+    this.steps.set(file, step);
+    const widest = Math.max(this.widest.get(file) ?? 0, step);
+    this.widest.set(file, widest);
+    const index = this.currentLot.get(file);
+    if (index === undefined) return;
+    const lot = this.lots[index]!;
+    const needed = slotsFor(widest);
+    if (needed <= lot.slots) return;
+    if (this.extendLot(lot, needed)) lot.slots = needed;
+  }
+
+  /** Whether the Lot can take `slots` slots within its Block row, using the free slots after it. Takes them if so. */
+  private extendLot(lot: LotRecord, slots: number): boolean {
+    const taken = this.blockSlots[lot.block]!;
+    const rowEnd = (Math.floor(lot.slot / BLOCK_SLOTS_PER_ROW) + 1) * BLOCK_SLOTS_PER_ROW;
+    const end = lot.slot + slots;
+    if (end > rowEnd) return false;
+    for (let s = lot.slot + lot.slots; s < end; s++) if (taken[s]) return false;
+    for (let s = lot.slot + lot.slots; s < end; s++) taken[s] = true;
+    return true;
   }
 
   private addManifest(path: string): void {
@@ -366,8 +452,12 @@ export class LayoutBuilder {
     district.neighbourhoods.add(neighbourhood);
     this.scoreRoles(district, path);
 
-    const slots = slotsFor(this.widthStepOf(file));
+    if (!this.steps.has(file)) this.steps.set(file, this.widthStepOf(file));
+    const step = this.steps.get(file)!;
+    this.widest.set(file, Math.max(this.widest.get(file) ?? 0, step));
+    const slots = slotsFor(this.widest.get(file)!);
     const at = this.allocate(ownerKey(key, neighbourhood), district.village, neighbourhood, slots);
+    this.currentLot.set(file, this.lots.length);
     this.lots.push({ file, block: at.block, slot: at.slot, slots });
   }
 
@@ -522,6 +612,7 @@ export class LayoutBuilder {
       col: spot.col,
       row: spot.row,
       brickOffset: Math.abs(spot.row) % 2 === 1 ? 0.5 : 0,
+      claimedAt: this.sequence,
     });
     this.blockAt.set(cellKey(spot.col, spot.row), id);
     this.blockSlots.push(Array.from({ length: BLOCK_ROWS * BLOCK_SLOTS_PER_ROW }, () => false));
@@ -650,9 +741,17 @@ const CATEGORY_ROLE: Record<string, Role | undefined> = {
   tests: "tests", docs: "docs", build: "build", config: "config", data: "data",
 };
 
-/** The Lot size, in unit slots, for a Building of a given width step: its step plus headroom, at most a Block row. */
-export function slotsFor(widthStep: number): number {
-  return Math.min(widthStep + LOT_HEADROOM_SLOTS, BLOCK_SLOTS_PER_ROW);
+/** A Building's footprint, in unit slots, at a width step: one slot more than its step, at most a Block row. */
+export function footprintFor(widthStep: number): number {
+  return Math.min(widthStep + 1, BLOCK_SLOTS_PER_ROW);
+}
+
+/**
+ * The Lot size, in unit slots, for a Building whose widest step is `widestStep` (SPEC §5): the footprint of one
+ * step wider, so there is one step of headroom. The widest step needs none.
+ */
+export function slotsFor(widestStep: number): number {
+  return footprintFor(Math.min(widestStep + 1, MAX_WIDTH_STEP));
 }
 
 /**
@@ -660,7 +759,7 @@ export function slotsFor(widthStep: number): number {
  * keeps the Lot's size: the footprint is clamped, and the Building only gets taller.
  */
 export function footprintSlots(lot: LotRecord, widthStep: number): number {
-  return Math.min(slotsFor(widthStep), lot.slots);
+  return Math.min(footprintFor(widthStep), lot.slots);
 }
 
 /**
