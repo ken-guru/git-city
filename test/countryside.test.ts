@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   countryside,
   DEFAULT_SETTINGS,
-  FIELD_STYLE,
   MOUNTAIN_MAX,
   RELIEF_MAX,
   RIVER_COUNT_RANGE,
@@ -83,7 +82,6 @@ describe("Style", () => {
     }
     expect(STYLE_A.light.field.lightness).toBeLessThan(0.55);
     expect(STYLE_A.dark.field.lightness).toBeLessThan(STYLE_A.light.field.lightness);
-    expect(FIELD_STYLE).toBe("A");
   });
 });
 

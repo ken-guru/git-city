@@ -1,4 +1,4 @@
-import { type Countryside, countryside } from "../shared/countryside.js";
+import { type Countryside, countryside, mix } from "../shared/countryside.js";
 
 /**
  * Layout: decides where every Building's Lot stands, as a fold over the Timeline in history order.
@@ -286,7 +286,7 @@ export class LayoutBuilder {
     let spot: Cell | undefined;
     for (let step = 0; step < RELAX_STEPS && !spot; step++) {
       spot = this.nearest(
-        (c, r) => !this.blockAt.has(cellKey(c, r)) && !this.anyBlockWithin(c, r, VILLAGE_SPACING - 1) && this.allowed(step, c, r),
+        (c, r) => !this.blockAt.has(cellKey(c, r)) && !this.anyBlockWithin(c, r, VILLAGE_SPACING - 1) && this.terrainAllows(step, c, r),
         step < RELAX_STEPS - 1 ? RELAX_SEARCH_RINGS : Infinity,
         0,
         0,
@@ -299,7 +299,7 @@ export class LayoutBuilder {
   }
 
   /** Whether a cell may take a Block at a relaxation step (see RELAX_STEPS). */
-  private allowed(step: number, col: number, row: number): boolean {
+  private terrainAllows(step: number, col: number, row: number): boolean {
     if (step >= RELAX_STEPS - 1) return true;
     const level = this.terrain.levelAt(col, row);
     return step === 0 ? level === "flat" : level !== "river";
@@ -355,22 +355,22 @@ export class LayoutBuilder {
     for (const buffered of [true, false]) {
       for (let step = 0; step < RELAX_STEPS; step++) {
         const last = step === RELAX_STEPS - 1;
-        const global = this.nearest(
+        const free = this.nearest(
           (c, r) =>
             !this.blockAt.has(cellKey(c, r)) &&
             (!buffered || !this.nextToOtherVillage(c, r, village)) &&
-            this.allowed(step, c, r),
+            this.terrainAllows(step, c, r),
           !last ? RELAX_SEARCH_RINGS : buffered ? BUFFER_SEARCH_RINGS : Infinity,
           anchor.col,
           anchor.row,
         );
-        if (!global) continue;
+        if (!free) continue;
         const cohesive = this.cohesiveSpot(owner, anchor, village, step);
-        const globalDist = Math.hypot(global.col - anchor.col, global.row - anchor.row);
-        return cohesive && cohesive.dist <= globalDist + COHESION_SLACK ? cohesive.cell : global;
+        const globalDist = Math.hypot(free.col - anchor.col, free.row - anchor.row);
+        return cohesive && cohesive.dist <= globalDist + COHESION_SLACK ? cohesive.cell : free;
       }
     }
-    throw new Error("no free Block spot: the search never ran out of ring");
+    throw new Error("no free Block spot found, even with unlimited search");
   }
 
   /** The free cell next to one of a Neighbourhood's own Blocks, nearest the village centre, at a relaxation step. */
@@ -384,7 +384,7 @@ export class LayoutBuilder {
           const c = b.col + dc;
           const r = b.row + dr;
           if ((dc === 0 && dr === 0) || this.blockAt.has(cellKey(c, r)) || this.nextToOtherVillage(c, r, village)) continue;
-          if (!this.allowed(step, c, r)) continue;
+          if (!this.terrainAllows(step, c, r)) continue;
           const d = Math.hypot(c - anchor.col, r - anchor.row);
           if (d < bestDist || (d === bestDist && lessCell(c, r, best!))) {
             best = { col: c, row: r };
@@ -489,12 +489,6 @@ function avoidGreen(hue: number): number {
 /** A unit in [0, 1) from the seed, a salt and a lane: the same inputs always give the same value. */
 function seeded(seed: number, salt: number, lane: number): number {
   return mix(mix(seed ^ mix(salt)) + lane) / 2 ** 32;
-}
-
-function mix(value: number): number {
-  let a = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
-  a = Math.imul(a ^ (a >>> 16), 0x45d9f3b);
-  return (a ^ (a >>> 16)) >>> 0;
 }
 
 /** First free run of `slots` unit slots within one Block row, as the first slot index, or undefined. */

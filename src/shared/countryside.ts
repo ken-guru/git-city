@@ -35,7 +35,7 @@ export const TERRAIN = {
 export const DEFAULT_SETTINGS = { relief: RELIEF_MAX, density: 0.5, rivers: 2 } as const;
 
 export interface CountrysideSettings {
-  /** Hill height, as a fraction of RELIEF_MAX scale. Defaults to RELIEF_MAX. */
+  /** Hill height in world units, at most RELIEF_MAX. Defaults to RELIEF_MAX. */
   relief?: number;
   /** 0 sparse to 1 dense: how much of the open land is fields and forest. */
   density?: number;
@@ -73,7 +73,6 @@ export interface Countryside {
 }
 
 /** Style A: muted naturalistic. Fields and forests sit in the green to yellow-green band paving never uses. */
-export const FIELD_STYLE = "A";
 export interface Swatch {
   hue: number;
   saturation: number;
@@ -111,7 +110,8 @@ export function unit(seed: number, salt: number, a: number, b = 0): number {
   return mix(mix(mix(seed ^ mix(salt)) ^ mix(a | 0)) + (b | 0)) / 2 ** 32;
 }
 
-function mix(value: number): number {
+/** The hash every seeded value is built from. Shared with the layout so both sides agree. */
+export function mix(value: number): number {
   let x = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
   x = Math.imul(x ^ (x >>> 16), 0x45d9f3b);
   return (x ^ (x >>> 16)) >>> 0;

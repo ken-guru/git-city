@@ -67,8 +67,9 @@ export function addCountryside(scene: Scene, options: CountrysideScene): void {
   };
 
   scene.add(ground(land, colours, inKeepOut));
-  scene.add(ribbons(land, WATER_HALF, WATER_Y, colours.water));
-  scene.add(ribbons(land, BANK_HALF, BANK_Y, colours.sand));
+  scene.add(ribbons(land, WATER_HALF, WATER_Y, colours.water, false));
+  // Banks follow the ground beside them, so a hill next to a river does not bury its bank.
+  scene.add(ribbons(land, BANK_HALF, BANK_Y, colours.sand, true));
   scene.add(fields(land, colours, options.seed, inKeepOut, fadeAt));
   scene.add(trees(land, colours, options.seed, inKeepOut, fadeAt));
   scene.add(mountains(land, colours, options.seed));
@@ -99,15 +100,17 @@ function ground(land: Countryside, colours: StyleColours, inKeepOut: (c: number,
       indices.push(a, c, b, b, c, d);
     }
   }
-  return new Mesh(geometry(positions, colors, indices), material());
+  return new Mesh(buildGeometry(positions, colors, indices), material());
 }
 
 /** Water or a bank: one ribbon along each river's centre line. */
-function ribbons(land: Countryside, half: number, y: number, swatch: Swatch): Mesh {
+function ribbons(land: Countryside, half: number, lift: number, swatch: Swatch, followGround: boolean): Mesh {
   const soup = new Soup();
   const colour = toColor(swatch);
+  // Each edge of a ribbon sits at its own height: the ground beside it, or the water level.
+  const edgeY = (col: number, row: number) => (followGround ? Math.max(0, land.heightAt(col, row)) + GROUND_Y : 0) + lift;
   for (const river of land.rivers) {
-    soup.ribbon(river.polyline(-RADIUS, RADIUS, 1), half, y, colour);
+    soup.ribbon(river.polyline(-RADIUS, RADIUS, 1), half, edgeY, colour);
   }
   return new Mesh(soup.geometry(), material());
 }
@@ -126,13 +129,15 @@ function fields(
       if (inKeepOut(c, r) || land.coverAt(c, r) !== "field" || fadeAt(c, r) < 0.5) continue;
       const jitter = (unit(seed, 9, c, r) - 0.5) * 0.08;
       const colour = toColor(colours.field, jitter);
+      // A cell is centred on its integer coordinates, so its quad spans half a cell either side.
+      const corners: [number, number][] = [
+        [c - 0.5, r - 0.5],
+        [c + 0.5, r - 0.5],
+        [c - 0.5, r + 0.5],
+        [c + 0.5, r + 0.5],
+      ];
       soup.quad(
-        [
-          [c, land.heightAt(c, r), r],
-          [c + 1, land.heightAt(c + 1, r), r],
-          [c, land.heightAt(c, r + 1), r + 1],
-          [c + 1, land.heightAt(c + 1, r + 1), r + 1],
-        ],
+        corners.map(([x, z]) => [x, land.heightAt(x, z), z] as [number, number, number]),
         FIELD_Y,
         colour,
       );
@@ -149,9 +154,9 @@ function trees(
   inKeepOut: (c: number, r: number) => boolean,
   fadeAt: (c: number, r: number) => number,
 ): InstancedMesh {
-  const geometry = new ConeGeometry(0.5, 1.4, 5);
-  geometry.translate(0, 0.7, 0);
-  const mesh = new InstancedMesh(geometry, material(), MAX_TREES);
+  const cone = new ConeGeometry(0.5, 1.4, 5);
+  cone.translate(0, 0.7, 0);
+  const mesh = new InstancedMesh(cone, material(), MAX_TREES);
   const matrix = new Matrix4();
   const position = new Vector3();
   const scale = new Vector3();
@@ -166,7 +171,8 @@ function trees(
         const x = unit(seed, 10, c, r * 4 + k * 2);
         const z = unit(seed, 10, c, r * 4 + k * 2 + 1);
         const s = (0.8 + 0.5 * unit(seed, 11, c, r * 4 + k)) * fade;
-        position.set((c + 0.2 + 0.6 * x) * CELL, GROUND_Y + land.heightAt(c, r), (r + 0.2 + 0.6 * z) * CELL);
+        // Trees sit inside the cell: its centre plus or minus 0.3 cells.
+        position.set((c - 0.3 + 0.6 * x) * CELL, GROUND_Y + land.heightAt(c, r), (r - 0.3 + 0.6 * z) * CELL);
         scale.set(s * CELL, s * CELL, s * CELL);
         matrix.compose(position, rotation, scale);
         mesh.setMatrixAt(count, matrix);
@@ -190,9 +196,9 @@ function mountains(land: Countryside, colours: StyleColours, seed: number): Inst
       if (h > 0.5) cells.push({ c, r, h: Math.min(h, MOUNTAIN_MAX) });
     }
   }
-  const geometry = new ConeGeometry(1, 1, 6);
-  geometry.translate(0, 0.5, 0);
-  const mesh = new InstancedMesh(geometry, material(), Math.max(1, cells.length));
+  const cone = new ConeGeometry(1, 1, 6);
+  cone.translate(0, 0.5, 0);
+  const mesh = new InstancedMesh(cone, material(), Math.max(1, cells.length));
   const matrix = new Matrix4();
   const position = new Vector3();
   const scale = new Vector3();
@@ -217,10 +223,12 @@ class Soup {
   private readonly indices: number[] = [];
 
   /** A strip along a centre line, `half` cells to each side. */
-  ribbon(line: Point[], half: number, y: number, colour: Color): void {
+  ribbon(line: Point[], half: number, edgeY: (col: number, row: number) => number, colour: Color): void {
     const base = this.positions.length / 3;
     for (const p of line) {
-      this.positions.push(p.col * CELL, y, (p.row - half) * CELL, p.col * CELL, y, (p.row + half) * CELL);
+      const near = edgeY(p.col, p.row - half);
+      const far = edgeY(p.col, p.row + half);
+      this.positions.push(p.col * CELL, near, (p.row - half) * CELL, p.col * CELL, far, (p.row + half) * CELL);
       this.colors.push(colour.r, colour.g, colour.b, colour.r, colour.g, colour.b);
     }
     for (let k = 0; k < line.length - 1; k++) {
@@ -241,11 +249,11 @@ class Soup {
   }
 
   geometry(): BufferGeometry {
-    return geometry(this.positions, this.colors, this.indices);
+    return buildGeometry(this.positions, this.colors, this.indices);
   }
 }
 
-function geometry(positions: number[], colors: number[], indices: number[]): BufferGeometry {
+function buildGeometry(positions: number[], colors: number[], indices: number[]): BufferGeometry {
   const g = new BufferGeometry();
   g.setAttribute("position", new Float32BufferAttribute(positions, 3));
   g.setAttribute("color", new Float32BufferAttribute(colors, 3));
