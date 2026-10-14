@@ -4,13 +4,13 @@ import { decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "..
 import { type PlacesFile, parsePlaces } from "../shared/places.js";
 import { CityBuildings } from "./buildings.js";
 import { addCountryside, type CountrysideHandle } from "./countryside.js";
-import { BlockLayer } from "./blocks.js";
+import { BlockLayer, blockPaving } from "./blocks.js";
 import { ChunkStream } from "./chunks.js";
 import { BLOCK_WORLD, cityExtent, lotBlock, placeLot } from "./lots.js";
 import { cityTitle, createDistrictLabels } from "./labels.js";
 import { LodController, type LodSettings, settingsFor } from "./lod.js";
-import { addRoads } from "./roads.js";
-import { appendTimelines, buildTimelines, TRANSITION_COMMITS, type Timelines } from "./state.js";
+import { RoadLayer } from "./roads.js";
+import { appendTimelines, buildTimelines, durationFor, TRANSITION_COMMITS, type Timelines } from "./state.js";
 
 /** Tuning values for the City. The player and camera tickets replace the rest. */
 const TUNING = {
@@ -124,6 +124,7 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   scene.add(ground);
   // The Blocks are where the layout put them, so the scenery fades out next to each claimed Block.
   const blocks = blockSites(world);
+  const duration = durationFor(TUNING.commitsPerSecond);
   const countryside: CountrysideHandle = addCountryside(scene, {
     // The City seed the CLI wrote into the world file: the same seed the layout used.
     seed: world.citySeed,
@@ -131,9 +132,29 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
     keepOut: 0,
     claimed: blocks.map((b) => ({ col: Math.round(b.x), row: Math.round(b.z) })),
   });
+  // A District's paving is found from its birth index: the world file lists the places in order, with their indices.
   const districts = places?.districts;
-  const blockLayer = new BlockLayer(scene, blocks, countryside.land, districts, theme);
-  addRoads(scene, roadInputs(world), villageSites(world), blocks, countryside.land, world.citySeed, theme);
+  const positionOf = new Map(Array.from(world.districts.index, (index, position) => [index, position] as const));
+  const paving = new Map<number, Color>();
+  const colourOf = (birth: number): Color => {
+    let colour = paving.get(birth);
+    if (!colour) {
+      colour = blockPaving(positionOf.get(birth) ?? -1, districts, theme);
+      paving.set(birth, colour);
+    }
+    return colour;
+  };
+  const blockLayer = new BlockLayer(scene, blocks, countryside.land, timelines.owners, colourOf);
+  const roadLayer = new RoadLayer(
+    scene,
+    roadInputs(world),
+    villageSites(world),
+    blocks,
+    countryside.land,
+    world.citySeed,
+    theme,
+    timelines.roads,
+  );
 
   const city = new CityBuildings(
     scene,
@@ -199,7 +220,8 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
 
   function draw(t: number) {
     city.update(t, TUNING.commitsPerSecond, camera.position);
-    blockLayer.update(camera.position, detail.massFar);
+    blockLayer.update(t, duration, camera.position, detail.massFar);
+    roadLayer.update(t, duration);
     const commit = Math.min(commitCount - 1, Math.max(0, Math.floor(t)));
     const day = new Date(world.commitDays[commit]! * SECONDS_PER_DAY * 1000).toISOString().slice(0, 10);
     status.textContent = Math.floor(t) > stream.loadedThrough()
@@ -226,13 +248,13 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   });
 }
 
-/** The Blocks in world-file form: each with its position in Block widths and its owning District. */
+/** The Blocks in world-file form: each with its position in Block widths, its village, and the commit that claimed it. */
 function blockSites(world: World) {
   return Array.from({ length: world.blocks.x.length }, (_, i) => ({
     village: world.blocks.village[i]!,
     x: world.blocks.x[i]!,
     z: world.blocks.z[i]!,
-    district: world.blocks.district[i]!,
+    claimed: world.blocks.claimed[i]!,
   }));
 }
 
@@ -240,14 +262,9 @@ function villageSites(world: World) {
   return Array.from({ length: world.villages.x.length }, (_, i) => ({ x: world.villages.x[i]!, z: world.villages.z[i]! }));
 }
 
+/** The Roads by id: their two villages, the older one first. */
 function roadInputs(world: World) {
-  return Array.from({ length: world.roads.a.length }, (_, i) => ({
-    a: world.roads.a[i]!,
-    b: world.roads.b[i]!,
-    forward: world.roads.forward[i]!,
-    backward: world.roads.backward[i]!,
-    track: world.roads.track[i]!,
-  }));
+  return Array.from({ length: world.roads.a.length }, (_, i) => ({ a: world.roads.a[i]!, b: world.roads.b[i]! }));
 }
 
 main().catch((e: unknown) => {

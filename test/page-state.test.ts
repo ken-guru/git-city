@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   EVENT_ADD,
+  EVENT_BLOCK_OWNER,
+  EVENT_ROAD_BUILT,
+  EVENT_ROAD_LANES,
   EVENT_DELETE,
   EVENT_FLOORS,
   EVENT_LANGUAGE,
@@ -28,6 +31,12 @@ import {
 const EMPTY_SNAPSHOT: ChunkSnapshot = {
   file: new Uint32Array(0),
   stint: new Uint32Array(0),
+  blockIds: new Uint32Array(0),
+  blockDistricts: new Uint32Array(0),
+  roadIds: new Uint32Array(0),
+  roadBuilt: new Uint32Array(0),
+  roadForward: new Uint8Array(0),
+  roadBackward: new Uint8Array(0),
   floors: new Uint8Array(0),
   scaffolded: new Uint8Array(0),
   buildingType: new Uint8Array(0),
@@ -141,6 +150,12 @@ describe("snapshots", () => {
   const snapshot: ChunkSnapshot = {
     file: Uint32Array.of(0, 1),
     stint: Uint32Array.of(0, 1),
+    blockIds: new Uint32Array(0),
+    blockDistricts: new Uint32Array(0),
+    roadIds: new Uint32Array(0),
+    roadBuilt: new Uint32Array(0),
+    roadForward: new Uint8Array(0),
+    roadBackward: new Uint8Array(0),
     floors: Uint8Array.of(4, 2),
     scaffolded: Uint8Array.of(1, 0),
     buildingType: Uint8Array.of(0, 0),
@@ -287,5 +302,65 @@ describe("Relocation and Renovation", () => {
     ]);
     const { languages } = buildTimelines(chunk, 2, Uint8Array.of(1));
     expect(languageAt(languages[1]!, 1, 10)).toMatchObject({ from: 2, to: 2 });
+  });
+});
+
+describe("Block owners and Roads over time", () => {
+  /** A chunk with the given layout events; each event's stint carries the owner (Blocks) or the parent (Districts). */
+  const layoutChunk = (events: [commit: number, id: number, kind: number, value: number, stint: number][], snapshot = EMPTY_SNAPSHOT): Chunk => ({
+    formatVersion: 7,
+    firstCommit: 0,
+    snapshot,
+    eventCommit: Uint32Array.from(events, (e) => e[0]),
+    eventFile: Uint32Array.from(events, (e) => e[1]),
+    eventStint: Uint32Array.from(events, (e) => e[4]),
+    eventKind: Uint8Array.from(events, (e) => e[2]),
+    eventValue: Uint8Array.from(events, (e) => e[3]),
+  });
+
+  it("gives each Block its owner from the claim, and each owner change after it", () => {
+    const { owners } = buildTimelines(
+      layoutChunk([
+        [3, 7, EVENT_BLOCK_OWNER, 0, 0],
+        [9, 7, EVENT_BLOCK_OWNER, 1, 1],
+      ]),
+      0,
+    );
+    expect(owners.get(7)).toEqual([
+      { start: 3, owner: 0, from: -1 },
+      { start: 9, owner: 1, from: 0 },
+    ]);
+  });
+
+  it("carries the owners and Roads of a chunk's snapshot as its first segments", () => {
+    const snapshot: ChunkSnapshot = {
+      ...EMPTY_SNAPSHOT,
+      blockIds: Uint32Array.of(4),
+      blockDistricts: Uint32Array.of(2),
+      roadIds: Uint32Array.of(1),
+      roadBuilt: Uint32Array.of(50),
+      roadForward: Uint8Array.of(2),
+      roadBackward: Uint8Array.of(1),
+    };
+    const { owners, roads } = buildTimelines(layoutChunk([], snapshot), 0);
+    expect(owners.get(4)).toEqual([{ start: 0, owner: 2, from: 2 }]);
+    expect(roads.get(1)).toEqual({ built: 50, lanes: [{ start: 0, fromForward: 2, fromBackward: 1, forward: 2, backward: 1 }] });
+  });
+
+  it("builds a Road at its first event and eases its Lanes from the ones before", () => {
+    const { roads } = buildTimelines(
+      layoutChunk([
+        [5, 0, EVENT_ROAD_BUILT, 0, 0],
+        [5, 0, EVENT_ROAD_LANES, 2, 1],
+        [9, 0, EVENT_ROAD_LANES, 3, 1],
+      ]),
+      0,
+    );
+    const road = roads.get(0)!;
+    expect(road.built).toBe(5);
+    expect(road.lanes.map((l) => [l.fromForward, l.forward, l.backward])).toEqual([
+      [0, 2, 1],
+      [2, 3, 1],
+    ]);
   });
 });

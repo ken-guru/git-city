@@ -1,11 +1,14 @@
 import {
   type Chunk,
   EVENT_ADD,
+  EVENT_BLOCK_OWNER,
   EVENT_DELETE,
   EVENT_FLOORS,
   EVENT_LANGUAGE,
   EVENT_RELOCATE,
   EVENT_RENOVATE,
+  EVENT_ROAD_BUILT,
+  EVENT_ROAD_LANES,
   EVENT_SCAFFOLD_OFF,
   EVENT_SCAFFOLD_ON,
 } from "../shared/format.js";
@@ -69,7 +72,7 @@ export interface ScaffoldPose {
   visible: boolean;
 }
 
-const easeOutCubic = (x: number) => 1 - (1 - x) ** 3;
+export const easeOutCubic = (x: number) => 1 - (1 - x) ** 3;
 const clamp01 = (x: number) => Math.min(1, Math.max(0, x));
 
 /** The speed-dependent transition length: D, or 0.25 s of viewing time at this speed if that is longer. */
@@ -93,7 +96,7 @@ export function displayedFloors(segment: BuildingSegment, t: number, duration: n
 }
 
 /** The last item whose start is at or before `t`. The lists are in commit order. */
-function latestAt<T extends { start: number }>(list: readonly T[], t: number): T | undefined {
+export function latestAt<T extends { start: number }>(list: readonly T[], t: number): T | undefined {
   let lo = 0;
   let hi = list.length - 1;
   let found = -1;
@@ -113,10 +116,39 @@ function latestAt<T extends { start: number }>(list: readonly T[], t: number): T
  * Builds the segments of every file from one chunk: a build on add, a change on each Floors event,
  * a demolition on delete, and scaffolding up and down. Each change starts from the Floors on screen at that commit.
  */
+/**
+ * A Block's owner from `start` on: the District (birth index) that owns it, and the one it had before (-1 when it
+ * had none, as at its claim). Its paving eases from one colour to the other over D.
+ */
+export interface OwnerSegment {
+  start: number;
+  owner: number;
+  from: number;
+}
+
+/** A Road's Lanes from `start` on, easing from the previous Lanes (`from*`) to the new ones (`to*`) over D. */
+export interface LaneSegment {
+  start: number;
+  fromForward: number;
+  fromBackward: number;
+  forward: number;
+  backward: number;
+}
+
+/** A Road's segments: the commit it was built at, and its Lanes over time. */
+export interface RoadSegments {
+  built: number;
+  lanes: LaneSegment[];
+}
+
 export interface Timelines {
   buildings: BuildingSegment[][];
   scaffolds: ScaffoldSegment[][];
   languages: LanguageSegment[][];
+  /** Per Block id: its owner over time. A Block has one from the commit it is claimed. */
+  owners: Map<number, OwnerSegment[]>;
+  /** Per Road id: when it was built, and its Lanes over time. */
+  roads: Map<number, RoadSegments>;
 }
 
 /**
@@ -134,6 +166,19 @@ export function appendTimelines(target: Timelines, chunk: Chunk, birthLanguage?:
   part.languages.forEach((segments, stint) => {
     for (const segment of segments) target.languages[stint]!.push(segment);
   });
+  for (const [block, segments] of part.owners) {
+    const held = target.owners.get(block) ?? [];
+    for (const segment of segments) held.push(segment);
+    target.owners.set(block, held);
+  }
+  for (const [road, segments] of part.roads) {
+    const held = target.roads.get(road);
+    if (!held) {
+      target.roads.set(road, segments);
+      continue;
+    }
+    for (const lane of segments.lanes) held.lanes.push(lane);
+  }
 }
 
 /**
@@ -146,6 +191,8 @@ export function buildTimelines(chunk: Chunk, stintCount: number, birthLanguage?:
   const buildings: BuildingSegment[][] = Array.from({ length: stintCount }, () => []);
   const scaffolds: ScaffoldSegment[][] = Array.from({ length: stintCount }, () => []);
   const languages: LanguageSegment[][] = Array.from({ length: stintCount }, () => []);
+  const owners = new Map<number, OwnerSegment[]>();
+  const roads = new Map<number, RoadSegments>();
   // What the chunk knows of each file: its Floors, language and current Stint.
   const floorsNow = new Map<number, number>();
   const languageNow = new Map<number, number>();
@@ -165,13 +212,45 @@ export function buildTimelines(chunk: Chunk, stintCount: number, birthLanguage?:
     languageNow.set(file, language);
     stintNow.set(file, stint);
   });
+  snapshot.blockIds.forEach((block, i) => {
+    const owner = snapshot.blockDistricts[i]!;
+    owners.set(block, [{ start: chunk.firstCommit, owner, from: owner }]);
+  });
+  snapshot.roadIds.forEach((road, i) => {
+    const forward = snapshot.roadForward[i]!;
+    const backward = snapshot.roadBackward[i]!;
+    const lane = { start: chunk.firstCommit, fromForward: forward, fromBackward: backward, forward, backward };
+    roads.set(road, { built: snapshot.roadBuilt[i]!, lanes: [lane] });
+  });
 
   chunk.eventFile.forEach((file, i) => {
     const start = chunk.eventCommit[i]!;
     const value = chunk.eventValue[i]!;
     const stint = chunk.eventStint[i]!;
+    const kind = chunk.eventKind[i];
+    // The layout's and the Road history's events name Blocks and Roads, not files: they carry no Building state.
+    if (kind === EVENT_BLOCK_OWNER) {
+      const held = owners.get(file) ?? [];
+      const previous = held[held.length - 1]?.owner ?? -1;
+      held.push({ start, owner: stint, from: previous });
+      owners.set(file, held);
+      return;
+    }
+    if (kind === EVENT_ROAD_BUILT) {
+      if (!roads.has(file)) roads.set(file, { built: start, lanes: [] });
+      return;
+    }
+    if (kind === EVENT_ROAD_LANES) {
+      const road = roads.get(file) ?? { built: start, lanes: [] };
+      roads.set(file, road);
+      const last = road.lanes[road.lanes.length - 1];
+      const fromForward = last?.forward ?? 0;
+      const fromBackward = last?.backward ?? 0;
+      road.lanes.push({ start, fromForward, fromBackward, forward: value, backward: stint });
+      return;
+    }
     const list = buildings[stint]!;
-    switch (chunk.eventKind[i]) {
+    switch (kind) {
       case EVENT_ADD: {
         list.push({ start, kind: KIND_BUILD, from: 0, to: value });
         floorsNow.set(file, value);
@@ -191,7 +270,7 @@ export function buildTimelines(chunk: Chunk, stintCount: number, birthLanguage?:
           buildings[old]!.push({ start, kind: KIND_DEMOLISH, from, to: 0 });
         }
         // A Renovation comes down first, so the new type starts one base duration later.
-        const built = start + (chunk.eventKind[i] === EVENT_RENOVATE ? TRANSITION_COMMITS : 0);
+        const built = start + (kind === EVENT_RENOVATE ? TRANSITION_COMMITS : 0);
         buildings[stint]!.push({ start: built, kind: KIND_BUILD, from: 0, to: floorsNow.get(file) ?? 0 });
         const language = languageNow.get(file);
         if (language !== undefined) languages[stint]!.push({ start: built, from: language, to: language });
@@ -224,7 +303,7 @@ export function buildTimelines(chunk: Chunk, stintCount: number, birthLanguage?:
       }
     }
   });
-  return { buildings, scaffolds, languages };
+  return { buildings, scaffolds, languages, owners, roads };
 }
 
 /**

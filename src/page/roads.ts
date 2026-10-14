@@ -1,12 +1,14 @@
 import { BufferGeometry, Color, Float32BufferAttribute, Mesh, MeshLambertMaterial, type Scene } from "three";
 import { type Countryside, unit } from "../shared/countryside.js";
 import { BLOCK_WORLD, blockSpot, type Spot } from "./lots.js";
+import { easeOutCubic, latestAt, type RoadSegments } from "./state.js";
 
 /**
- * Village Roads (SPEC §7): gently curved ribbons between village centres that follow the terrain, with
- * asymmetric halves, a double centre line, dashed lane dividers, bridges where they cross a river, and
- * unpaved tracks where no connection uses them. Roads are built once, when the page loads; they do not
- * grow over time (that is out of scope for v1).
+ * Village Roads (SPEC §7): gently curved ribbons between village centres that follow the terrain, with asymmetric
+ * halves, a double centre line, dashed lane dividers, and bridges where they cross a river. A Road is built at the
+ * commit its first connection appears, grows outward from the older village over 2D, and its Lanes ease over D. A
+ * Road with no Lanes is an unpaved track. The Roads' ends are trimmed where the villages' edges are, which move as
+ * the villages grow. Roads over time as a whole (each Road's growth through history) is out of scope for v1.
  */
 
 /** Width of one Lane, in world units. */
@@ -27,14 +29,13 @@ const LINE_WIDTH = 0.04;
 const TRACK_HALF = 0.25;
 /** Salt for the seeded values of the Roads. */
 const SALT = 40;
+/** A Road is a track while both its halves have less than this many Lanes. */
+const TRACK_LANES = 0.5;
 
-/** A Road as the page needs it: the two village ids, its Lanes per direction, and whether it is an unpaved track. */
+/** A Road as the page needs it: the two village ids, a < b (so `a` is the older village). */
 export interface RoadInput {
   a: number;
   b: number;
-  forward: number;
-  backward: number;
-  track: number;
 }
 
 /** A village centre, in Block widths. */
@@ -43,26 +44,64 @@ export interface VillageSite {
   z: number;
 }
 
-/** A Block's owner village and position, in Block widths. */
+/** A Block's owner village and position, in Block widths, and the commit that claimed it. */
 export interface BlockSite {
   village: number;
   x: number;
   z: number;
+  claimed: number;
 }
 
 /**
- * How far from its centre a village reaches, in world units: the furthest of its Blocks plus half a Block.
- * A Road is trimmed where it leaves this radius.
+ * How far from its centre a village reaches at a commit, in world units: the furthest of its claimed Blocks plus
+ * half a Block. Before any Block is claimed, the village reaches half a Block.
+ */
+export class RadiusHistory {
+  private readonly times: number[][] = [];
+  private readonly reach: number[][] = [];
+
+  constructor(villages: readonly VillageSite[], blocks: readonly BlockSite[]) {
+    const claims: [number, number][][] = villages.map(() => []);
+    for (const block of blocks) {
+      const village = villages[block.village];
+      if (!village) continue;
+      const distance = Math.hypot((block.x - village.x) * BLOCK_WORLD, (block.z - village.z) * BLOCK_WORLD);
+      claims[block.village]!.push([block.claimed, distance + BLOCK_WORLD / 2]);
+    }
+    claims.forEach((list, village) => {
+      list.sort((p, q) => p[0] - q[0]);
+      let furthest = BLOCK_WORLD / 2;
+      this.times[village] = list.map(([t]) => t);
+      this.reach[village] = list.map(([, r]) => (furthest = Math.max(furthest, r)));
+    });
+  }
+
+  /** The village's radius at commit `t`. */
+  radiusAt(village: number, t: number): number {
+    const times = this.times[village];
+    if (!times || times.length === 0) return BLOCK_WORLD / 2;
+    let lo = 0;
+    let hi = times.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (times[mid]! <= t) {
+        found = mid;
+        lo = mid + 1;
+      } else hi = mid - 1;
+    }
+    return found < 0 ? BLOCK_WORLD / 2 : this.reach[village]![found]!;
+  }
+}
+
+/**
+ * How far from its centre a village reaches, in world units, once every Block is claimed: the furthest of its Blocks
+ * plus half a Block.
  */
 export function villageRadii(villages: readonly VillageSite[], blocks: readonly BlockSite[]): number[] {
-  const radii = villages.map(() => BLOCK_WORLD / 2);
-  for (const block of blocks) {
-    const village = villages[block.village];
-    if (!village) continue;
-    const reach = Math.hypot((block.x - village.x) * BLOCK_WORLD, (block.z - village.z) * BLOCK_WORLD) + BLOCK_WORLD / 2;
-    radii[block.village] = Math.max(radii[block.village]!, reach);
-  }
-  return radii;
+  const history = new RadiusHistory(villages, blocks);
+  const end = Number.POSITIVE_INFINITY;
+  return villages.map((_, village) => history.radiusAt(village, end));
 }
 
 /**
@@ -131,6 +170,20 @@ export function normals(points: readonly Spot[]): Spot[] {
   });
 }
 
+/**
+ * The Lanes of a Road at commit `t`: each half eases from its previous Lanes to its new ones over `duration`
+ * commits. A Road with no segments yet has no Lanes.
+ */
+export function lanesAt(road: RoadSegments | undefined, t: number, duration: number): { forward: number; backward: number } {
+  const lane = road ? latestAt(road.lanes, t) : undefined;
+  if (!lane) return { forward: 0, backward: 0 };
+  const share = easeOutCubic(Math.min(1, Math.max(0, (t - lane.start) / duration)));
+  return {
+    forward: lane.fromForward + (lane.forward - lane.fromForward) * share,
+    backward: lane.fromBackward + (lane.backward - lane.fromBackward) * share,
+  };
+}
+
 interface Palette {
   asphalt: number;
   marking: number;
@@ -143,7 +196,7 @@ const PALETTE: Record<"light" | "dark", Palette> = {
   dark: { asphalt: 0x2e343b, marking: 0xd8d8d0, bridge: 0x6a727b, track: 0x6b5b44 },
 };
 
-/** Accumulates quads, with their colours, into one merged mesh. */
+/** Accumulates quads, with their colours, into one geometry. */
 class Quads {
   readonly positions: number[] = [];
   readonly colors: number[] = [];
@@ -169,81 +222,147 @@ class Quads {
     }
   }
 
-  mesh(): Mesh {
+  geometry(): BufferGeometry {
     const geometry = new BufferGeometry();
     geometry.setAttribute("position", new Float32BufferAttribute(this.positions, 3));
     geometry.setAttribute("color", new Float32BufferAttribute(this.colors, 3));
     geometry.setIndex(this.indices);
     geometry.computeVertexNormals();
-    const mesh = new Mesh(geometry, new MeshLambertMaterial({ vertexColors: true, flatShading: true }));
-    mesh.frustumCulled = false;
-    return mesh;
-  }
-}
-
-/**
- * Builds every Road as a few merged meshes: asphalt, markings, bridge decks and tracks. The Roads and the
- * curves are a pure function of the seed and the layout, so they are drawn once.
- */
-export function addRoads(
-  scene: Scene,
-  roads: readonly RoadInput[],
-  villages: readonly VillageSite[],
-  blocks: readonly BlockSite[],
-  land: Countryside,
-  seed: number,
-  theme: "light" | "dark",
-): void {
-  const colours = PALETTE[theme];
-  const radii = villageRadii(villages, blocks);
-  const asphalt = new Quads();
-  const marking = new Quads();
-  const bridge = new Quads();
-  const track = new Quads();
-  const colour = (hex: number) => new Color(hex);
-  for (const road of roads) {
-    const va = villages[road.a];
-    const vb = villages[road.b];
-    if (!va || !vb) continue;
-    const from = blockSpot(va.x, va.z);
-    const to = blockSpot(vb.x, vb.z);
-    const curve = roadCurve(from, to, seed, road.a, road.b);
-    const points = trimToEdges(curve, from, radii[road.a]!, to, radii[road.b]!);
-    if (points.length < 2) continue;
-    const bridges = bridgeSamples(points, (c, r) => land.levelAt(c, r) === "river");
-    const normal = normals(points);
-    const heights = points.map((p, i) => (bridges[i] ? BRIDGE_HEIGHT : land.heightAt(p.x / BLOCK_WORLD, p.z / BLOCK_WORLD) + ROAD_LIFT));
-    const onBridge = (segment: number) => bridges[segment]! && bridges[segment + 1]!;
-    if (road.track) {
-      track.strip(points, normal, heights, -TRACK_HALF, TRACK_HALF, colour(colours.track), (s) => !onBridge(s));
-      continue;
-    }
-    // Asymmetric halves: the forward half runs on the normal's side, the backward half on the other.
-    const forward = Math.max(1, road.forward) * LANE_WIDTH;
-    const backward = Math.max(1, road.backward) * LANE_WIDTH;
-    asphalt.strip(points, normal, heights, -backward, forward, colour(colours.asphalt), (s) => !onBridge(s));
-    bridge.strip(points, normal, heights, -backward, forward, colour(colours.bridge), onBridge);
-    const markingHeights = heights.map((h, i) => (bridges[i] ? h : h - ROAD_LIFT + MARKING_LIFT));
-    const lineColour = colour(colours.marking);
-    // Double centre line.
-    marking.strip(points, normal, markingHeights, CENTRE_GAP, CENTRE_GAP + LINE_WIDTH, lineColour);
-    marking.strip(points, normal, markingHeights, -CENTRE_GAP - LINE_WIDTH, -CENTRE_GAP, lineColour);
-    // Dashed lane dividers, one line per lane boundary in each half.
-    for (let k = 1; k < Math.max(1, road.forward); k++) {
-      const at = k * LANE_WIDTH;
-      marking.strip(points, normal, markingHeights, at, at + LINE_WIDTH, lineColour, dashed);
-    }
-    for (let k = 1; k < Math.max(1, road.backward); k++) {
-      const at = -k * LANE_WIDTH;
-      marking.strip(points, normal, markingHeights, at - LINE_WIDTH, at, lineColour, dashed);
-    }
-  }
-  for (const quads of [asphalt, bridge, track, marking]) {
-    if (quads.indices.length > 0) scene.add(quads.mesh());
+    return geometry;
   }
 }
 
 /** Dashes: two segments drawn, two left out, along a Road. */
 function dashed(segment: number): boolean {
   return Math.floor(segment / 2) % 2 === 0;
+}
+
+interface RoadMeshes {
+  asphalt: Mesh;
+  marking: Mesh;
+  bridge: Mesh;
+  track: Mesh;
+}
+
+/**
+ * The Roads on the page. Each Road gets its own meshes once it is built; its geometry is rebuilt only when its growth,
+ * its Lanes or its trimmed ends change, so a steady City costs nothing per frame.
+ */
+export class RoadLayer {
+  private readonly curves: Spot[][];
+  private readonly radii: RadiusHistory;
+  private readonly meshes: (RoadMeshes | undefined)[] = [];
+  private readonly signatures: string[] = [];
+  private readonly materials: Record<keyof RoadMeshes, MeshLambertMaterial>;
+  private readonly palette: Palette;
+
+  constructor(
+    private readonly scene: Scene,
+    private readonly roads: readonly RoadInput[],
+    private readonly villages: readonly VillageSite[],
+    blocks: readonly BlockSite[],
+    private readonly land: Countryside,
+    seed: number,
+    theme: "light" | "dark",
+    private readonly segments: ReadonlyMap<number, RoadSegments>,
+  ) {
+    this.palette = PALETTE[theme];
+    this.radii = new RadiusHistory(villages, blocks);
+    this.curves = roads.map((road) => {
+      const va = villages[road.a];
+      const vb = villages[road.b];
+      if (!va || !vb) return [];
+      return roadCurve(blockSpot(va.x, va.z), blockSpot(vb.x, vb.z), seed, road.a, road.b);
+    });
+    // The colour is in the vertices, so the materials stay white and do not tint them twice.
+    const plain = () => new MeshLambertMaterial({ vertexColors: true, flatShading: true });
+    this.materials = { asphalt: plain(), marking: plain(), bridge: plain(), track: plain() };
+  }
+
+  /** Brings every built Road to commit `t`: grown, laned and trimmed as the timeline says. */
+  update(t: number, duration: number): void {
+    for (const [id, road] of this.segments) {
+      const pair = this.roads[id];
+      if (!pair || t < road.built || this.curves[id]!.length < 2) continue;
+      // Growth runs over 2D from the older village, which is `a`: the curve starts there.
+      const growth = easeOutCubic(Math.min(1, Math.max(0, (t - road.built) / (2 * duration))));
+      const lanes = lanesAt(road, t, duration);
+      const radiusA = this.radii.radiusAt(pair.a, t);
+      const radiusB = this.radii.radiusAt(pair.b, t);
+      const signature = [Math.round(growth * 64), Math.round(lanes.forward * 20), Math.round(lanes.backward * 20), Math.round(radiusA * 4), Math.round(radiusB * 4)].join(",");
+      if (signature === this.signatures[id]) continue;
+      this.signatures[id] = signature;
+      this.rebuild(id, pair, growth, lanes, radiusA, radiusB);
+    }
+  }
+
+  private rebuild(id: number, pair: RoadInput, growth: number, lanes: { forward: number; backward: number }, radiusA: number, radiusB: number): void {
+    const va = this.roadCentre(pair.a);
+    const vb = this.roadCentre(pair.b);
+    let points = trimToEdges(this.curves[id]!, va, radiusA, vb, radiusB);
+    if (points.length >= 2 && growth < 1) points = points.slice(0, Math.max(2, Math.round(growth * points.length)));
+    const meshes = this.meshesFor(id);
+    if (points.length < 2) {
+      for (const mesh of Object.values(meshes)) mesh.geometry = new BufferGeometry();
+      return;
+    }
+    const bridges = bridgeSamples(points, (c, r) => this.land.levelAt(c, r) === "river");
+    const normal = normals(points);
+    const heights = points.map((p, i) => (bridges[i] ? BRIDGE_HEIGHT : this.land.heightAt(p.x / BLOCK_WORLD, p.z / BLOCK_WORLD) + ROAD_LIFT));
+    const onBridge = (segment: number) => bridges[segment]! && bridges[segment + 1]!;
+    const asphalt = new Quads();
+    const marking = new Quads();
+    const bridge = new Quads();
+    const track = new Quads();
+    const colour = (key: keyof Palette) => new Color(this.palette[key]);
+
+    if (lanes.forward < TRACK_LANES && lanes.backward < TRACK_LANES) {
+      track.strip(points, normal, heights, -TRACK_HALF, TRACK_HALF, colour("track"), (s) => !onBridge(s));
+    } else {
+      // Asymmetric halves: the forward half runs on the normal's side, the backward half on the other.
+      const forward = lanes.forward * LANE_WIDTH;
+      const backward = lanes.backward * LANE_WIDTH;
+      asphalt.strip(points, normal, heights, -backward, forward, colour("asphalt"), (s) => !onBridge(s));
+      bridge.strip(points, normal, heights, -backward, forward, colour("bridge"), onBridge);
+      const markingHeights = heights.map((h, i) => (bridges[i] ? h : h - ROAD_LIFT + MARKING_LIFT));
+      const line = colour("marking");
+      marking.strip(points, normal, markingHeights, CENTRE_GAP, CENTRE_GAP + LINE_WIDTH, line);
+      marking.strip(points, normal, markingHeights, -CENTRE_GAP - LINE_WIDTH, -CENTRE_GAP, line);
+      for (let k = 1; k < Math.floor(lanes.forward); k++) {
+        const at = k * LANE_WIDTH;
+        marking.strip(points, normal, markingHeights, at, at + LINE_WIDTH, line, dashed);
+      }
+      for (let k = 1; k < Math.floor(lanes.backward); k++) {
+        const at = -k * LANE_WIDTH;
+        marking.strip(points, normal, markingHeights, at - LINE_WIDTH, at, line, dashed);
+      }
+    }
+    meshes.asphalt.geometry.dispose();
+    meshes.asphalt.geometry = asphalt.geometry();
+    meshes.marking.geometry.dispose();
+    meshes.marking.geometry = marking.geometry();
+    meshes.bridge.geometry.dispose();
+    meshes.bridge.geometry = bridge.geometry();
+    meshes.track.geometry.dispose();
+    meshes.track.geometry = track.geometry();
+  }
+
+  private roadCentre(village: number): Spot {
+    const site = this.villages[village];
+    return blockSpot(site?.x ?? 0, site?.z ?? 0);
+  }
+
+  private meshesFor(id: number): RoadMeshes {
+    const existing = this.meshes[id];
+    if (existing) return existing;
+    const make = (key: keyof RoadMeshes) => {
+      const mesh = new Mesh(new BufferGeometry(), this.materials[key]);
+      mesh.frustumCulled = false;
+      this.scene.add(mesh);
+      return mesh;
+    };
+    const created = { asphalt: make("asphalt"), marking: make("marking"), bridge: make("bridge"), track: make("track") };
+    this.meshes[id] = created;
+    return created;
+  }
 }

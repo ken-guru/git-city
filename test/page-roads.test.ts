@@ -2,7 +2,8 @@ import { Scene } from "three";
 import { describe, expect, it } from "vitest";
 import { countryside } from "../src/shared/countryside.js";
 import { BLOCK_WORLD } from "../src/page/lots.js";
-import { addRoads, bridgeSamples, LANE_WIDTH, normals, roadCurve, trimToEdges, villageRadii } from "../src/page/roads.js";
+import { RoadLayer, RadiusHistory, LANE_WIDTH, bridgeSamples, lanesAt, normals, roadCurve, trimToEdges, villageRadii } from "../src/page/roads.js";
+import { type LaneSegment, type RoadSegments } from "../src/page/state.js";
 
 const origin = { x: 0, z: 0 };
 const far = { x: 60, z: 0 };
@@ -50,15 +51,28 @@ describe("trimToEdges", () => {
   });
 });
 
-describe("villageRadii", () => {
+describe("villageRadii and RadiusHistory", () => {
+  const villages = [
+    { x: 0, z: 0 },
+    { x: 10, z: 0 },
+  ];
+  const blocks = [
+    { village: 0, x: 0, z: 0, claimed: 0 },
+    { village: 0, x: 2, z: 0, claimed: 30 },
+    { village: 1, x: 10, z: 0, claimed: 0 },
+  ];
+
   it("reaches the furthest Block of each village, plus half a Block", () => {
-    const radii = villageRadii([{ x: 0, z: 0 }, { x: 10, z: 0 }], [
-      { village: 0, x: 0, z: 0 },
-      { village: 0, x: 2, z: 0 },
-      { village: 1, x: 10, z: 0 },
-    ]);
+    const radii = villageRadii(villages, blocks);
     expect(radii[0]).toBeCloseTo(2 * BLOCK_WORLD + BLOCK_WORLD / 2);
     expect(radii[1]).toBeCloseTo(BLOCK_WORLD / 2);
+  });
+
+  it("grows as Blocks are claimed, so a village's edge moves outward with it", () => {
+    const history = new RadiusHistory(villages, blocks);
+    expect(history.radiusAt(0, 0)).toBeCloseTo(BLOCK_WORLD / 2);
+    expect(history.radiusAt(0, 29)).toBeCloseTo(BLOCK_WORLD / 2);
+    expect(history.radiusAt(0, 30)).toBeCloseTo(2 * BLOCK_WORLD + BLOCK_WORLD / 2);
   });
 });
 
@@ -87,34 +101,77 @@ describe("normals", () => {
   });
 });
 
-describe("addRoads", () => {
+describe("lanesAt", () => {
+  const lane = (start: number, from: number, to: number): LaneSegment => ({ start, fromForward: from, fromBackward: 1, forward: to, backward: 1 });
+
+  it("has no Lanes before the Road has any, and eases to a change of Lanes over D commits", () => {
+    const road: RoadSegments = { built: 0, lanes: [lane(10, 1, 3)] };
+    expect(lanesAt(undefined, 10, 4)).toEqual({ forward: 0, backward: 0 });
+    expect(lanesAt(road, 10, 4).forward).toBeCloseTo(1);
+    expect(lanesAt(road, 12, 4).forward).toBeGreaterThan(1);
+    expect(lanesAt(road, 12, 4).forward).toBeLessThan(3);
+    expect(lanesAt(road, 14, 4).forward).toBeCloseTo(3);
+  });
+});
+
+describe("RoadLayer", () => {
   const villages = [
     { x: 0, z: 0 },
     { x: 14, z: 0 },
     { x: 14, z: 14 },
   ];
   const blocks = [
-    { village: 0, x: 0, z: 0 },
-    { village: 1, x: 14, z: 0 },
-    { village: 2, x: 14, z: 14 },
+    { village: 0, x: 0, z: 0, claimed: 0 },
+    { village: 1, x: 14, z: 0, claimed: 0 },
+    { village: 2, x: 14, z: 14, claimed: 0 },
+  ];
+  const roads = [
+    { a: 0, b: 1 },
+    { a: 1, b: 2 },
   ];
 
-  it("draws each used Road with its markings, and each track in one mesh", () => {
+  /** The triangles of a Road's asphalt, or none while it is not built. */
+  function asphaltTriangles(scene: Scene, road: number): number {
+    // A Road's meshes are added when it is first built: asphalt, markings, bridges, tracks, in that order.
+    const mesh = scene.children.filter((c) => c.type === "Mesh")[road * 4] as import("three").Mesh | undefined;
+    return mesh?.geometry.getIndex()?.count ?? 0;
+  }
+
+  it("draws no Road before it is built, and draws it from its build commit on", () => {
     const scene = new Scene();
-    const roads = [
-      { a: 0, b: 1, forward: 2, backward: 1, track: 0 },
-      { a: 1, b: 2, forward: 0, backward: 0, track: 1 },
-    ];
-    addRoads(scene, roads, villages, blocks, countryside(5), 5, "light");
-    // Asphalt, markings, bridges (none here) and tracks: one mesh for each kind that has geometry.
-    expect(scene.children.length).toBeGreaterThanOrEqual(3);
-    for (const child of scene.children) expect(child.type).toBe("Mesh");
+    const segments = new Map<number, RoadSegments>([[0, { built: 100, lanes: [{ start: 100, fromForward: 0, fromBackward: 0, forward: 2, backward: 1 }] }]]);
+    const layer = new RoadLayer(scene, roads, villages, blocks, countryside(5), 5, "light", segments);
+    layer.update(50, 4);
+    expect(asphaltTriangles(scene, 0)).toBe(0);
+    layer.update(140, 4);
+    expect(asphaltTriangles(scene, 0)).toBeGreaterThan(0);
   });
 
-  it("gives an asymmetric Road the Lanes of each direction, not a single width", () => {
-    expect(LANE_WIDTH).toBeGreaterThan(0);
+  it("grows a Road outward from its older village: more of it is drawn as its growth completes", () => {
     const scene = new Scene();
-    addRoads(scene, [{ a: 0, b: 1, forward: 3, backward: 1, track: 0 }], villages, blocks, countryside(5), 5, "dark");
-    expect(scene.children.length).toBeGreaterThan(0);
+    const segments = new Map<number, RoadSegments>([[0, { built: 100, lanes: [{ start: 100, fromForward: 2, fromBackward: 1, forward: 2, backward: 1 }] }]]);
+    const layer = new RoadLayer(scene, roads, villages, blocks, countryside(5), 5, "light", segments);
+    layer.update(101, 4);
+    const early = asphaltTriangles(scene, 0);
+    layer.update(160, 4);
+    const grown = asphaltTriangles(scene, 0);
+    expect(early).toBeGreaterThan(0);
+    expect(grown).toBeGreaterThan(early);
+  });
+
+  it("widens a Road's asphalt as its Lanes ease up", () => {
+    const scene = new Scene();
+    const segments = new Map<number, RoadSegments>([
+      [0, { built: 0, lanes: [{ start: 0, fromForward: 1, fromBackward: 1, forward: 1, backward: 1 }, { start: 200, fromForward: 1, fromBackward: 1, forward: 3, backward: 1 }] }],
+    ]);
+    const layer = new RoadLayer(scene, roads, villages, blocks, countryside(5), 5, "dark", segments);
+    layer.update(199, 4);
+    const before = (scene.children.filter((c) => c.type === "Mesh")[0] as import("three").Mesh).geometry.getAttribute("position");
+    const widthBefore = Math.max(...Array.from({ length: before.count }, (_, i) => Math.abs(before.getZ(i))));
+    layer.update(210, 4);
+    const after = (scene.children.filter((c) => c.type === "Mesh")[0] as import("three").Mesh).geometry.getAttribute("position");
+    const widthAfter = Math.max(...Array.from({ length: after.count }, (_, i) => Math.abs(after.getZ(i))));
+    expect(widthAfter).toBeGreaterThan(widthBefore);
+    expect(LANE_WIDTH).toBeGreaterThan(0);
   });
 });

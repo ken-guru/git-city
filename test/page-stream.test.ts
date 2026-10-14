@@ -69,6 +69,7 @@ function publish(timeline: ChunkInput, chunkCommits: number) {
       blocks: { village: new Uint32Array(0), x: new Float32Array(0), z: new Float32Array(0), claimed: new Uint32Array(0), brick: new Uint8Array(0), district: new Uint32Array(0) },
       lots: { file: new Uint32Array(0), block: new Uint32Array(0), slot: new Uint8Array(0), slots: new Uint8Array(0) },
       roads: { a: new Uint32Array(0), b: new Uint32Array(0), forward: new Uint8Array(0), backward: new Uint8Array(0), track: new Uint8Array(0) },
+      districts: { index: Uint32Array.from({ length: timeline.fileCount }, (_, i) => i), street: new Uint8Array(timeline.fileCount) },
       stints: {
         file: Uint32Array.from({ length: timeline.fileCount }, (_, i) => i),
         lot: Uint32Array.from({ length: timeline.fileCount }, (_, i) => i),
