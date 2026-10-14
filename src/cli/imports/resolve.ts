@@ -1,5 +1,6 @@
 import { builtinModules } from "node:module";
 import { parseJsonc } from "../jsonc.js";
+import { isPythonFile, parentDirectories, pythonSourceRoots, resolvePythonImport } from "./python.js";
 
 /**
  * Import resolution (SPEC §4, Resolve), for TS/JS. A specifier is resolved against one commit's path set
@@ -13,12 +14,19 @@ import { parseJsonc } from "../jsonc.js";
 export interface Snapshot {
   readonly paths: ReadonlySet<string>;
   read(path: string): string | undefined;
+  /** Whether a directory holds a Python file in the commit (directly or below). Used for PEP 420 namespace packages. */
+  hasPythonDirectory(path: string): boolean;
 }
 
 /** A commit's files: each path maps to its text (use "" for a source file whose text is not needed). */
 export function createSnapshot(files: Record<string, string>): Snapshot {
   const paths = new Set(Object.keys(files));
-  return { paths, read: (path) => (paths.has(path) ? files[path] : undefined) };
+  const pythonDirs = new Set(Object.keys(files).filter(isPythonFile).flatMap(parentDirectories));
+  return {
+    paths,
+    read: (path) => (paths.has(path) ? files[path] : undefined),
+    hasPythonDirectory: (path) => pythonDirs.has(path),
+  };
 }
 
 /** Where an import points. A file in the repo, or a package outside it (classified later by manifest). */
@@ -49,9 +57,11 @@ export function extendsTarget(configPath: string, value: string): string {
   return normalize(join(dirname(configPath), value));
 }
 
-/** Resolves `specifier` as imported from the file at `fromPath`. */
-export function resolveImport(snapshot: Snapshot, fromPath: string, specifier: string): Resolved {
-  return new ImportResolver(snapshot).resolve(fromPath, specifier);
+/**
+ * Resolves `specifier` as imported from the file at `fromPath`. `member` is a Python `from` import's name, if any.
+ */
+export function resolveImport(snapshot: Snapshot, fromPath: string, specifier: string, member?: string): Resolved {
+  return new ImportResolver(snapshot).resolve(fromPath, specifier, member);
 }
 
 /**
@@ -65,8 +75,8 @@ export class ImportResolver {
     this.core = new Resolver(snapshot);
   }
 
-  resolve(fromPath: string, specifier: string): Resolved {
-    return this.core.resolveWithProbes(fromPath, specifier);
+  resolve(fromPath: string, specifier: string, member?: string): Resolved {
+    return this.core.resolveWithProbes(fromPath, specifier, member);
   }
 
   /** Forgets cached manifests and the workspace map. */
@@ -91,18 +101,34 @@ class Resolver {
   private readonly jsonCache = new Map<string, Record<string, any> | undefined>();
   /** Workspace package names to directories. Built on first use, then shared by every specifier. */
   private workspaceMap: Map<string, string> | undefined;
+  /** Source roots for Python imports. Built on first use, rebuilt with the config. */
+  private pythonRoots: string[] | undefined;
 
   constructor(private readonly snap: Snapshot) {}
 
-  resolveWithProbes(fromPath: string, specifier: string): Resolved {
+  resolveWithProbes(fromPath: string, specifier: string, member?: string): Resolved {
     this.probes = [];
-    const target = this.resolve(fromPath, specifier);
+    const target = isPythonFile(fromPath) ? this.python(fromPath, specifier, member) : this.resolve(fromPath, specifier);
     return { target, probes: this.probes };
   }
 
   reset(): void {
     this.jsonCache.clear();
     this.workspaceMap = undefined;
+    this.pythonRoots = undefined;
+  }
+
+  private python(fromPath: string, specifier: string, member: string | undefined): Resolution | undefined {
+    this.pythonRoots ??= pythonSourceRoots(this.snap.paths, (path) => this.snap.read(path));
+    const ctx = {
+      exists: (path: string) => this.exists(path),
+      hasPythonDirectory: (path: string) => {
+        this.probe(path);
+        return this.snap.hasPythonDirectory(path);
+      },
+      roots: this.pythonRoots,
+    };
+    return resolvePythonImport(ctx, fromPath, specifier, member);
   }
 
   private resolve(fromPath: string, specifier: string): Resolution | undefined {

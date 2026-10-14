@@ -27,7 +27,7 @@ const LAYER_DEFINITIONS = {
   commits: { sources: ["history", "git"], packages: [], dirs: ["commits"], dependents: ["run"] },
   // The run state is the Timeline and the import graph, so changing their code clears it.
   run: {
-    sources: ["pipeline", "timeline", "model", "imports/graph", "imports/resolve", "../shared/buildings", "../shared/format"],
+    sources: ["pipeline", "timeline", "model", "imports/graph", "imports/resolve", "imports/python", "../shared/buildings", "../shared/format"],
     packages: [],
     dirs: ["runs", "states"],
     dependents: ["layout"],
