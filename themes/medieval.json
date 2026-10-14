@@ -1,0 +1,43 @@
+{
+  "$schema": "../schema/theme.schema.json",
+  "name": "medieval",
+  "display": {
+    "title": "Medieval",
+    "description": "Village names, lanes and guild quarters."
+  },
+  "wordPieces": {
+    "prefixes": ["Ash", "Thorn", "Mill", "Brind", "Wyn", "Hart", "Stone", "Oak", "Fen", "Raven", "Elder", "Cold"],
+    "suffixes": ["ford", "wick", "mere", "stead", "bury", "thorpe", "hollow", "cross", "field", "holt"]
+  },
+  "streetSuffixes": ["Lane", "Row", "Way", "Gate", "Walk"],
+  "roleNouns": {
+    "tests": "Tilt Yard",
+    "docs": "Scriptorium",
+    "api": "Gatehouse",
+    "ui": "Market",
+    "auth": "Keep",
+    "data": "Granary",
+    "cli": "Watch",
+    "infra": "Works",
+    "utils": "Guildhall",
+    "core": "Citadel",
+    "config": "Chantry",
+    "build": "Forge",
+    "fallback": "Hamlet"
+  },
+  "palette": {
+    "tests": { "hue": 45 },
+    "docs": { "hue": 280 },
+    "api": { "hue": 25 },
+    "ui": { "hue": 330 },
+    "auth": { "hue": 352 },
+    "data": { "hue": 20 },
+    "cli": { "hue": 240 },
+    "infra": { "hue": 210 },
+    "utils": { "hue": 35 },
+    "core": { "hue": 222 },
+    "config": { "hue": 170 },
+    "build": { "hue": 215 },
+    "fallback": { "hue": 30 }
+  }
+}

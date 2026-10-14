@@ -121,7 +121,11 @@ describe("names in the output", () => {
   it("lets audit list every string in the output", async () => {
     const { outDir } = await run(sampleRepo());
 
-    expect(await auditSite(outDir)).toEqual(["0\tMarkdown file 1", "1\tTypeScript file 2", "2\tTypeScript file 3"]);
+    const lines = await auditSite(outDir);
+    expect(lines.slice(0, 3)).toEqual(["0\tMarkdown file 1", "1\tTypeScript file 2", "2\tTypeScript file 3"]);
+    // Then the City and District names from places.json, one line each.
+    expect(lines.slice(3).every((line) => /^(city|district \d+|neighbourhood \d+\.\d+)\t/.test(line))).toBe(true);
+    expect(lines[3]!.startsWith("city\t")).toBe(true);
   });
 });
 

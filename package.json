@@ -10,6 +10,7 @@
   "files": [
     "dist",
     "schema",
+    "themes",
     "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
