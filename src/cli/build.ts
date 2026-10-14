@@ -12,6 +12,7 @@ import { seedNumber } from "./namer.js";
 import { type PipelineOptions } from "./pipeline.js";
 import { PrivacyError, scanOutput } from "./privacy.js";
 import { readPipeline, type PipelineRead } from "./resume.js";
+import type { SizeReport } from "./chunks.js";
 import { type RoadNetwork, buildRoadNetwork } from "./imports/roads.js";
 import { DEFAULT_THEME, hueFor, loadTheme, type Theme } from "./theme.js";
 import type { WorldLayout } from "../shared/format.js";
@@ -59,6 +60,8 @@ export interface BuildSummary {
   nearMisses: NearMiss[];
   /** Non-fatal problems to show the user, such as a shallow clone. */
   warnings: string[];
+  /** Compressed sizes of the site's data, against the budget. */
+  sizes: SizeReport;
   /** The Theme the names and colours came from. */
   theme: string;
 }
@@ -107,7 +110,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     private: options.private,
   });
 
-  await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, worldLayout(layout, roads, seed, widthStep), names.table, places, (staging) =>
+  const sizes = await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, worldLayout(layout, roads, seed, widthStep), names.table, places, (staging) =>
     scanOutput(staging, names.hidden),
   );
   return {
@@ -120,6 +123,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     nearMisses: names.nearMisses,
     warnings,
     theme: theme.name,
+    sizes,
   };
 }
 

@@ -6,6 +6,7 @@ import {
   EVENT_SCAFFOLD_OFF,
   EVENT_SCAFFOLD_ON,
   type Chunk,
+  type ChunkSnapshot,
 } from "../src/shared/format.js";
 import {
   type BuildingSegment,
@@ -22,12 +23,24 @@ import {
   TRANSITION_COMMITS,
 } from "../src/page/state.js";
 
-/** A chunk holding the given events, with an empty snapshot. */
-function chunkOf(events: [commit: number, file: number, kind: number, value: number][]): Chunk {
+const EMPTY_SNAPSHOT: ChunkSnapshot = {
+  file: new Uint32Array(0),
+  floors: new Uint8Array(0),
+  scaffolded: new Uint8Array(0),
+  buildingType: new Uint8Array(0),
+  language: new Uint8Array(0),
+};
+
+/** A chunk holding the given events, starting at `firstCommit` with the given snapshot. */
+function chunkOf(
+  events: [commit: number, file: number, kind: number, value: number][],
+  firstCommit = 0,
+  snapshot: ChunkSnapshot = EMPTY_SNAPSHOT,
+): Chunk {
   return {
-    formatVersion: 2,
-    firstCommit: 0,
-    snapshot: new Uint32Array(0),
+    formatVersion: 3,
+    firstCommit,
+    snapshot,
     eventCommit: Uint32Array.from(events, (e) => e[0]),
     eventFile: Uint32Array.from(events, (e) => e[1]),
     eventKind: Uint8Array.from(events, (e) => e[2]),
@@ -102,6 +115,32 @@ describe("Lots and poses", () => {
   it("uses a longer duration when the viewer's speed would make D shorter than a quarter second", () => {
     expect(durationFor(2)).toBe(TRANSITION_COMMITS); // 0.25 s at 2 commits/s is 0.5 commits: D wins
     expect(durationFor(40)).toBe(10); // 0.25 s at 40 commits/s is 10 commits
+  });
+});
+
+describe("snapshots", () => {
+  const snapshot: ChunkSnapshot = {
+    file: Uint32Array.of(0, 1),
+    floors: Uint8Array.of(4, 2),
+    scaffolded: Uint8Array.of(1, 0),
+    buildingType: Uint8Array.of(0, 0),
+    language: Uint8Array.of(0, 0),
+  };
+
+  it("starts each standing file at its snapshot Floors, from the chunk's first commit", () => {
+    const { buildings } = buildTimelines(chunkOf([[2005, 1, EVENT_FLOORS, 5]], 2000, snapshot), 2);
+
+    expect(buildings[0]![0]).toEqual({ start: 2000, kind: KIND_CHANGE, from: 4, to: 4 });
+    expect(buildingPose(buildings[1]!, 2000, TRANSITION_COMMITS)).toMatchObject({ visible: true, to: 2 });
+    expect(displayedFloors(buildings[1]![1]!, 2005)).toBe(2); // the change eases from the snapshot's two Floors
+    expect(displayedFloors(buildings[1]![1]!, 2005 + TRANSITION_COMMITS)).toBe(5);
+  });
+
+  it("starts scaffolding that is up at the snapshot, and not scaffolding that is down", () => {
+    const { scaffolds } = buildTimelines(chunkOf([], 2000, snapshot), 2);
+
+    expect(scaffolds[0]).toEqual([{ start: 2000, up: true }]);
+    expect(scaffolds[1]).toEqual([]);
   });
 });
 

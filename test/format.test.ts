@@ -12,6 +12,16 @@ import {
   encodeWorld,
 } from "../src/shared/format.js";
 
+function emptySnapshot() {
+  return {
+    file: new Uint32Array(0),
+    floors: new Uint8Array(0),
+    scaffolded: new Uint8Array(0),
+    buildingType: new Uint8Array(0),
+    language: new Uint8Array(0),
+  };
+}
+
 const emptyLayout = {
   citySeed: 0,
   widthStep: new Uint8Array(3),
@@ -41,10 +51,36 @@ describe("binary format", () => {
     expect([...world.commitDays]).toEqual([19000, 19001]);
   });
 
+  it("round-trips a snapshot's per-file state", () => {
+    const bytes = encodeChunk({
+      firstCommit: 2000,
+      snapshot: {
+        file: Uint32Array.of(3, 9),
+        floors: Uint8Array.of(4, 31),
+        scaffolded: Uint8Array.of(0, 1),
+        buildingType: Uint8Array.of(2, 5),
+        language: Uint8Array.of(0, 7),
+      },
+      eventCommit: Uint32Array.of(),
+      eventFile: Uint32Array.of(),
+      eventKind: Uint8Array.of(),
+      eventValue: Uint8Array.of(),
+    });
+
+    const chunk = decodeChunk(bytes);
+
+    expect(chunk.firstCommit).toBe(2000);
+    expect([...chunk.snapshot.file]).toEqual([3, 9]);
+    expect([...chunk.snapshot.floors]).toEqual([4, 31]);
+    expect([...chunk.snapshot.scaffolded]).toEqual([0, 1]);
+    expect([...chunk.snapshot.buildingType]).toEqual([2, 5]);
+    expect([...chunk.snapshot.language]).toEqual([0, 7]);
+  });
+
   it("round-trips event values alongside the events", () => {
     const bytes = encodeChunk({
       firstCommit: 0,
-      snapshot: Uint32Array.of(0),
+      snapshot: emptySnapshot(),
       eventCommit: Uint32Array.of(1, 1, 2, 3, 4),
       eventFile: Uint32Array.of(1, 0, 0, 0, 0),
       eventKind: Uint8Array.of(EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_SCAFFOLD_ON, EVENT_SCAFFOLD_OFF),

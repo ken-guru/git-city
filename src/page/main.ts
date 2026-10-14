@@ -1,12 +1,13 @@
 import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, PerspectiveCamera, PlaneGeometry, Scene, WebGLRenderer } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { decodeChunk, decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
+import { decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
 import { type PlacesFile, parsePlaces } from "../shared/places.js";
 import { CityBuildings } from "./buildings.js";
 import { addCountryside } from "./countryside.js";
+import { ChunkStream } from "./chunks.js";
 import { cityTitle, createDistrictLabels } from "./labels.js";
 import { LodController, settingsFor } from "./lod.js";
-import { buildTimelines, gridColumns, gridSlot, TRANSITION_COMMITS } from "./state.js";
+import { appendTimelines, buildTimelines, gridColumns, gridSlot, TRANSITION_COMMITS, type Timelines } from "./state.js";
 
 /** Tuning values for the City. The player and camera tickets replace the rest. */
 const TUNING = {
@@ -49,6 +50,10 @@ function code(text: string): HTMLElement {
   return el;
 }
 
+function showVersionNotice() {
+  showNotice("This page and its data come from different git-city versions. Rebuild the site with ", code("git-city build"));
+}
+
 async function fetchBytes(path: string, init?: RequestInit): Promise<Uint8Array> {
   const res = await fetch(path, init);
   if (!res.ok) throw new Error(`${path}: HTTP ${res.status}`);
@@ -65,15 +70,19 @@ async function main() {
   try {
     world = decodeWorld(await fetchBytes("world.bin", { cache: "no-store" }));
   } catch (e) {
-    if (e instanceof FormatVersionError) {
-      showNotice("This page and its data come from different git-city versions. Rebuild the site with ", code("git-city build"));
-      return;
-    }
+    if (e instanceof FormatVersionError) return showVersionNotice();
     throw e;
   }
-  const firstChunk = world.chunks[0];
-  if (!firstChunk) throw new Error("world.bin lists no chunks");
-  const chunk = decodeChunk(await fetchBytes(`chunks/${firstChunk.name}`));
+  if (world.chunks.length === 0) throw new Error("world.bin lists no chunks");
+  const stream = new ChunkStream(world, (name) => fetchBytes(`chunks/${name}`));
+  // The first chunk is needed to play at all; the rest stream in behind it, in order.
+  let timelines: Timelines;
+  try {
+    timelines = buildTimelines(await stream.load(0), world.fileCount);
+  } catch (e) {
+    if (e instanceof FormatVersionError) return showVersionNotice();
+    throw e;
+  }
   // Without places.json the City still plays, just without District labels.
   let places: PlacesFile | undefined;
   try {
@@ -81,10 +90,18 @@ async function main() {
   } catch (e) {
     console.warn("District names could not be loaded", e);
   }
-  play(world, buildTimelines(chunk, world.fileCount), places);
+  play(world, timelines, stream, places);
+  stream
+    .loadAll((index, chunk) => {
+      if (index > 0) appendTimelines(timelines, chunk);
+    })
+    .catch((e: unknown) => {
+      if (e instanceof FormatVersionError) return showVersionNotice();
+      console.error("History stopped loading", e);
+    });
 }
 
-function play(world: World, timelines: ReturnType<typeof buildTimelines>, places?: PlacesFile) {
+function play(world: World, timelines: Timelines, stream: ChunkStream, places?: PlacesFile) {
   const commitCount = world.commitDays.length;
   const endTime = commitCount - 1 + TRANSITION_COMMITS;
   const columns = gridColumns(world.fileCount);
@@ -184,7 +201,9 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>, places
     city.update(t, TUNING.commitsPerSecond);
     const commit = Math.min(commitCount - 1, Math.max(0, Math.floor(t)));
     const day = new Date(world.commitDays[commit]! * SECONDS_PER_DAY * 1000).toISOString().slice(0, 10);
-    status.textContent = `Commit ${commit + 1} of ${commitCount} · ${day}`;
+    status.textContent = Math.floor(t) > stream.loadedThrough()
+      ? "Loading this part of history…"
+      : `Commit ${commit + 1} of ${commitCount} · ${day}`;
   }
 
   renderer.setAnimationLoop((now) => {
@@ -192,7 +211,10 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>, places
     const seconds = Math.min(0.1, (now - last) / 1000);
     last = now;
     if (playing) {
-      time = Math.min(endTime, time + seconds * TUNING.commitsPerSecond);
+      // The City holds at the last commit that has loaded, and carries on when the next chunk arrives.
+      const loaded = stream.loadedThrough();
+      const limit = loaded >= commitCount - 1 ? endTime : loaded;
+      time = Math.min(limit, time + seconds * TUNING.commitsPerSecond);
       if (time >= endTime) setPlaying(false);
     }
     draw(time);
