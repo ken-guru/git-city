@@ -5,9 +5,11 @@ import {
   type ClusterSummary,
   chooseFocus,
   easeToward,
+  establishingFrame,
   FOLLOW_WINDOW,
   type Frame,
   frameFor,
+  landCentreOf,
   SHOWCASE_WINDOW,
   type StintInput,
   showcasePlan,
@@ -286,7 +288,6 @@ function play(
   // The camera's automatic moves: following the changes during playback, and the postcard showcase at the latest commit.
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
   const director = new CameraDirector(true);
-  const home = { position: camera.position.clone(), aim: new Vector3(0, 0, 0) };
   const stints: StintInput[] = Array.from({ length: world.stints.file.length }, (_, stint) => {
     const lot = world.stints.lot[stint]!;
     return { segments: timelines.buildings[stint]!, spot: placeLot(world, lot), block: world.lots.block[lot]! };
@@ -317,7 +318,7 @@ function play(
   let focus: number | undefined;
   let focusedCommit = -1;
   let focusSummaries = new Map<number, ClusterSummary>();
-  let postcards: { frames: Frame[]; names: string[] } | undefined;
+  let shots: { frames: Frame[]; names: (string | undefined)[] } | undefined;
   let caption: string | undefined;
   function setCaption(name: string | undefined) {
     if (name === caption) return;
@@ -348,29 +349,33 @@ function play(
     camera.position.add(to.clone().sub(from));
     controls.target.copy(to);
   }
-  /** The postcards: the establishing shot, then the busiest Districts' standing Buildings, planned once history is complete. */
+  /**
+   * The shots: the establishing shot over the standing Buildings, then the busiest Districts, planned once history is
+   * complete. The land's centre is the middle of the layout's Blocks and villages (the standing Buildings if there is none).
+   */
   function showcaseShots() {
-    if (!postcards) {
-      const facts = buildingFacts(stints, ownerOf, commitCount - 1, durationFor(player.stepsPerSecond()), SHOWCASE_WINDOW);
-      const plan = showcasePlan([...summarise(facts).values()], nameOf);
-      postcards = { frames: plan.map((p) => frameFor(p.summary, { x: 0, z: 0 })), names: plan.map((p) => p.name) };
+    if (!shots) {
+      const latest = buildingFacts(stints, ownerOf, commitCount - 1, durationFor(player.stepsPerSecond()), SHOWCASE_WINDOW);
+      const layout = [...blockSites(world), ...villageSites(world)].map((p) => ({ x: p.x * BLOCK_WORLD, z: p.z * BLOCK_WORLD }));
+      const land = landCentreOf(layout) ?? landCentreOf(latest.filter((f) => f.standing)) ?? { x: 0, z: 0 };
+      const plan = showcasePlan([...summarise(latest).values()], nameOf);
+      const establishing = establishingFrame(latest, land).frame;
+      shots = {
+        frames: [establishing, ...plan.map((p) => frameFor(p.summary, land))],
+        names: [undefined, ...plan.map((p) => p.name)],
+      };
     }
-    return postcards;
+    return shots;
   }
   function showcaseCamera(now: number) {
     const { frames, names } = showcaseShots();
-    const { shot, progress } = shotAt(director.showcaseTime(now), frames.length + 1, reducedMotion);
-    if (shot === 0) {
-      camera.position.copy(home.position);
-      controls.target.copy(home.aim);
-      setCaption(undefined);
-    } else {
-      const frame = frames[shot - 1]!;
-      const position = shotPose(frame, progress, reducedMotion);
-      camera.position.set(position.x, position.y, position.z);
-      controls.target.set(frame.aim.x, frame.aim.y, frame.aim.z);
-      setCaption(names[shot - 1]);
-    }
+    const { shot, progress } = shotAt(director.showcaseTime(now), frames.length, reducedMotion);
+    const frame = frames[shot]!;
+    // The establishing shot holds still; each postcard pushes in.
+    const position = shotPose(frame, shot === 0 ? 0 : progress, reducedMotion);
+    camera.position.set(position.x, position.y, position.z);
+    controls.target.set(frame.aim.x, frame.aim.y, frame.aim.z);
+    setCaption(names[shot]);
     camera.lookAt(controls.target);
   }
 

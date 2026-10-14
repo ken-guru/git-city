@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  type BuildingFact,
   buildingFacts,
   CameraDirector,
   chooseFocus,
   type ClusterSummary,
   countChanges,
   easeToward,
+  establishingFrame,
   frameFor,
+  landCentreOf,
   SHOT_SECONDS,
   showcasePlan,
   type StintInput,
@@ -226,5 +229,65 @@ describe("CameraDirector", () => {
     expect(d.mode(12, latest)).toBe("showcase");
     expect(d.mode(13, playing)).toBe("follow");
     expect(d.mode(14, latest)).toBe("free");
+  });
+});
+
+describe("landCentreOf", () => {
+  it("is the centre of the bounds of the points, wherever the City sits", () => {
+    expect(
+      landCentreOf([
+        { x: 100, z: 50 },
+        { x: 120, z: 50 },
+        { x: 110, z: 62 },
+      ]),
+    ).toEqual({ x: 110, z: 56 });
+  });
+
+  it("is undefined with no points", () => {
+    expect(landCentreOf([])).toBeUndefined();
+  });
+});
+
+describe("establishingFrame", () => {
+  const standing = (x: number, z: number, floors: number): BuildingFact => ({
+    cluster: 1,
+    x,
+    z,
+    height: 0.2 + floors,
+    standing: true,
+    changes: 0,
+  });
+
+  it("aims at the centre of the bounds of the standing Buildings and contains each of them", () => {
+    const facts = [standing(0, 0, 2), standing(10, 0, 2), standing(0, 6, 4), { ...standing(50, 50, 9), standing: false }];
+    const { frame, radius } = establishingFrame(facts, { x: 0, z: 0 });
+    expect(frame.aim.x).toBeCloseTo(5);
+    expect(frame.aim.z).toBeCloseTo(3);
+    for (const f of facts.filter((b) => b.standing)) {
+      expect(Math.hypot(f.x - frame.aim.x, f.height / 2 - frame.aim.y, f.z - frame.aim.z)).toBeLessThanOrEqual(radius + 1e-9);
+    }
+    expect(frame.position.y).toBeCloseTo(1.5 + 0.15 * radius);
+  });
+
+  it("does not depend on the order of the Buildings", () => {
+    const facts = [standing(0, 0, 2), standing(10, 0, 2), standing(0, 6, 4)];
+    const a = establishingFrame(facts, { x: 0, z: 0 });
+    const b = establishingFrame([...facts].reverse(), { x: 0, z: 0 });
+    expect(b).toEqual(a);
+  });
+
+  it("sets back towards the land's centre, which may sit away from the origin", () => {
+    const facts = [standing(130, 50, 2), standing(134, 50, 2)];
+    const { frame } = establishingFrame(facts, { x: 110, z: 50 });
+    expect(frame.position.x).toBeLessThan(frame.aim.x);
+    expect(frame.position.z).toBeCloseTo(50);
+  });
+});
+
+describe("postcards around an offset land centre", () => {
+  it("sets a postcard back towards the land's own centre, not the origin", () => {
+    const frame = frameFor(summary(1, 5, 4, { x: 130, z: 50, aimY: 4, radius: 10 }), { x: 110, z: 50 });
+    expect(frame.position.x).toBeCloseTo(130 - 21);
+    expect(frame.position.z).toBeCloseTo(50);
   });
 });

@@ -152,8 +152,6 @@ export function summarise(facts: readonly BuildingFact[]): Map<number, ClusterSu
     const x = pool.reduce((sum, f) => sum + f.x, 0) / pool.length;
     const z = pool.reduce((sum, f) => sum + f.z, 0) / pool.length;
     const aimY = standing.length > 0 ? standing.reduce((sum, f) => sum + f.height, 0) / standing.length : 0;
-    let radius = 0;
-    for (const f of pool) radius = Math.max(radius, Math.hypot(f.x - x, f.height / 2 - aimY, f.z - z));
     summaries.set(cluster, {
       cluster,
       changes: list.reduce((sum, f) => sum + f.changes, 0),
@@ -161,7 +159,7 @@ export function summarise(facts: readonly BuildingFact[]): Map<number, ClusterSu
       x,
       z,
       aimY,
-      radius,
+      radius: radiusAround(pool, x, aimY, z),
     });
   }
   return summaries;
@@ -218,6 +216,43 @@ export function frameFor(summary: ClusterSummary, land: { x: number; z: number }
     aim: { x: summary.x, y: summary.aimY, z: summary.z },
     position: { x: summary.x + dx * setback, y: HEIGHT_BASE + HEIGHT_PER_RADIUS * r, z: summary.z + dz * setback },
   };
+}
+
+/** The centre of the bounds of some points, or undefined when there are none. */
+export function landCentreOf(points: readonly { x: number; z: number }[]): { x: number; z: number } | undefined {
+  if (points.length === 0) return undefined;
+  let minX = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let minZ = Number.POSITIVE_INFINITY;
+  let maxZ = Number.NEGATIVE_INFINITY;
+  for (const p of points) {
+    minX = Math.min(minX, p.x);
+    maxX = Math.max(maxX, p.x);
+    minZ = Math.min(minZ, p.z);
+    maxZ = Math.max(maxZ, p.z);
+  }
+  return { x: (minX + maxX) / 2, z: (minZ + maxZ) / 2 };
+}
+
+/**
+ * The establishing shot: the bounds of the standing Buildings, framed with the postcard rules. The radius is
+ * the distance from the aim to the furthest standing Building's middle, so the frame contains every one of them.
+ * With no standing Building it is a frame on the land's centre.
+ */
+export function establishingFrame(facts: readonly BuildingFact[], land: { x: number; z: number }): { frame: Frame; radius: number } {
+  const standing = facts.filter((f) => f.standing);
+  const bounds = landCentreOf(standing) ?? { x: land.x, z: land.z };
+  const aimY = standing.length > 0 ? standing.reduce((sum, f) => sum + f.height, 0) / standing.length : 0;
+  const radius = radiusAround(standing, bounds.x, aimY, bounds.z);
+  const frame = frameFor({ cluster: -1, changes: 0, standing: standing.length, x: bounds.x, z: bounds.z, aimY, radius }, land);
+  return { frame, radius };
+}
+
+/** The distance from an aim point to the furthest Building's middle (SPEC §11: about Building height). */
+function radiusAround(list: readonly BuildingFact[], x: number, aimY: number, z: number): number {
+  let radius = 0;
+  for (const f of list) radius = Math.max(radius, Math.hypot(f.x - x, f.height / 2 - aimY, f.z - z));
+  return radius;
 }
 
 /** The camera's place within a postcard at `progress` (0 to 1): a slow push-in towards the aim. Reduced motion holds the start. */
