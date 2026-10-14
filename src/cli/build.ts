@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CacheSession } from "./cache.js";
 import { loadConfig } from "./config.js";
@@ -17,6 +17,7 @@ import { type RoadNetwork, buildRoadNetwork } from "./imports/roads.js";
 import { DEFAULT_THEME, hueFor, loadTheme, type Theme } from "./theme.js";
 import type { WorldLayout } from "../shared/format.js";
 import { writeSite } from "./write.js";
+import { scaleWarnings } from "./report.js";
 
 /** The pre-built page, shipped at `dist/page/` next to the CLI. */
 export const DEFAULT_PAGE_DIR = fileURLToPath(new URL("../page/", import.meta.url));
@@ -45,6 +46,8 @@ export interface BuildOptions {
   fresh?: boolean;
   /** `--wait`: wait for another run to finish instead of failing. */
   wait?: boolean;
+  /** Called as each phase starts, for progress output. */
+  onPhase?: (phase: string) => void;
 }
 
 export interface BuildSummary {
@@ -64,6 +67,10 @@ export interface BuildSummary {
   sizes: SizeReport;
   /** The Theme the names and colours came from. */
   theme: string;
+  /** Whether git ignores the output folder; undefined when it lies outside the repository. */
+  outputIgnored?: boolean;
+  /** The output folder relative to the repository, with a trailing slash, for the .gitignore hint. */
+  outputIgnoreEntry?: string;
 }
 
 export async function build(options: BuildOptions): Promise<BuildSummary> {
@@ -82,6 +89,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
 
   const cache = await CacheSession.open(options.repoDir, { fresh: options.fresh, wait: options.wait });
   let read: PipelineRead;
+  options.onPhase?.("Reading history");
   try {
     read = await readPipeline(options.repoDir, head, branch, cache, pipelineOptions(options.repoDir, seed, theme));
     await cache.checkpoint(branch, head, read.pipeline.runState(), read.pipeline.layout.snapshot(), new Set(read.chain), read.missingBlobs);
@@ -93,6 +101,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   }
   const { pipeline } = read;
   const data = pipeline.timeline.result();
+  options.onPhase?.("Naming");
   const names = nameFiles(data.filePaths, config, { private: options.private });
   if (options.strict && names.nearMisses.length > 0) {
     throw new PrivacyError(
@@ -110,9 +119,14 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     private: options.private,
   });
 
+  options.onPhase?.("Writing site");
   const sizes = await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, worldLayout(layout, roads, seed, widthStep), names.table, places, (staging) =>
     scanOutput(staging, names.hidden),
   );
+  warnings.push(...scaleWarnings(layout.lots.length, sizes));
+  const entry = relative(options.repoDir, outDir);
+  const inside = entry !== "" && !entry.startsWith("..") && !isAbsolute(entry);
+  const outputIgnoreEntry = inside ? `${entry.split(sep).join("/")}/` : undefined;
   return {
     branch,
     commits: data.commitDays.length,
@@ -124,6 +138,8 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     warnings,
     theme: theme.name,
     sizes,
+    outputIgnored: inside ? (await gitMaybe(options.repoDir, ["check-ignore", "-q", "--", entry])) !== undefined : undefined,
+    outputIgnoreEntry,
   };
 }
 

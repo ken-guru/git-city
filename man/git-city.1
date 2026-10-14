@@ -1,0 +1,118 @@
+.TH GIT-CITY 1 "" "git-city" "User Commands"
+.SH NAME
+git-city \- turn a git history into an animated 3D city
+.SH SYNOPSIS
+.B git city
+[\fIbuild\fR] [\fIoptions\fR]
+.br
+.B git city init
+[\fB\-\-shared\fR]
+.br
+.B git city serve
+[\fIdir\fR] [\fB\-\-port\fR \fIn\fR] [\fB\-\-open\fR]
+.br
+.B git city audit
+[\fIdir\fR]
+.br
+.B git city cache
+\fBstatus\fR|\fBclear\fR
+.SH DESCRIPTION
+git-city reads a repository's history and writes a static site with an animated 3D city: each file is a building, each
+folder a district, each contributor a block of time. Names are hidden unless a config rule reveals them.
+.PP
+Each command also runs as \fBgit city\fR, which is how git finds it.
+.SH COMMANDS
+.TP
+.B build
+Build the site (the default command). Resumes from the cache when it can.
+.TP
+.B init [--shared]
+Write a commented starter config. By default it is the personal config under the git directory, which is never
+committed. \fB\-\-shared\fR writes \fIgit-city.config.jsonc\fR at the repository root, to be committed. It lists the
+detected Modules, External Dependencies and Themes, and refuses to overwrite an existing config.
+.TP
+.B serve [dir]
+Serve a built site on localhost only. Without \fB\-\-port\fR it uses the first free port from 4173 up. The world file
+is never cached.
+.TP
+.B audit [dir]
+List every string in a built site, one per line, as id and text.
+.TP
+.B cache status|clear
+Inspect or remove the build cache in \fI.git/git-city/\fR.
+.SH OPTIONS
+.TP
+.BI \-C " path"
+Run as if started in \fIpath\fR.
+.TP
+.BI \-\-branch " name"
+Read this branch instead of the default branch.
+.TP
+.BI \-\-out " dir"
+Output folder (default \fIgit-city-site/\fR).
+.TP
+.BI \-\-config " path"
+Read this config file instead of the shared and personal configs.
+.TP
+.B \-\-strict
+Fail the build on near-miss names (exit code 2).
+.TP
+.B \-\-private
+Ignore every reveal in the config.
+.TP
+.BI \-\-theme " name"
+The Theme for names and colours: \fImodern\fR or \fImedieval\fR.
+.TP
+.BI \-\-seed " text"
+The seed for Generated names; overrides \fInaming.seed\fR.
+.TP
+.B \-\-fresh
+Rebuild the cache from scratch.
+.TP
+.B \-\-wait
+Wait for another running build instead of failing.
+.TP
+.B \-\-json
+Print the build result as JSON on standard output.
+.TP
+.B \-\-quiet
+Print nothing on success. Warnings and errors are still shown.
+.TP
+.BI \-\-port " n"
+Port for \fBserve\fR, used exactly.
+.TP
+.B \-\-open
+Open the served site in the browser (\fBserve\fR).
+.TP
+.B \-h, \-\-help
+Show help.
+.TP
+.B \-v, \-\-version
+Show the version.
+.PP
+Flags only make the output more private. When a flag and the config set the same thing, the flag wins.
+.SH EXIT STATUS
+.TP
+.B 0
+Success, possibly with warnings.
+.TP
+.B 1
+Error.
+.TP
+.B 2
+The privacy check failed.
+.TP
+.B 3
+Another run holds the lock (use \fB\-\-wait\fR to wait for it).
+.SH FILES
+.TP
+.I git-city.config.jsonc
+Shared config at the repository root, committed.
+.TP
+.I .git/git-city/config.jsonc
+Personal config, never committed. Its rules come last.
+.TP
+.I .git/git-city/
+Build cache.
+.SH SEE ALSO
+git(1)

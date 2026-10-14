@@ -7,9 +7,10 @@ import { build } from "./build.js";
 import { cacheClear, cacheStatus, CacheError, LockError } from "./cache.js";
 import { ConfigError } from "./config.js";
 import { HistoryError } from "./history.js";
-import { describeSizes } from "./chunks.js";
 import { PrivacyError } from "./privacy.js";
-import { DEFAULT_PORT, DEFAULT_PORT_ATTEMPTS, serve, ServeError } from "./serve.js";
+import { DEFAULT_PORT, DEFAULT_PORT_ATTEMPTS, openInBrowser, serve, ServeError } from "./serve.js";
+import { InitError, initConfig } from "./init.js";
+import { buildJson, formatBuildLine, formatBuildSummary } from "./report.js";
 import { OutputError } from "./write.js";
 
 const DEFAULT_OUT = "git-city-site";
@@ -20,35 +21,48 @@ const EXIT_PRIVACY = 2;
 const EXIT_LOCKED = 3;
 
 const HELP = `Usage: git-city [build] [options]
-       git-city serve [dir] [--port <n>]
+       git-city init [--shared]
+       git-city serve [dir] [--port <n>] [--open]
        git-city audit [dir]
+       git-city cache status|clear
 
 Turns this repository's git history into an animated 3D City.
+Each command also runs as \`git city ...\`. The man page is git-city(1).
 
 Commands:
-  build          build the site (the default)
-  serve [dir]    serve a built site on localhost (default dir: ${DEFAULT_OUT})
-  audit [dir]    list every string in a built site (default dir: ${DEFAULT_OUT})
-  cache status|clear  inspect or remove the build cache in .git/git-city/
+  build              build the site (the default)
+  init               write a commented starter config (personal by default)
+                     listing the detected Modules, External Dependencies and Themes
+  serve [dir]        serve a built site on localhost (default dir: ${DEFAULT_OUT})
+  audit [dir]        list every string in a built site (default dir: ${DEFAULT_OUT})
+  cache status|clear inspect or remove the build cache in .git/git-city/
 
 Options:
   -C <path>        run as if started in <path>
   --branch <name>  read this branch instead of the default branch
   --out <dir>      output folder (default: ${DEFAULT_OUT})
   --config <path>  read this config file instead of the shared and personal configs
+  --shared         (init) write the shared config at the repo root instead
   --strict         fail the build on near-miss names
   --private        ignore every reveal in the config
   --theme <name>   the Theme for names and colours: modern or medieval
   --seed <text>    the seed for Generated names (overrides naming.seed)
   --fresh          rebuild the cache from scratch
   --wait           wait for another running build instead of failing
+  --json           print the build result as JSON on stdout
+  --quiet          print nothing on success (warnings and errors still show)
   --port <n>       port for serve, used exactly (default: the first free port
                    from ${DEFAULT_PORT} to ${DEFAULT_PORT + DEFAULT_PORT_ATTEMPTS - 1})
+  --open           (serve) open the site in the browser
   -h, --help       show this help
   -v, --version    show the version
 
+Flags only make the output more private; when a flag and the config set the same thing, the flag wins.
 Exit codes: 0 success, 1 error, 2 privacy check failed, 3 another run holds the lock.
 `;
+
+/** Progress line for an interactive terminal: each phase overwrites the last on stderr. */
+const CLEAR_LINE = "\r\x1b[2K";
 
 function version(): string {
   const pkg = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as { version: string };
@@ -71,6 +85,10 @@ async function main(argv: string[]): Promise<number> {
       fresh: { type: "boolean" },
       wait: { type: "boolean" },
       port: { type: "string" },
+      json: { type: "boolean" },
+      quiet: { type: "boolean" },
+      shared: { type: "boolean" },
+      open: { type: "boolean" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },
@@ -88,32 +106,38 @@ async function main(argv: string[]): Promise<number> {
   const [command = "build", ...rest] = positionals;
 
   if (command === "build" && rest.length === 0) {
-    const summary = await build({
-      repoDir: cwd,
-      outDir: resolve(cwd, values.out ?? DEFAULT_OUT),
-      branch: values.branch,
-      configPath: values.config === undefined ? undefined : resolve(cwd, values.config),
-      strict: values.strict,
-      private: values.private,
-      theme: values.theme,
-      seed: values.seed,
-      fresh: values.fresh,
-      wait: values.wait,
-    });
-    for (const warning of summary.warnings) process.stderr.write(`git-city: warning: ${warning}\n`);
-    const lines =[`Built ${summary.commits} commits and ${summary.files} files from ${summary.branch} into ${summary.outDir}`];
-    if (summary.revealed.length > 0) {
-      lines.push(`Revealed ${summary.revealed.length} name${summary.revealed.length === 1 ? "" : "s"}:`);
-      for (const r of summary.revealed) lines.push(`  ${r.text}`);
-    } else lines.push("Revealed 0 names.");
-    for (const miss of summary.nearMisses) {
-      lines.push(`Near-miss: "${miss.text}" is close to a hidden name or Concept (use --strict to fail on these)`);
+    // Progress and the full summary are for a person at a terminal; CI gets one line.
+    const interactive = process.stdout.isTTY === true && process.env.CI === undefined;
+    const progress = interactive && values.quiet !== true && values.json !== true;
+    let summary: Awaited<ReturnType<typeof build>>;
+    try {
+      summary = await build({
+        repoDir: cwd,
+        outDir: resolve(cwd, values.out ?? DEFAULT_OUT),
+        branch: values.branch,
+        configPath: values.config === undefined ? undefined : resolve(cwd, values.config),
+        strict: values.strict,
+        private: values.private,
+        theme: values.theme,
+        seed: values.seed,
+        fresh: values.fresh,
+        wait: values.wait,
+        onPhase: progress ? (phase) => process.stderr.write(`${CLEAR_LINE}git-city: ${phase}...`) : undefined,
+      });
+    } finally {
+      if (progress) process.stderr.write(CLEAR_LINE);
     }
-    lines.push(`Theme: ${summary.theme}`);
-    lines.push(...describeSizes(summary.sizes));
-    if (summary.configSources.length > 0) lines.push(`Config: ${summary.configSources.join(", ")}`);
-    lines.push(`Run "git-city serve" to watch it.`);
-    process.stdout.write(`${lines.join("\n")}\n`);
+    for (const warning of summary.warnings) process.stderr.write(`git-city: warning: ${warning}\n`);
+    if (values.json) process.stdout.write(`${buildJson(summary)}\n`);
+    else if (values.quiet) return 0;
+    else if (interactive) process.stdout.write(formatBuildSummary(summary));
+    else process.stdout.write(`${formatBuildLine(summary)}\n`);
+    return 0;
+  }
+
+  if (command === "init" && rest.length === 0) {
+    const written = await initConfig(cwd, { shared: values.shared === true });
+    if (values.quiet !== true) process.stdout.write(`Wrote ${written}\n`);
     return 0;
   }
 
@@ -141,6 +165,7 @@ async function main(argv: string[]): Promise<number> {
     const server = await serve({ dir: resolve(cwd, rest[0] ?? values.out ?? DEFAULT_OUT), port, portAttempts });
     if (new URL(server.url).port !== String(port)) process.stdout.write(`Port ${port} is in use.\n`);
     process.stdout.write(`Serving at ${server.url} (Ctrl+C to stop)\n`);
+    if (values.open) openInBrowser(server.url);
     await new Promise<void>((done) => process.once("SIGINT", done).once("SIGTERM", done));
     await server.close();
     return 0;
@@ -162,6 +187,7 @@ main(process.argv.slice(2)).then(
       e instanceof ServeError ||
       e instanceof ConfigError ||
       e instanceof AuditError ||
+      e instanceof InitError ||
       e instanceof CacheError ||
       e instanceof LockError ||
       e instanceof PrivacyError;

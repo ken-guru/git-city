@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer, type Server as HttpServer } from "node:http";
@@ -104,4 +105,23 @@ export async function serve(options: { dir: string; port?: number; portAttempts?
     url: `http://localhost:${port}/`,
     close: () => new Promise((done, fail) => server.close((e) => (e ? fail(e) : done()))),
   };
+}
+
+/** The command that opens a URL in the user's browser on this platform, as [command, args]. */
+export function browserCommand(platform: NodeJS.Platform, url: string): [string, string[]] {
+  if (platform === "darwin") return ["open", [url]];
+  if (platform === "win32") return ["cmd", ["/c", "start", "", url]];
+  return ["xdg-open", [url]];
+}
+
+/** Opens the URL in the browser. Best effort: a missing opener is not an error, the URL is printed anyway. */
+export function openInBrowser(url: string): void {
+  const [command, args] = browserCommand(process.platform, url);
+  try {
+    const child = spawn(command, args, { detached: true, stdio: "ignore" });
+    child.on("error", () => undefined);
+    child.unref();
+  } catch {
+    // The URL is already printed; nothing more to do.
+  }
 }
