@@ -9,6 +9,8 @@ export class TimelineBuilder {
   private readonly days: number[] = [];
   private readonly standing = new Map<string, number>();
   private nextFile = 0;
+  /** The path each file id was born with, indexed by file id. */
+  private readonly filePaths: string[] = [];
   private readonly eventCommit: number[] = [];
   private readonly eventFile: number[] = [];
   private readonly eventKind: EventKind[] = [];
@@ -26,6 +28,7 @@ export class TimelineBuilder {
       const previous = this.standing.get(path);
       if (previous !== undefined) this.event(seq, previous, EVENT_DELETE);
       const file = this.nextFile++;
+      this.filePaths.push(path);
       this.standing.set(path, file);
       this.event(seq, file, EVENT_ADD);
     }
@@ -35,6 +38,8 @@ export class TimelineBuilder {
     return {
       commitDays: Int32Array.from(this.days),
       fileCount: this.nextFile,
+      /** Names are made from these and never leave the CLI: only the naming step writes text. */
+      filePaths: [...this.filePaths],
       eventCommit: Uint32Array.from(this.eventCommit),
       eventFile: Uint32Array.from(this.eventFile),
       eventKind: Uint8Array.from(this.eventKind),
