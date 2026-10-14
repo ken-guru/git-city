@@ -193,7 +193,7 @@ export class ExternalRegistry {
 /** Groups declarations by ecosystem and group key, counting distinct members and declaration entries. */
 function groupsOf(declarations: readonly Declaration[]): ExternalCity[] {
   const distinct = new Map<string, Declaration>();
-  for (const d of declarations) distinct.set(nameId(d), d);
+  for (const d of declarations) if (!distinct.has(nameId(d))) distinct.set(nameId(d), d);
   const list = [...distinct.values()];
   const groups = new Map<string, ExternalCity>();
   for (const d of list) {
@@ -219,8 +219,9 @@ function groupId(g: Pick<ExternalCity, "key" | "ecosystem">): string {
   return `${g.ecosystem}\u0000${g.key}`;
 }
 
+/** Identity of a declared name: its matched form, so `Foo_Bar` and `foo-bar` are one dependency. */
 function nameId(d: Declaration): string {
-  return `${d.ecosystem}\u0000${d.name}`;
+  return importerKey(d.ecosystem, d.name);
 }
 
 function checkedThreshold(threshold: number | undefined): number {
@@ -266,7 +267,7 @@ function pyprojectDeclared(text: string): string[] {
   let table = "";
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!.trim();
-    const header = /^\[\s*([^\]]+?)\s*\]$/.exec(line);
+    const header = /^\[\[?\s*([^\]]+?)\s*\]\]?$/.exec(line);
     if (header) {
       table = header[1]!.replace(/\s+/g, "");
       continue;
@@ -336,7 +337,7 @@ export interface ExternalReport {
 
 /** The `importers` key for a declaration, as `externalReport` reads it. */
 export function importerKey(ecosystem: Ecosystem, name: string): string {
-  return `${ecosystem}\u0000${name}`;
+  return `${ecosystem}\u0000${matchName(ecosystem, name)}`;
 }
 
 /**
@@ -351,7 +352,7 @@ export function externalReport(
   const plan = planExternals(declarations, options);
   const cityIds = new Set(plan.cities.map(groupId));
   const distinct = new Map<string, Declaration>();
-  for (const d of declarations) distinct.set(nameId(d), d);
+  for (const d of declarations) if (!distinct.has(nameId(d))) distinct.set(nameId(d), d);
   const list = [...distinct.values()];
   const dependencies = list
     .map((d): DependencyReport => {

@@ -219,7 +219,9 @@ export async function externalsReport(repoDir: string, head: string, graph: { im
   const declarations: Declaration[] = [];
   for (const path of listed.split("\n")) {
     if (path === "" || !isManifestPath(path)) continue;
-    declarations.push(...declarationsOf(path, await git(repoDir, ["show", `${head}:${path}`])));
+    // A manifest whose blob cannot be read (a partial clone) declares nothing, as the import graph counts it empty.
+    const text = await gitMaybe(repoDir, ["show", `${head}:${path}`]);
+    if (text !== undefined) declarations.push(...declarationsOf(path, text));
   }
   const match = declarationIndex(declarations);
   const importers = new Map<string, number>();

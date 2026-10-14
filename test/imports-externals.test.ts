@@ -154,6 +154,19 @@ describe("the registry", () => {
   });
 });
 
+describe("matched identity", () => {
+  it("counts a Python name declared in two spellings once, the import matching both", () => {
+    const declared = [decl("python", "Foo_Bar", "a"), decl("python", "foo-bar", "b")];
+    const report = externalReport(declared, new Map([[importerKey("python", "foo_bar"), 2]]));
+    expect(report.dependencies.map((d) => [d.name, d.importers, d.lanes])).toEqual([["Foo_Bar", 2, 2]]);
+  });
+
+  it("reads keys under an array-of-tables header as their own table", () => {
+    const text = ['[[tool.poetry.source]]', 'name = "x"', '[project]', 'dependencies = ["real"]'].join("\n");
+    expect(declarationsOf("pyproject.toml", text).map((d) => d.name)).toEqual(["real"]);
+  });
+});
+
 describe("the dependency report for the build summary", () => {
   it("lists every declared dependency with its City or the Outskirts, and Highway Lanes at least 1 each way", () => {
     const declared = [decl("npm", "@babel/core"), decl("npm", "@babel/cli"), decl("npm", "babel-loader"), decl("npm", "left-pad"), decl("python", "Foo_Bar")];
