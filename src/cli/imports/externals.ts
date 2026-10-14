@@ -116,6 +116,8 @@ export interface ExternalPlan {
   cities: ExternalCity[];
   /** Every member of a group that did not get a City, sorted. */
   outskirts: string[];
+  /** The `importerKey` of each Outskirts member, sorted: the identity a declaration is matched and counted by. */
+  outskirtKeys: string[];
 }
 
 export interface PlanOptions {
@@ -138,11 +140,10 @@ export function planExternals(declarations: readonly Declaration[], options: Pla
   const qualifying = groups.filter((g) => g.members.length >= threshold).sort(byRank);
   const cities = qualifying.slice(0, MAX_CITIES);
   const cityIds = new Set(cities.map(groupId));
-  const outskirts = groups
-    .filter((g) => !cityIds.has(groupId(g)))
-    .flatMap((g) => g.members)
-    .sort();
-  return { cities, outskirts };
+  const small = groups.filter((g) => !cityIds.has(groupId(g)));
+  const outskirts = small.flatMap((g) => g.members).sort();
+  const outskirtKeys = small.flatMap((g) => g.members.map((m) => importerKey(g.ecosystem, m))).sort();
+  return { cities, outskirts, outskirtKeys };
 }
 
 /** A span in which a manifest declares a dependency: from the commit it was added to the commit it was removed (undefined while open). */

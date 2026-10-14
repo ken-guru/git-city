@@ -272,6 +272,52 @@ export function namePlaces(districts: readonly PlaceInput[], config: Config, opt
   return { file, [SEALED]: true } as PlaceTable;
 }
 
+/** The naming step's options for External Cities (SPEC §8): the same Theme and seed as the places, and the same leak checks. */
+export interface ExternalNameOptions extends NameOptions {
+  theme: Theme;
+  /** The seed text for Generated names. Never written to the output. */
+  seed: string;
+  /** The hidden terms: every Generated name must avoid them, and so must the Real names of Cities that are not revealed. */
+  hidden: readonly string[];
+  /** Names already in the City (Districts, the City itself): a Generated name must differ from them. */
+  taken: readonly string[];
+}
+
+export interface ExternalName {
+  name: string;
+  /** Index in NAME_SOURCES. */
+  source: number;
+}
+
+/**
+ * The display names of External Cities, one per key in order. An External City gets a proper name only (SPEC §8): its
+ * Pseudonym, or its Real name when revealed, or else a Generated name from the Namer. Only the Real name of a revealed
+ * City ever reaches the output.
+ */
+export function nameExternals(keys: readonly string[], config: Config, options: ExternalNameOptions): ExternalName[] {
+  const ignoreReveal = options.private === true;
+  const { pseudonymConcepts, hiddenConcepts } = conceptPolicies(config.rules, ignoreReveal);
+  const hidden = [...options.hidden];
+  const taken = new Set(options.taken.map((name) => name.toLowerCase()));
+  const leaks = (text: string) => containsAny(text, hidden) || findNearMisses(text, hidden).length > 0;
+  const accept = (candidate: string) => !taken.has(candidate.toLowerCase()) && !leaks(candidate);
+  const namer = new ThemeNamer({ theme: options.theme, seed: options.seed, accept, leaks });
+  return keys.map((key, i) => {
+    const policy = resolveItem(config.rules, { external: key }, { ignoreReveal });
+    const pseudonym = policy.name.mode === "pseudonym" ? replaceConcepts(policy.name.as, pseudonymConcepts) : undefined;
+    let real: string | undefined;
+    if (policy.name.mode === "reveal") {
+      const candidate = replaceConcepts(key, pseudonymConcepts);
+      if (!containsAny(candidate, hiddenConcepts)) real = candidate;
+    }
+    // Birth order 0 is the City itself, so External Cities count from 1.
+    const generated = pseudonym === undefined && real === undefined ? namer.name({ kind: "city", birthOrder: i + 1, role: null }) : undefined;
+    const shown = displayName({ pseudonym, real, generated, label: `External City ${i + 1}` });
+    taken.add(shown.text.toLowerCase());
+    return { name: shown.text, source: sourceIndex(shown.source) };
+  });
+}
+
 /** Index of a name's source in NAME_SOURCES. A label is never a place's name, so it counts as generated. */
 function sourceIndex(source: "pseudonym" | "real" | "generated" | "label"): number {
   return NAME_SOURCES.indexOf(source === "label" ? "generated" : source);

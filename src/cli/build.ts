@@ -18,6 +18,7 @@ import { DEFAULT_THEME, hueFor, loadTheme, type Theme } from "./theme.js";
 import { type StepEra, type StepLevel, chooseStepLevel, groupTimeline, PEAK_BUILDINGS_WARNING, peakStanding, planSteps, recentFromFor, stepEras } from "./steps.js";
 import type { StintTable, WorldLayout } from "../shared/format.js";
 import { encodeSiteWorld, writeSite } from "./write.js";
+import { externalCities } from "./external-cities.js";
 import { declarationIndex, externalReport, ExternalRegistry, importerKey, type ExternalReport, type PlanOptions } from "./imports/externals.js";
 import { isPythonFile } from "./imports/python.js";
 
@@ -163,6 +164,26 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     );
   }
 
+  // The External Cities (SPEC §7): names, presence, Highways and the horizon, dated to Steps. Their hidden Real names
+  // join the hidden terms the final scan checks the whole output for.
+  const cities = externalCities({
+    registry: pipeline.externals,
+    plan: pipeline.externals.plan(),
+    dependencies: externals.dependencies,
+    villages: layout.villages,
+    districts: layout.districts.map((d) => ({ key: d.key, village: d.village })),
+    stepOf: (commit) => plan.stepOf[commit] ?? 0,
+    naming: {
+      config,
+      theme,
+      seed: seedText,
+      hidden: names.hidden,
+      private: options.private,
+      taken: [places.file.city.name, ...places.file.districts.map((d) => d.name)],
+    },
+  });
+  const hidden = [...names.hidden, ...cities.hiddenKeys];
+
   options.onPhase?.("Writing site");
   const sizes = await writeSite(
     outDir,
@@ -171,7 +192,8 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     worldFor(plan.stepOf),
     names.table,
     places,
-    (staging) => scanOutput(staging, names.hidden),
+    (staging) => scanOutput(staging, hidden),
+    `${JSON.stringify(cities.file)}\n`,
   );
   const entry = relative(options.repoDir, outDir);
   const inside = entry !== "" && !entry.startsWith("..") && !isAbsolute(entry);

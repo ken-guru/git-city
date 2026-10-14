@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,6 +21,52 @@ async function summaryOf(repo: FixtureRepo) {
   writeFileSync(join(pageDir, "index.html"), "<!doctype html>stub page");
   return build({ repoDir: repo.dir, outDir: join(root, "git-city-site"), pageDir });
 }
+
+async function citiesFileOf(repo: FixtureRepo) {
+  const summary = await summaryOf(repo);
+  return JSON.parse(readFileSync(join(summary.outDir, "externals.json"), "utf8")) as {
+    horizon: number;
+    cities: { name: string; source: number; from: number; to: number | null; members: number; outskirts: boolean }[];
+    highways: { city: number; district: number; from: number; to: number | null; lanes: number }[];
+  };
+}
+
+describe("External Cities in the output", () => {
+  it("dates a City to the commit its third member is declared, and hides its Real name by default", async () => {
+    const repo = new FixtureRepo();
+    cleanups.push(() => repo.remove());
+    repo.write("package.json", JSON.stringify({ dependencies: { "@babel/core": "1" } })).commit("one");
+    repo.write("package.json", JSON.stringify({ dependencies: { "@babel/core": "1", "@babel/cli": "1" } })).commit("two");
+    repo.write("package.json", JSON.stringify({ dependencies: { "@babel/core": "1", "@babel/cli": "1", "babel-loader": "1" } })).commit("three");
+
+    const file = await citiesFileOf(repo);
+
+    const babel = file.cities.find((c) => !c.outskirts)!;
+    expect(babel.name).not.toContain("babel");
+    expect(babel.source).toBe(0);
+    expect(babel.from).toBe(2);
+    expect(babel.to).toBeNull();
+    expect(babel.members).toBe(3);
+    expect(file.highways.filter((h) => h.city === 0).map((h) => [h.district, h.from, h.lanes])).toEqual([
+      [-1, 0, 1],
+      [-1, 1, 1],
+      [-1, 2, 1],
+    ]);
+  });
+
+  it("shows the Real name of a City whose rule reveals it", async () => {
+    const repo = new FixtureRepo();
+    cleanups.push(() => repo.remove());
+    repo
+      .write("git-city.config.jsonc", '{ "rules": [{ "external": "babel", "action": "reveal" }] }')
+      .write("package.json", JSON.stringify({ dependencies: { "@babel/core": "1", "@babel/cli": "1", "babel-loader": "1" } }))
+      .commit("one");
+
+    const file = await citiesFileOf(repo);
+
+    expect(file.cities.find((c) => !c.outskirts)).toMatchObject({ name: "babel", source: 1 });
+  });
+});
 
 describe("External Dependencies in the build summary", () => {
   it("matches a declared Python name to a differently spelled import, groups npm scopes, and drops undeclared imports", async () => {
