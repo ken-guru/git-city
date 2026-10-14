@@ -2,25 +2,26 @@
 .SH NAME
 git-city \- turn a git history into an animated 3D city
 .SH SYNOPSIS
-.B git city
+.B git-city
 [\fIbuild\fR] [\fIoptions\fR]
 .br
-.B git city init
+.B git-city init
 [\fB\-\-shared\fR]
 .br
-.B git city serve
+.B git-city serve
 [\fIdir\fR] [\fB\-\-port\fR \fIn\fR] [\fB\-\-open\fR]
 .br
-.B git city audit
+.B git-city audit
 [\fIdir\fR]
 .br
-.B git city cache
+.B git-city cache
 \fBstatus\fR|\fBclear\fR
 .SH DESCRIPTION
 git-city reads a repository's history and writes a static site with an animated 3D city: each file is a building, each
 folder a district, each contributor a block of time. Names are hidden unless a config rule reveals them.
 .PP
-Each command also runs as \fBgit city\fR, which is how git finds it.
+\fBgit-city\fR is the command. A \fBgit city\fR shim is installed too, but it is not documented: it can collide with
+git's own subcommand handling.
 .SH COMMANDS
 .TP
 .B build

@@ -119,6 +119,13 @@ describe("help and the man page", () => {
     }
   });
 
+  it("prints help itself for --help, and documents only the git-city form", () => {
+    const help = run("--help");
+    expect(help.status).toBe(0);
+    expect(help.stdout).toContain("Usage: git-city");
+    expect(help.stdout).not.toMatch(/git city\b/);
+  });
+
   it("ships a man page in the package", () => {
     const pkg = JSON.parse(readFileSync(PACKAGE, "utf8")) as { files: string[] };
     expect(pkg.files).toContain("man");

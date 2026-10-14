@@ -27,7 +27,7 @@ const HELP = `Usage: git-city [build] [options]
        git-city cache status|clear
 
 Turns this repository's git history into an animated 3D City.
-Each command also runs as \`git city ...\`. The man page is git-city(1).
+The man page is git-city(1).
 
 Commands:
   build              build the site (the default)

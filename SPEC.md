@@ -7,7 +7,7 @@ This document gathers every decision from the planning map, [GitCity map](https:
 **Reading the cut line.** Everything is **v1** unless it is marked **⏭ Later**. Later items are part of the vision, and v1 must not close the door on them; how it keeps them open is noted where it matters.
 
 **Conventions.**
-- **Naming:** every lowercase name uses `git-city`, never `gitcity`. That covers the CLI and `git city`, `git-city.config.jsonc`, `.git/git-city/` and `git-city-site/`.
+- **Naming:** every lowercase name uses `git-city`, never `gitcity`. That covers the CLI, `git-city.config.jsonc`, `.git/git-city/` and `git-city-site/`.
 - **Tuning values:** numbers called tuning values are starting points. They live as named, configurable constants, never inline literals.
 
 ---
@@ -428,7 +428,7 @@ When the output would exceed the budget, or history passes about 50k commits:
 Sources: [CLI and config](https://github.com/ken-guru/git-city/issues/17), [Degradation](https://github.com/ken-guru/git-city/issues/25), [Packaging](https://github.com/ken-guru/git-city/issues/26).
 
 ### Commands
-Each also runs as `git city …`.
+`git-city` is the primary command, and the only form documented. A `git city` shim is installed too, but it is not documented: it can collide with git's own subcommand handling.
 
 | Command | Does |
 |---|---|
@@ -480,7 +480,7 @@ When a flag and the config set the same thing, the flag wins.
 - **Interactive:** progress per phase, then the build summary: privacy summary, near-misses, sizes against budget, any Steps used, scale warnings, and the output path.
 - **CI:** one-line logs.
 - **First run:** a hint to add the output folder to `.gitignore`. GitCity never edits `.gitignore` itself.
-- **Help:** `-h` is documented, and a man page ships, because `git city --help` asks git for a man page.
+- **Help:** `git-city -h` and `git-city --help` print the help text directly, without asking git for anything. A man page ships as `git-city(1)`; it is reached through `man git-city` when the package's man folder is on MANPATH, and is not looked up by `--help`.
 
 ### Exit codes
 | Code | Meaning |
@@ -610,7 +610,7 @@ Source: [Packaging](https://github.com/ken-guru/git-city/issues/26).
 - **Dependencies:** three is a build-time dependency only.
 - **Running:**
   - `npx git-city` works;
-  - `git city` works after `npm i -g git-city`, or with `npx -p git-city git city`;
+  - `git-city` works after `npm i -g git-city`, or with `npx git-city`; the `git city` shim is installed alongside it, for the Windows smoke test, and is not documented;
   - a Windows CI smoke test checks the extensionless shim.
 - **Licences:** everything bundled is MIT. The page keeps the three.js notice (esbuild legal comments stay on), and `THIRD_PARTY_NOTICES.md` covers web-tree-sitter and each grammar.
 
