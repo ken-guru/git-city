@@ -94,3 +94,61 @@ describe("package.json imports, workspaces and exports", () => {
     expect(resolveImport(snap, "src/a.ts", "fs").target).toBeUndefined();
   });
 });
+
+describe("regressions from review", () => {
+  it("uses the nearest tsconfig even when it sets no aliases", () => {
+    const snap = repo({
+      "tsconfig.json": `{ "compilerOptions": { "baseUrl": ".", "paths": { "@app/*": ["src/app/*"] } } }`,
+      "packages/web/tsconfig.json": `{ "compilerOptions": { "strict": true } }`,
+      "packages/web/src/a.ts": "",
+      "src/app/x.ts": "",
+    });
+
+    expect(resolveImport(snap, "packages/web/src/a.ts", "@app/x").target).toEqual({ kind: "package", name: "@app/x" });
+  });
+
+  it("maps a child's own paths onto a baseUrl inherited from its parent", () => {
+    const snap = repo({
+      "tsconfig.base.json": `{ "compilerOptions": { "baseUrl": "src" } }`,
+      "web/tsconfig.json": `{ "extends": "../tsconfig.base.json", "compilerOptions": { "paths": { "ui/*": ["ui/*"] } } }`,
+      "web/main.ts": "",
+      "src/ui/button.ts": "",
+    });
+
+    expect(resolveImport(snap, "web/main.ts", "ui/button").target).toEqual({ kind: "file", path: "src/ui/button.ts" });
+  });
+
+  it("follows an extends target that is not named like a config file", () => {
+    const snap = repo({
+      "configs/base.json": `{ "compilerOptions": { "baseUrl": ".", "paths": { "@lib/*": ["lib/*"] } } }`,
+      "tsconfig.json": `{ "extends": "./configs/base.json" }`,
+      "src/a.ts": "",
+      "configs/lib/x.ts": "",
+    });
+
+    // baseUrl "." is relative to the extended file, so the target is under configs/.
+    expect(resolveImport(snap, "src/a.ts", "@lib/x").target).toEqual({ kind: "file", path: "configs/lib/x.ts" });
+  });
+
+  it("maps a declaration entry in dist back to its source file", () => {
+    const snap = repo({
+      "package.json": `{ "name": "root", "workspaces": ["packages/*"] }`,
+      "packages/ui/package.json": `{ "name": "@acme/ui", "types": "./dist/index.d.ts" }`,
+      "packages/ui/src/index.ts": "",
+      "app/main.ts": "",
+    });
+
+    expect(resolveImport(snap, "app/main.ts", "@acme/ui").target).toEqual({ kind: "file", path: "packages/ui/src/index.ts" });
+  });
+
+  it("matches workspace globs ending in /**", () => {
+    const snap = repo({
+      "package.json": `{ "name": "root", "workspaces": ["packages/**"] }`,
+      "packages/group/ui/package.json": `{ "name": "@acme/deep" }`,
+      "packages/group/ui/index.ts": "",
+      "app/main.ts": "",
+    });
+
+    expect(resolveImport(snap, "app/main.ts", "@acme/deep").target).toEqual({ kind: "file", path: "packages/group/ui/index.ts" });
+  });
+});

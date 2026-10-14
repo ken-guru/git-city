@@ -35,6 +35,7 @@ export interface Resolved {
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".d.ts", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
 /** A JS-family extension in a specifier maps to the TypeScript source that builds it. */
 const JS_EXTENSION = /\.(js|jsx|mjs|cjs)$/;
+const DECLARATION = /\.d\.ts$/;
 const TS_FOR_JS = [".ts", ".tsx", ".d.ts", ".mts", ".cts"];
 /** Output folders that map back to source (`dist/x.js` → `src/x.ts`). */
 const BUILD_DIRS = new Set(["dist", "build", "lib", "out"]);
@@ -47,13 +48,14 @@ export function resolveImport(snapshot: Snapshot, fromPath: string, specifier: s
   return { target, probes: r.probes };
 }
 
+/** The effective `paths` and `baseUrl` of a tsconfig, with each one's own base directory (inherited through extends). */
 interface TsconfigView {
-  /** Directory that `paths` targets are relative to. */
-  pathsBase: string;
   baseUrl: string | undefined;
+  /** Directory that `baseUrl` is relative to. */
+  baseDir: string;
+  /** Directory that `paths` targets are relative to when there is no baseUrl. */
+  pathsDir: string;
   paths: Record<string, string[]>;
-  /** Directory of the tsconfig that owns this view. */
-  dir: string;
 }
 
 class Resolver {
@@ -101,6 +103,11 @@ class Resolver {
 
   private fileOrIndex(stem: string): string | undefined {
     const candidates: string[] = [];
+    if (DECLARATION.test(stem)) {
+      // A declaration file names the source it describes.
+      const bare = stem.replace(DECLARATION, "");
+      candidates.push(bare + ".ts", bare + ".tsx");
+    }
     if (JS_EXTENSION.test(stem)) {
       const bare = stem.replace(JS_EXTENSION, "");
       for (const ext of TS_FOR_JS) candidates.push(bare + ext);
@@ -114,7 +121,7 @@ class Resolver {
     return undefined;
   }
 
-  /** `exports` and `dist` remapped back to source: a built path with an output folder names its source. */
+  /** A built path under an output folder (dist, build, lib, out) is remapped to the same path under src. */
   private mapBuilt(stem: string): string | undefined {
     const parts = stem.split("/");
     for (let i = 0; i < parts.length; i++) {
@@ -137,14 +144,14 @@ class Resolver {
     if (!pkg) return undefined;
     const target = matchPattern(pkg.json.imports, specifier);
     if (target === undefined) return undefined;
-    return this.file(normalize(`${pkg.dir}/${target.replace(/^\.\//, "")}`)) ?? undefined;
+    return this.file(normalize(`${pkg.dir}/${target.replace(/^\.\//, "")}`));
   }
 
   /** Resolves a `paths` alias from the nearest tsconfig, with baseUrl as the fallback. */
   private paths(fromPath: string, specifier: string): Resolution | undefined {
     const view = this.tsconfigFor(fromPath);
     if (!view) return undefined;
-    const base = view.pathsBase;
+    const base = view.baseUrl !== undefined ? normalize(join(view.baseDir, view.baseUrl)) : view.pathsDir;
     for (const [pattern, targets] of Object.entries(view.paths)) {
       const star = matchStar(pattern, specifier);
       if (star === undefined) continue;
@@ -154,7 +161,7 @@ class Resolver {
       }
     }
     if (view.baseUrl !== undefined) {
-      const hit = this.file(normalize(join(view.pathsBase, specifier)));
+      const hit = this.file(normalize(join(normalize(join(view.baseDir, view.baseUrl)), specifier)));
       if (hit) return hit;
     }
     return undefined;
@@ -167,8 +174,9 @@ class Resolver {
     if (sub !== ".") {
       return this.file(normalize(join(dir, exported ?? sub)));
     }
-    const entry = exported ?? (json?.types as string | undefined) ?? (json?.module as string | undefined) ?? (json?.main as string | undefined);
-    if (entry !== undefined) {
+    // Source-first: a built entry maps back to source, and an entry that fails falls through to the next.
+    const entries = [exported, json?.main, json?.module, json?.types].filter((e): e is string => typeof e === "string");
+    for (const entry of entries) {
       const hit = this.file(normalize(join(dir, entry)));
       if (hit) return hit;
     }
@@ -203,17 +211,18 @@ class Resolver {
     return names;
   }
 
+  /** The nearest tsconfig.json above the file. Its view may be undefined: then it sets no aliases. */
   private tsconfigFor(fromPath: string): TsconfigView | undefined {
     for (let dir = dirname(fromPath); ; dir = dirname(dir)) {
       const path = dir === "" ? "tsconfig.json" : `${dir}/tsconfig.json`;
-      this.probes.push(path);
-      const view = this.loadTsconfig(path, 0);
-      if (view) return view;
+      this.probe(path);
+      if (this.snap.paths.has(path)) return this.loadTsconfig(path, 0);
       if (dir === "") return undefined;
     }
   }
 
   private loadTsconfig(path: string, depth: number): TsconfigView | undefined {
+    this.probe(path);
     if (!this.snap.paths.has(path) || depth > 8) return undefined;
     if (this.tsconfigCache.has(path)) return this.tsconfigCache.get(path) ?? undefined;
     const json = this.readJson(path);
@@ -223,17 +232,21 @@ class Resolver {
       const extendsPath = typeof json.extends === "string" ? normalize(join(dir, json.extends)) : undefined;
       const inherited = extendsPath !== undefined ? this.loadTsconfig(extendsPath, depth + 1) : undefined;
       const options = (json.compilerOptions ?? {}) as { baseUrl?: string; paths?: Record<string, string[]> };
-      const own = options.paths !== undefined || options.baseUrl !== undefined;
-      const baseUrl = options.baseUrl ?? inherited?.baseUrl;
-      const paths = options.paths ?? inherited?.paths ?? {};
-      if (own || inherited) {
-        const ownerDir = options.paths !== undefined || options.baseUrl !== undefined ? dir : inherited!.dir;
-        const pathsBase = baseUrl !== undefined ? normalize(join(ownerDir, baseUrl)) : ownerDir;
-        view = { pathsBase, baseUrl: baseUrl === undefined ? undefined : baseUrl, paths, dir: ownerDir };
+      if (options.paths !== undefined || options.baseUrl !== undefined || inherited) {
+        view = {
+          baseUrl: options.baseUrl ?? inherited?.baseUrl,
+          baseDir: options.baseUrl !== undefined ? dir : (inherited?.baseDir ?? dir),
+          pathsDir: options.paths !== undefined ? dir : (inherited?.pathsDir ?? dir),
+          paths: options.paths ?? inherited?.paths ?? {},
+        };
       }
     }
     this.tsconfigCache.set(path, view ?? null);
     return view;
+  }
+
+  private probe(path: string): void {
+    this.probes.push(path);
   }
 
   private readJson(path: string): Record<string, any> | undefined {
@@ -306,6 +319,7 @@ function matchStar(pattern: string, key: string): string | undefined {
 /** Whether a workspace glob ("packages/*" or an exact directory) names `dir`. */
 function globMatches(glob: string, dir: string): boolean {
   const clean = glob.replace(/\/$/, "");
+  if (clean.endsWith("/**")) return dir.startsWith(`${clean.slice(0, -3)}/`);
   if (clean.endsWith("/*")) {
     const parent = clean.slice(0, -2);
     return dir.startsWith(`${parent}/`) && !dir.slice(parent.length + 1).includes("/");

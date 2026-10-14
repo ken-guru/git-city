@@ -1,4 +1,4 @@
-import { extractorFor, ImportCache } from "./extract.js";
+import { extractorFor, ImportCache, type RawImport } from "./extract.js";
 import { type Resolution, resolveImport, type Snapshot } from "./resolve.js";
 
 /**
@@ -30,6 +30,8 @@ export interface ImportGraphOptions {
   cache?: ImportCache;
 }
 
+const JSON_FILE = /\.jsonc?$/;
+
 /** Config files whose content changes how any import resolves. */
 function isConfig(path: string): boolean {
   const name = path.slice(path.lastIndexOf("/") + 1);
@@ -38,7 +40,7 @@ function isConfig(path: string): boolean {
 
 interface FileRecord {
   blob: string;
-  specifiers: { specifier: string; kind: string }[];
+  specifiers: RawImport[];
 }
 
 export class ImportGraph {
@@ -80,12 +82,13 @@ export class ImportGraph {
     for (const { path, blob } of commit.writes) {
       this.paths.add(path);
       changed.add(path);
-      if (isConfig(path)) {
+      // JSON files are read too, since a tsconfig may extend any of them. Only config changes re-resolve everything.
+      if (isConfig(path) || JSON_FILE.test(path)) {
         this.configText.set(path, await this.options.readText(blob));
-        configChanged = true;
+        configChanged ||= isConfig(path);
       }
       if (extractorFor(path)) {
-        const text = await this.options.readText(blob);
+        const text = this.cache.has(blob, path) ? "" : await this.options.readText(blob);
         const specifiers = await this.cache.get(blob, path, text);
         this.files.set(path, { blob, specifiers });
         extracting.push(path);
@@ -150,9 +153,7 @@ export class ImportGraph {
     }
     this.probesOf.set(importer, probes);
     for (const probe of probes) {
-      let set = this.importersOfProbe.get(probe);
-      if (!set) this.importersOfProbe.set(probe, (set = new Set()));
-      set.add(importer);
+      add(this.importersOfProbe, probe, importer);
     }
   }
 

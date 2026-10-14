@@ -33,9 +33,9 @@ export interface ImportExtractor {
 /** Version of the web-tree-sitter TS/JS extractor. */
 export const TS_JS_EXTRACTOR_VERSION = 1;
 
-const require = createRequire(import.meta.url);
+const requireFrom = createRequire(import.meta.url);
 /** Directory holding the grammar WASM files shipped by @vscode/tree-sitter-wasm. */
-const GRAMMAR_DIR = require.resolve("@vscode/tree-sitter-wasm/wasm/tree-sitter.js").replace(/tree-sitter\.js$/, "");
+const GRAMMAR_DIR = requireFrom.resolve("@vscode/tree-sitter-wasm/wasm/tree-sitter.js").replace(/tree-sitter\.js$/, "");
 
 type GrammarName = "typescript" | "tsx" | "javascript";
 
@@ -115,6 +115,12 @@ export class ImportCache {
       this.results.set(key, result);
     }
     return result;
+  }
+
+  /** Whether `blob` already has a result for `path`'s extractor, so its text need not be read. */
+  has(blob: string, path: string): boolean {
+    const extractor = extractorFor(path);
+    return extractor !== undefined && this.results.has(`${extractor.name}@${extractor.version}:${blob}`);
   }
 
   get size(): number {
