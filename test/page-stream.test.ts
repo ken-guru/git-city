@@ -45,6 +45,8 @@ function timelineOf(commits: number, files: number): ChunkInput {
     language: new Uint8Array(files),
     eventCommit: Uint32Array.from(events, (e) => e[0]),
     eventFile: Uint32Array.from(events, (e) => e[1]),
+    // One Stint per file: these synthetic renovations only exercise the chunk plumbing.
+    eventStint: Uint32Array.from(events, (e) => e[1]),
     eventKind: Uint8Array.from(events, (e) => e[2]),
     eventValue: Uint8Array.from(events, (e) => e[3]),
   };
@@ -67,6 +69,11 @@ function publish(timeline: ChunkInput, chunkCommits: number) {
       blocks: { village: new Uint32Array(0), x: new Float32Array(0), z: new Float32Array(0), claimed: new Uint32Array(0), brick: new Uint8Array(0), district: new Uint32Array(0) },
       lots: { file: new Uint32Array(0), block: new Uint32Array(0), slot: new Uint8Array(0), slots: new Uint8Array(0) },
       roads: { a: new Uint32Array(0), b: new Uint32Array(0), forward: new Uint8Array(0), backward: new Uint8Array(0), track: new Uint8Array(0) },
+      stints: {
+        file: Uint32Array.from({ length: timeline.fileCount }, (_, i) => i),
+        lot: Uint32Array.from({ length: timeline.fileCount }, (_, i) => i),
+        buildingType: new Uint8Array(timeline.fileCount),
+      },
     }),
   );
   const bytes = new Map(world.chunks.map((c, i) => [c.name, plans[i]!.bytes]));
@@ -196,6 +203,7 @@ describe("replaying a chunk", () => {
       language: Uint8Array.of(0, 0),
       eventCommit: Uint32Array.of(0, 1, 2, 4),
       eventFile: Uint32Array.of(0, 1, 0, 0),
+      eventStint: Uint32Array.of(0, 1, 0, 0),
       eventKind: Uint8Array.of(EVENT_ADD, EVENT_ADD, EVENT_FLOORS, EVENT_SCAFFOLD_ON),
       eventValue: Uint8Array.of(2, 5, 7, 0),
     };
@@ -208,6 +216,7 @@ describe("replaying a chunk", () => {
       scaffolded: Uint8Array.of(0, 0),
       buildingType: Uint8Array.of(0, 0),
       language: Uint8Array.of(0, 0),
+      stint: Uint32Array.of(0, 1),
     });
     expect(replayTo(chunk, 4, birth)).toEqual({
       standing: Uint8Array.of(1, 1),
@@ -215,6 +224,7 @@ describe("replaying a chunk", () => {
       scaffolded: Uint8Array.of(1, 0),
       buildingType: Uint8Array.of(0, 0),
       language: Uint8Array.of(0, 0),
+      stint: Uint32Array.of(0, 1),
     });
   });
 });

@@ -2,7 +2,7 @@ import { Scene } from "three";
 import { describe, expect, it } from "vitest";
 import { CityBuildings, type CityData } from "../src/page/buildings.js";
 import { MAX_LEVEL, settingsFor } from "../src/page/lod.js";
-import { gridColumns, gridSlot, KIND_BUILD, KIND_CHANGE, type BuildingSegment, type ScaffoldSegment } from "../src/page/state.js";
+import { KIND_BUILD, KIND_CHANGE, type BuildingSegment, type ScaffoldSegment } from "../src/page/state.js";
 import { BUILDING_TYPES } from "../src/shared/buildings.js";
 
 /**
@@ -10,7 +10,7 @@ import { BUILDING_TYPES } from "../src/shared/buildings.js";
  * built at a spread of commits, with some changes and scaffolding. Used for headless smoke tests only.
  */
 function syntheticCity(fileCount: number): CityData {
-  const columns = gridColumns(fileCount);
+  const columns = Math.max(1, Math.ceil(Math.sqrt(fileCount)));
   const buildingType = new Uint8Array(fileCount);
   const language = new Uint8Array(fileCount);
   const seed = new Uint32Array(fileCount);
@@ -27,17 +27,15 @@ function syntheticCity(fileCount: number): CityData {
     scaffolds.push([{ start: start + 600, up: true }, { start: start + 640, up: false }]);
   }
   return {
-    fileCount,
+    stintCount: fileCount,
     buildingType,
     language,
     seed,
     buildings,
     scaffolds,
     languages: Array.from({ length: fileCount }, (_, f) => (f % 3 === 0 ? [{ start: 300, from: 0, to: 2 }] : [])),
-    place: (file) => {
-      const { column, row } = gridSlot(file, columns);
-      return { x: column * 1.5, z: row * 1.5 };
-    },
+    // A synthetic grid of spots: one per Stint.
+    place: (stint) => ({ x: (stint % columns) * 1.5, z: Math.floor(stint / columns) * 1.5 }),
   };
 }
 

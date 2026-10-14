@@ -44,8 +44,15 @@ export class TimelineBuilder {
   private readonly filePaths: string[] = [];
   private readonly eventCommit: number[] = [];
   private readonly eventFile: number[] = [];
+  private readonly eventStint: number[] = [];
   private readonly eventKind: EventKind[] = [];
   private readonly eventValue: number[] = [];
+  /** Per Stint: its file, its Building type at creation, and the Stint it replaces (-1 when it replaces none). */
+  private readonly stintFile: number[] = [];
+  private readonly stintType: number[] = [];
+  private readonly stintFrom: number[] = [];
+  /** Per file id: the Stint it occupies now. */
+  private readonly currentStint: number[] = [];
 
   /** Applies one commit and returns what it changed, for the layout. Every commit gives a change, even an empty one. */
   add(commit: CommitRecord): TimelineChange {
@@ -89,7 +96,8 @@ export class TimelineBuilder {
       this.currentType.push(type);
       this.currentLanguage.push(language);
       this.seed.push(seedFor(file));
-      this.event(seq, file, EVENT_ADD, floors);
+      this.currentStint.push(this.newStint(file, type, -1));
+      this.event(seq, file, EVENT_ADD, floors, this.currentStint[file]!);
       change.added.push({ file, path });
       touched.add(file);
     }
@@ -135,8 +143,13 @@ export class TimelineBuilder {
       filePaths: this.filePaths,
       eventCommit: this.eventCommit,
       eventFile: this.eventFile,
+      eventStint: this.eventStint,
       eventKind: this.eventKind,
       eventValue: this.eventValue,
+      stintFile: this.stintFile,
+      stintType: this.stintType,
+      stintFrom: this.stintFrom,
+      currentStint: this.currentStint,
     };
   }
 
@@ -157,8 +170,13 @@ export class TimelineBuilder {
     appendAll(b.filePaths, s.filePaths);
     appendAll(b.eventCommit, s.eventCommit);
     appendAll(b.eventFile, s.eventFile);
+    appendAll(b.eventStint, s.eventStint);
     appendAll(b.eventKind, (s.eventKind as EventKind[]));
     appendAll(b.eventValue, s.eventValue);
+    appendAll(b.stintFile, s.stintFile);
+    appendAll(b.stintType, s.stintType);
+    appendAll(b.stintFrom, s.stintFrom);
+    appendAll(b.currentStint, s.currentStint);
     return b;
   }
 
@@ -173,8 +191,11 @@ export class TimelineBuilder {
       seed: Uint32Array.from(this.seed),
       eventCommit: Uint32Array.from(this.eventCommit),
       eventFile: Uint32Array.from(this.eventFile),
+      eventStint: Uint32Array.from(this.eventStint),
       eventKind: Uint8Array.from(this.eventKind),
       eventValue: Uint8Array.from(this.eventValue),
+      /** Every Stint, in creation order; `stintFrom` is the Stint a Renovation replaces, or -1. */
+      stints: { file: Uint32Array.from(this.stintFile), buildingType: Uint8Array.from(this.stintType), from: Int32Array.from(this.stintFrom) },
     };
   }
 
@@ -197,9 +218,23 @@ export class TimelineBuilder {
     const languageChanged = language !== this.currentLanguage[file];
     this.currentType[file] = type;
     this.currentLanguage[file] = language;
-    if (relocated) this.event(seq, file, EVENT_RELOCATE, type);
-    else if (typeChanged) this.event(seq, file, EVENT_RENOVATE, type);
+    // A Relocation rebuilds on a new Lot, and a Renovation rebuilds as the new type on the same Lot: both are new Stints.
+    if (relocated) {
+      this.currentStint[file] = this.newStint(file, type, -1);
+      this.event(seq, file, EVENT_RELOCATE, type, this.currentStint[file]!);
+    } else if (typeChanged) {
+      this.currentStint[file] = this.newStint(file, type, this.currentStint[file]!);
+      this.event(seq, file, EVENT_RENOVATE, type, this.currentStint[file]!);
+    }
     if (languageChanged) this.event(seq, file, EVENT_LANGUAGE, language);
+  }
+
+  /** Records a new Stint: an occupancy of a Lot by `file` at Building type `type`, replacing Stint `from` (or -1). */
+  private newStint(file: number, type: number, from: number): number {
+    this.stintFile.push(file);
+    this.stintType.push(type);
+    this.stintFrom.push(from);
+    return this.stintFile.length - 1;
   }
 
   /** Files standing under each directory a rename leaves, before the commit: what a whole-directory move is measured against. */
@@ -239,9 +274,11 @@ export class TimelineBuilder {
     }
   }
 
-  private event(commit: number, file: number, kind: EventKind, value: number) {
+  /** Records an event; `stint` defaults to the file's current Stint. */
+  private event(commit: number, file: number, kind: EventKind, value: number, stint: number = this.currentStint[file]!) {
     this.eventCommit.push(commit);
     this.eventFile.push(file);
+    this.eventStint.push(stint);
     this.eventKind.push(kind);
     this.eventValue.push(value);
   }
@@ -269,8 +306,13 @@ export interface TimelineSnapshot {
   filePaths: string[];
   eventCommit: number[];
   eventFile: number[];
+  eventStint: number[];
   eventKind: number[];
   eventValue: number[];
+  stintFile: number[];
+  stintType: number[];
+  stintFrom: number[];
+  currentStint: number[];
 }
 
 /** Appends by loop: spreading a long array into push() overflows the call stack on long histories. */

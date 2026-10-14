@@ -1,4 +1,14 @@
-import { type Chunk, EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_LANGUAGE, EVENT_SCAFFOLD_OFF, EVENT_SCAFFOLD_ON } from "../shared/format.js";
+import {
+  type Chunk,
+  EVENT_ADD,
+  EVENT_DELETE,
+  EVENT_FLOORS,
+  EVENT_LANGUAGE,
+  EVENT_RELOCATE,
+  EVENT_RENOVATE,
+  EVENT_SCAFFOLD_OFF,
+  EVENT_SCAFFOLD_ON,
+} from "../shared/format.js";
 
 /**
  * Time is measured in commits: commit i's changes begin at t = i.
@@ -110,55 +120,88 @@ export interface Timelines {
 }
 
 /**
- * Adds a chunk's segments after the ones already held. Chunks must come in commit order, so each file's
+ * Adds a chunk's segments after the ones already held. Chunks must come in commit order, so each Stint's
  * segments stay sorted for `latestAt`.
  */
 export function appendTimelines(target: Timelines, chunk: Chunk, birthLanguage?: Uint8Array): void {
   const part = buildTimelines(chunk, target.buildings.length, birthLanguage);
-  part.buildings.forEach((segments, file) => {
-    for (const segment of segments) target.buildings[file]!.push(segment);
+  part.buildings.forEach((segments, stint) => {
+    for (const segment of segments) target.buildings[stint]!.push(segment);
   });
-  part.scaffolds.forEach((segments, file) => {
-    for (const segment of segments) target.scaffolds[file]!.push(segment);
+  part.scaffolds.forEach((segments, stint) => {
+    for (const segment of segments) target.scaffolds[stint]!.push(segment);
   });
-  part.languages.forEach((segments, file) => {
-    for (const segment of segments) target.languages[file]!.push(segment);
+  part.languages.forEach((segments, stint) => {
+    for (const segment of segments) target.languages[stint]!.push(segment);
   });
 }
 
 /**
- * Builds every file's segments from one chunk. `birthLanguage` gives each file's language when it was born
- * (the world file's language column): an ADD starts the file's language from it, so its first change eases from there.
+ * Builds every Stint's segments from one chunk. A Stint is one occupancy of a Lot (see the Stint table in
+ * format.ts). A Relocation takes the old Stint down on its old Lot as the new one is built on the new Lot, both
+ * starting together. A Renovation takes the old Stint down first, and builds the new type one base duration later.
+ * `birthLanguage` gives each file's language when it was born: an ADD starts the file's language from it.
  */
-export function buildTimelines(chunk: Chunk, fileCount: number, birthLanguage?: Uint8Array): Timelines {
-  const buildings: BuildingSegment[][] = Array.from({ length: fileCount }, () => []);
-  const scaffolds: ScaffoldSegment[][] = Array.from({ length: fileCount }, () => []);
-  const languages: LanguageSegment[][] = Array.from({ length: fileCount }, () => []);
-  // The language each file has now, or undefined when the chunk has not said yet.
-  const language: (number | undefined)[] = new Array(fileCount).fill(undefined);
-  // Files standing at the chunk's start hold their snapshot Floors and scaffolding from its first commit.
+export function buildTimelines(chunk: Chunk, stintCount: number, birthLanguage?: Uint8Array): Timelines {
+  const buildings: BuildingSegment[][] = Array.from({ length: stintCount }, () => []);
+  const scaffolds: ScaffoldSegment[][] = Array.from({ length: stintCount }, () => []);
+  const languages: LanguageSegment[][] = Array.from({ length: stintCount }, () => []);
+  // What the chunk knows of each file: its Floors, language and current Stint.
+  const floorsNow = new Map<number, number>();
+  const languageNow = new Map<number, number>();
+  const stintNow = new Map<number, number>();
+
+  // Files standing at the chunk's start hold their snapshot Floors, scaffolding and language from its first commit.
   // A chunk loads on its own, so these segments start where the chunk does and sort ahead of its events.
   const { snapshot } = chunk;
   snapshot.file.forEach((file, i) => {
+    const stint = snapshot.stint[i]!;
     const floors = snapshot.floors[i]!;
-    buildings[file]!.push({ start: chunk.firstCommit, kind: KIND_CHANGE, from: floors, to: floors });
-    if (snapshot.scaffolded[i]) scaffolds[file]!.push({ start: chunk.firstCommit, up: true });
-    languages[file]!.push({ start: chunk.firstCommit, from: snapshot.language[i]!, to: snapshot.language[i]! });
-    language[file] = snapshot.language[i];
+    const language = snapshot.language[i]!;
+    buildings[stint]!.push({ start: chunk.firstCommit, kind: KIND_CHANGE, from: floors, to: floors });
+    if (snapshot.scaffolded[i]) scaffolds[stint]!.push({ start: chunk.firstCommit, up: true });
+    languages[stint]!.push({ start: chunk.firstCommit, from: language, to: language });
+    floorsNow.set(file, floors);
+    languageNow.set(file, language);
+    stintNow.set(file, stint);
   });
 
   chunk.eventFile.forEach((file, i) => {
     const start = chunk.eventCommit[i]!;
     const value = chunk.eventValue[i]!;
-    const list = buildings[file]!;
+    const stint = chunk.eventStint[i]!;
+    const list = buildings[stint]!;
     switch (chunk.eventKind[i]) {
-      case EVENT_ADD:
+      case EVENT_ADD: {
         list.push({ start, kind: KIND_BUILD, from: 0, to: value });
-        language[file] = birthLanguage?.[file];
+        floorsNow.set(file, value);
+        stintNow.set(file, stint);
+        const birth = birthLanguage?.[file];
+        if (birth !== undefined) {
+          languageNow.set(file, birth);
+          languages[stint]!.push({ start, from: birth, to: birth });
+        }
         break;
+      }
+      case EVENT_RELOCATE:
+      case EVENT_RENOVATE: {
+        const old = stintNow.get(file);
+        if (old !== undefined) {
+          const from = displayedFloors(latestAt(buildings[old]!, start)!, start);
+          buildings[old]!.push({ start, kind: KIND_DEMOLISH, from, to: 0 });
+        }
+        // A Renovation comes down first, so the new type starts one base duration later.
+        const built = start + (chunk.eventKind[i] === EVENT_RENOVATE ? TRANSITION_COMMITS : 0);
+        buildings[stint]!.push({ start: built, kind: KIND_BUILD, from: 0, to: floorsNow.get(file) ?? 0 });
+        const language = languageNow.get(file);
+        if (language !== undefined) languages[stint]!.push({ start: built, from: language, to: language });
+        stintNow.set(file, stint);
+        break;
+      }
       case EVENT_FLOORS: {
         const from = displayedFloors(latestAt(list, start)!, start);
         list.push({ start, kind: KIND_CHANGE, from, to: value });
+        floorsNow.set(file, value);
         break;
       }
       case EVENT_DELETE: {
@@ -167,16 +210,16 @@ export function buildTimelines(chunk: Chunk, fileCount: number, birthLanguage?: 
         break;
       }
       case EVENT_SCAFFOLD_ON:
-        scaffolds[file]!.push({ start, up: true });
+        scaffolds[stint]!.push({ start, up: true });
         break;
       case EVENT_SCAFFOLD_OFF:
-        scaffolds[file]!.push({ start, up: false });
+        scaffolds[stint]!.push({ start, up: false });
         break;
       case EVENT_LANGUAGE: {
         // A file's language is known from its snapshot or birth; without either, the colour changes at once.
-        const from = language[file] ?? birthLanguage?.[file] ?? value;
-        languages[file]!.push({ start, from, to: value });
-        language[file] = value;
+        const from = languageNow.get(file) ?? birthLanguage?.[file] ?? value;
+        languages[stint]!.push({ start, from, to: value });
+        languageNow.set(file, value);
         break;
       }
     }
@@ -226,14 +269,4 @@ export function scaffoldPose(
     height: building.to,
     visible,
   };
-}
-
-/** Columns of a square grid big enough for every file the Timeline ever holds. */
-export function gridColumns(fileCount: number): number {
-  return Math.max(1, Math.ceil(Math.sqrt(fileCount)));
-}
-
-/** A file's fixed spot on the grid. Stand-in for Lots until the layout ticket places them in the CLI. */
-export function gridSlot(file: number, columns: number): { column: number; row: number } {
-  return { column: file % columns, row: Math.floor(file / columns) };
 }

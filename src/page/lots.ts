@@ -48,24 +48,12 @@ export interface LotTable {
   lots: { file: ArrayLike<number>; block: ArrayLike<number>; slot: ArrayLike<number>; slots: ArrayLike<number> };
 }
 
-/**
- * Where each file stands: on its last Lot, which is where it stands now (a relocated Building has a
- * record per Lot it has held). A file with no Lot has no spot, and the caller keeps it out of sight.
- */
-export function placeFiles(table: LotTable, fileCount: number): (file: number) => Spot | undefined {
-  const lotOf = new Int32Array(fileCount).fill(-1);
-  for (let i = 0; i < table.lots.file.length; i++) {
-    const file = table.lots.file[i]!;
-    if (file < fileCount) lotOf[file] = i;
-  }
-  return (file) => {
-    const lot = lotOf[file];
-    if (lot === undefined || lot < 0) return undefined;
-    const block = table.lots.block[lot]!;
-    const origin = blockSpot(table.blocks.x[block]!, table.blocks.z[block]!);
-    const within = lotSpot(table.lots.slot[lot]!, table.lots.slots[lot]!);
-    return { x: origin.x + within.x, z: origin.z + within.z };
-  };
+/** Where a Lot is on the ground: its Block's position plus its place within the Block. */
+export function placeLot(table: LotTable, lot: number): Spot {
+  const block = table.lots.block[lot]!;
+  const origin = blockSpot(table.blocks.x[block]!, table.blocks.z[block]!);
+  const within = lotSpot(table.lots.slot[lot]!, table.lots.slots[lot]!);
+  return { x: origin.x + within.x, z: origin.z + within.z };
 }
 
 /**

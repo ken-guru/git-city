@@ -20,7 +20,7 @@ export const TOTAL_BUDGET_BYTES = 15 * 1024 * 1024;
 
 export type ChunkInput = Pick<
   TimelineData,
-  "commitDays" | "fileCount" | "buildingType" | "language" | "eventCommit" | "eventFile" | "eventKind" | "eventValue"
+  "commitDays" | "fileCount" | "buildingType" | "language" | "eventCommit" | "eventFile" | "eventStint" | "eventKind" | "eventValue"
 >;
 
 export interface ChunkLimits {
@@ -174,6 +174,7 @@ function snapshotOf(state: FileStates): ChunkSnapshot {
   for (let file = 0; file < state.standing.length; file++) if (state.standing[file]) standing.push(file);
   return {
     file: Uint32Array.from(standing),
+    stint: Uint32Array.from(standing, (f) => state.stint[f]!),
     floors: Uint8Array.from(standing, (f) => state.floors[f]!),
     scaffolded: Uint8Array.from(standing, (f) => state.scaffolded[f]!),
     buildingType: Uint8Array.from(standing, (f) => state.buildingType[f]!),
@@ -183,7 +184,7 @@ function snapshotOf(state: FileStates): ChunkSnapshot {
 
 /** Advances the state through the events from index `from` up to `to`. */
 function applyEvents(state: FileStates, timeline: ChunkInput, from: number, to: number): void {
-  for (let i = from; i < to; i++) applyEvent(state, timeline.eventKind[i]!, timeline.eventFile[i]!, timeline.eventValue[i]!);
+  for (let i = from; i < to; i++) applyEvent(state, timeline.eventKind[i]!, timeline.eventFile[i]!, timeline.eventValue[i]!, timeline.eventStint[i]!);
 }
 
 function encodeRange(
@@ -200,6 +201,7 @@ function encodeRange(
     snapshot,
     eventCommit: timeline.eventCommit.slice(from, to),
     eventFile: timeline.eventFile.slice(from, to),
+    eventStint: timeline.eventStint.slice(from, to),
     eventKind: timeline.eventKind.slice(from, to),
     eventValue: timeline.eventValue.slice(from, to),
   });

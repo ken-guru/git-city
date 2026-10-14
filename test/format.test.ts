@@ -15,6 +15,7 @@ import {
 function emptySnapshot() {
   return {
     file: new Uint32Array(0),
+    stint: new Uint32Array(0),
     floors: new Uint8Array(0),
     scaffolded: new Uint8Array(0),
     buildingType: new Uint8Array(0),
@@ -29,6 +30,7 @@ const emptyLayout = {
   blocks: { village: new Uint32Array(0), x: new Float32Array(0), z: new Float32Array(0), claimed: new Uint32Array(0), brick: new Uint8Array(0), district: new Uint32Array(0) },
   lots: { file: new Uint32Array(0), block: new Uint32Array(0), slot: new Uint8Array(0), slots: new Uint8Array(0) },
   roads: { a: new Uint32Array(0), b: new Uint32Array(0), forward: new Uint8Array(0), backward: new Uint8Array(0), track: new Uint8Array(0) },
+  stints: { file: new Uint32Array(0), lot: new Uint32Array(0), buildingType: new Uint8Array(0) },
 };
 
 describe("binary format", () => {
@@ -56,6 +58,7 @@ describe("binary format", () => {
       firstCommit: 2000,
       snapshot: {
         file: Uint32Array.of(3, 9),
+        stint: Uint32Array.of(30, 90),
         floors: Uint8Array.of(4, 31),
         scaffolded: Uint8Array.of(0, 1),
         buildingType: Uint8Array.of(2, 5),
@@ -63,6 +66,7 @@ describe("binary format", () => {
       },
       eventCommit: Uint32Array.of(),
       eventFile: Uint32Array.of(),
+      eventStint: Uint32Array.of(),
       eventKind: Uint8Array.of(),
       eventValue: Uint8Array.of(),
     });
@@ -71,6 +75,7 @@ describe("binary format", () => {
 
     expect(chunk.firstCommit).toBe(2000);
     expect([...chunk.snapshot.file]).toEqual([3, 9]);
+    expect([...chunk.snapshot.stint]).toEqual([30, 90]);
     expect([...chunk.snapshot.floors]).toEqual([4, 31]);
     expect([...chunk.snapshot.scaffolded]).toEqual([0, 1]);
     expect([...chunk.snapshot.buildingType]).toEqual([2, 5]);
@@ -83,6 +88,7 @@ describe("binary format", () => {
       snapshot: emptySnapshot(),
       eventCommit: Uint32Array.of(1, 1, 2, 3, 4),
       eventFile: Uint32Array.of(1, 0, 0, 0, 0),
+      eventStint: Uint32Array.of(7, 8, 8, 8, 8),
       eventKind: Uint8Array.of(EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_SCAFFOLD_ON, EVENT_SCAFFOLD_OFF),
       eventValue: Uint8Array.of(5, 0, 9, 0, 0),
     });
@@ -92,6 +98,7 @@ describe("binary format", () => {
     expect([...chunk.eventKind]).toEqual([EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_SCAFFOLD_ON, EVENT_SCAFFOLD_OFF]);
     expect([...chunk.eventValue]).toEqual([5, 0, 9, 0, 0]);
     expect([...chunk.eventFile]).toEqual([1, 0, 0, 0, 0]);
+    expect([...chunk.eventStint]).toEqual([7, 8, 8, 8, 8]);
   });
 });
 
@@ -110,6 +117,7 @@ describe("layout section of the world file", () => {
     },
     lots: { file: Uint32Array.of(0, 1), block: Uint32Array.of(0, 2), slot: Uint8Array.of(0, 4), slots: Uint8Array.of(2, 4) },
     roads: { a: Uint32Array.of(0), b: Uint32Array.of(1), forward: Uint8Array.of(2), backward: Uint8Array.of(0), track: Uint8Array.of(0) },
+    stints: { file: Uint32Array.of(0, 1, 1), lot: Uint32Array.of(0, 1, 2), buildingType: Uint8Array.of(3, 4, 5) },
   };
 
   it("round-trips the city seed, width steps, villages, Blocks, Lots and Roads", () => {
@@ -138,5 +146,8 @@ describe("layout section of the world file", () => {
     expect([...world.lots.slots]).toEqual([2, 4]);
     expect([...world.roads.forward]).toEqual([2]);
     expect([...world.roads.track]).toEqual([0]);
+    expect([...world.stints.file]).toEqual([0, 1, 1]);
+    expect([...world.stints.lot]).toEqual([0, 1, 2]);
+    expect([...world.stints.buildingType]).toEqual([3, 4, 5]);
   });
 });

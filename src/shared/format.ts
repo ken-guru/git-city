@@ -4,7 +4,7 @@
  * All integers are little-endian; arrays are stored column by column.
  */
 
-export const FORMAT_VERSION = 5;
+export const FORMAT_VERSION = 6;
 
 const WORLD_MAGIC = 0x57435447; // "GTCW"
 const CHUNK_MAGIC = 0x43435447; // "GTCC"
@@ -36,6 +36,19 @@ export type EventKind =
   | typeof EVENT_RELOCATE
   | typeof EVENT_RENOVATE
   | typeof EVENT_LANGUAGE;
+
+/**
+ * A Stint is one occupancy of a Lot by a Building: born with an ADD, RELOCATE or RENOVATE. Stints are numbered in
+ * the order the Timeline creates them. A Relocated or Renovated file gets a new Stint; its old one is taken down.
+ */
+export interface StintTable {
+  /** Per Stint: the file it belongs to. */
+  file: Uint32Array;
+  /** Per Stint: the Lot it stands on (index into the layout's Lots). */
+  lot: Uint32Array;
+  /** Per Stint: its Building type at creation (index into BUILDING_TYPES). */
+  buildingType: Uint8Array;
+}
 
 export interface ChunkRef {
   /** Sequence number of the chunk's first commit. */
@@ -73,6 +86,8 @@ export interface World {
   lots: { file: Uint32Array; block: Uint32Array; slot: Uint8Array; slots: Uint8Array };
   /** The Road network between villages, one entry per Road. */
   roads: { a: Uint32Array; b: Uint32Array; forward: Uint8Array; backward: Uint8Array; track: Uint8Array };
+  /** Every Stint, in creation order: the Lot and type each Building occupancy has. */
+  stints: StintTable;
 }
 
 /**
@@ -81,6 +96,8 @@ export interface World {
  */
 export interface ChunkSnapshot {
   file: Uint32Array;
+  /** Per standing file: the Stint it occupies now. */
+  stint: Uint32Array;
   /** Floors on screen once the commit before has settled. */
   floors: Uint8Array;
   /** 1 when the scaffolding is up, else 0. */
@@ -92,7 +109,7 @@ export interface ChunkSnapshot {
 }
 
 /** The layout part of the world file: everything the CLI decides about where things stand. */
-export type WorldLayout = Pick<World, "citySeed" | "widthStep" | "villages" | "blocks" | "lots" | "roads">;
+export type WorldLayout = Pick<World, "citySeed" | "widthStep" | "villages" | "blocks" | "lots" | "roads" | "stints">;
 
 /** A snapshot at the chunk's first commit plus the events inside the chunk. */
 export interface Chunk {
@@ -101,6 +118,8 @@ export interface Chunk {
   snapshot: ChunkSnapshot;
   eventCommit: Uint32Array;
   eventFile: Uint32Array;
+  /** The Stint the event belongs to: the one it creates, or the file's current one. */
+  eventStint: Uint32Array;
   eventKind: Uint8Array;
   /** One value per event; see the event kinds. */
   eventValue: Uint8Array;
@@ -123,6 +142,7 @@ const VILLAGE_BYTES = 3 * 4;
 const BLOCK_BYTES = 4 + 4 + 4 + 4 + 1 + 4;
 const LOT_BYTES = 4 + 4 + 1 + 1;
 const ROAD_BYTES = 4 + 4 + 1 + 1 + 1;
+const STINT_BYTES = 4 + 4 + 1;
 
 export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { chunks: { firstCommit: number; hash: Uint8Array }[] }): Uint8Array {
   const n = world.fileCount;
@@ -133,7 +153,7 @@ export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { c
   const size =
     20 + world.commitDays.length * 4 + n * FILE_ATTRIBUTE_BYTES + world.chunks.length * (4 + CHUNK_HASH_BYTES) +
     4 + n + 4 + villages.x.length * VILLAGE_BYTES + 4 + blocks.x.length * BLOCK_BYTES +
-    4 + lots.file.length * LOT_BYTES + 4 + roads.a.length * ROAD_BYTES;
+    4 + lots.file.length * LOT_BYTES + 4 + roads.a.length * ROAD_BYTES + 4 + world.stints.file.length * STINT_BYTES;
   const w = new Writer(size);
   w.u32(WORLD_MAGIC);
   w.u32(FORMAT_VERSION);
@@ -180,6 +200,13 @@ export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { c
     w.bytes(roads.forward.subarray(i, i + 1));
     w.bytes(roads.backward.subarray(i, i + 1));
     w.bytes(roads.track.subarray(i, i + 1));
+  }
+  const { stints } = world;
+  w.u32(stints.file.length);
+  for (let i = 0; i < stints.file.length; i++) {
+    w.u32(stints.file[i]!);
+    w.u32(stints.lot[i]!);
+    w.bytes(stints.buildingType.subarray(i, i + 1));
   }
   return w.done();
 }
@@ -249,6 +276,13 @@ export function decodeWorld(bytes: Uint8Array): World {
     roads.backward[i] = r.bytes(1)[0]!;
     roads.track[i] = r.bytes(1)[0]!;
   }
+  const stintCount = r.u32();
+  const stints = { file: new Uint32Array(stintCount), lot: new Uint32Array(stintCount), buildingType: new Uint8Array(stintCount) };
+  for (let i = 0; i < stintCount; i++) {
+    stints.file[i] = r.u32();
+    stints.lot[i] = r.u32();
+    stints.buildingType[i] = r.bytes(1)[0]!;
+  }
 
   return {
     formatVersion: r.formatVersion,
@@ -264,6 +298,7 @@ export function decodeWorld(bytes: Uint8Array): World {
     blocks,
     lots,
     roads,
+    stints,
   };
 }
 
@@ -277,19 +312,23 @@ export function encodeChunk(chunk: Omit<Chunk, "formatVersion">): Uint8Array {
   if (s.floors.length !== m || s.scaffolded.length !== m || s.buildingType.length !== m || s.language.length !== m) {
     throw new Error("snapshot columns differ in length");
   }
-  const w = new Writer(20 + m * (4 + 4) + n * 10);
+  if (!s.stint || s.stint.length !== m) throw new Error("snapshot stint column differs in length");
+  if (!chunk.eventStint || chunk.eventStint.length !== n) throw new Error("event stint column differs in length");
+  const w = new Writer(20 + m * (4 + 4 + 4) + n * (4 + 4 + 4 + 1 + 1));
   w.u32(CHUNK_MAGIC);
   w.u32(FORMAT_VERSION);
   w.u32(chunk.firstCommit);
   w.u32(m);
   w.u32(n);
   for (const id of s.file) w.u32(id);
+  for (const id of s.stint) w.u32(id);
   w.bytes(s.floors);
   w.bytes(s.scaffolded);
   w.bytes(s.buildingType);
   w.bytes(s.language);
   for (const c of chunk.eventCommit) w.u32(c);
   for (const f of chunk.eventFile) w.u32(f);
+  for (const st of chunk.eventStint) w.u32(st);
   w.bytes(chunk.eventKind);
   w.bytes(chunk.eventValue);
   return w.done();
@@ -302,6 +341,7 @@ export function decodeChunk(bytes: Uint8Array): Chunk {
   const n = r.u32();
   const snapshot: ChunkSnapshot = {
     file: r.u32s(snapshotCount),
+    stint: r.u32s(snapshotCount),
     floors: r.bytes(snapshotCount),
     scaffolded: r.bytes(snapshotCount),
     buildingType: r.bytes(snapshotCount),
@@ -309,9 +349,10 @@ export function decodeChunk(bytes: Uint8Array): Chunk {
   };
   const eventCommit = r.u32s(n);
   const eventFile = r.u32s(n);
+  const eventStint = r.u32s(n);
   const eventKind = r.bytes(n);
   const eventValue = r.bytes(n);
-  return { formatVersion: r.formatVersion, firstCommit, snapshot, eventCommit, eventFile, eventKind, eventValue };
+  return { formatVersion: r.formatVersion, firstCommit, snapshot, eventCommit, eventFile, eventStint, eventKind, eventValue };
 }
 
 class Writer {

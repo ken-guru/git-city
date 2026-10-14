@@ -6,7 +6,7 @@ import { CityBuildings } from "./buildings.js";
 import { addCountryside, type CountrysideHandle } from "./countryside.js";
 import { BlockLayer } from "./blocks.js";
 import { ChunkStream } from "./chunks.js";
-import { BLOCK_WORLD, cityExtent, placeFiles } from "./lots.js";
+import { BLOCK_WORLD, cityExtent, placeLot } from "./lots.js";
 import { cityTitle, createDistrictLabels } from "./labels.js";
 import { LodController, type LodSettings, settingsFor } from "./lod.js";
 import { addRoads } from "./roads.js";
@@ -78,7 +78,7 @@ async function main() {
   // The first chunk is needed to play at all; the rest stream in behind it, in order.
   let timelines: Timelines;
   try {
-    timelines = buildTimelines(await stream.load(0), world.fileCount, world.language);
+    timelines = buildTimelines(await stream.load(0), world.stints.file.length, world.language);
   } catch (e) {
     if (e instanceof FormatVersionError) return showVersionNotice();
     throw e;
@@ -138,14 +138,14 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   const city = new CityBuildings(
     scene,
     {
-      fileCount: world.fileCount,
-      buildingType: world.buildingType,
-      language: world.language,
-      seed: world.seed,
+      stintCount: world.stints.file.length,
+      buildingType: world.stints.buildingType,
+      language: Uint8Array.from(world.stints.file, (f) => world.language[f]!),
+      seed: Uint32Array.from(world.stints.file, (f) => world.seed[f]!),
       buildings: timelines.buildings,
       scaffolds: timelines.scaffolds,
       languages: timelines.languages,
-      place: placeFiles(world, world.fileCount),
+      place: (stint) => placeLot(world, world.stints.lot[stint]!),
     },
     theme,
   );

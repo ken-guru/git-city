@@ -6,7 +6,7 @@ import { loadConfig } from "./config.js";
 import { gitMaybe, git } from "./git.js";
 import { isShallowRepository, resolveTimelineHead } from "./history.js";
 import { categoryOf } from "./model.js";
-import { NO_DISTRICT, type LayoutResult } from "./layout.js";
+import { NO_DISTRICT, type LayoutResult, type LotRecord } from "./layout.js";
 import { type NearMiss, nameFiles, namePlaces, type PlaceInput, type Revealed } from "./naming.js";
 import { seedNumber } from "./namer.js";
 import { type PipelineOptions } from "./pipeline.js";
@@ -15,7 +15,7 @@ import { readPipeline, type PipelineRead } from "./resume.js";
 import type { SizeReport } from "./chunks.js";
 import { type RoadNetwork, buildRoadNetwork } from "./imports/roads.js";
 import { DEFAULT_THEME, hueFor, loadTheme, type Theme } from "./theme.js";
-import type { WorldLayout } from "../shared/format.js";
+import type { StintTable, WorldLayout } from "../shared/format.js";
 import { writeSite } from "./write.js";
 
 /** The pre-built page, shipped at `dist/page/` next to the CLI. */
@@ -110,7 +110,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     private: options.private,
   });
 
-  const sizes = await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, worldLayout(layout, roads, seed, widthStep), names.table, places, (staging) =>
+  const sizes = await writeSite(outDir, options.pageDir ?? DEFAULT_PAGE_DIR, data, worldLayout(layout, roads, seed, widthStep, data.stints), names.table, places, (staging) =>
     scanOutput(staging, names.hidden),
   );
   return {
@@ -159,9 +159,16 @@ export function roadsOf(layout: LayoutResult, links: { from: string; to: string;
 }
 
 /** The layout as the world file holds it: villages, Blocks, Lots, Roads and per-file width steps. */
-export function worldLayout(layout: LayoutResult, roads: RoadNetwork, citySeed: number, widthStep: Uint8Array): WorldLayout {
+export function worldLayout(
+  layout: LayoutResult,
+  roads: RoadNetwork,
+  citySeed: number,
+  widthStep: Uint8Array,
+  stints: StintSource,
+): WorldLayout {
   const positionOf = new Map(layout.districts.map((d, position) => [d.index, position] as const));
   return {
+    stints: stintTable(layout.lots, stints),
     citySeed,
     widthStep,
     villages: {
@@ -192,6 +199,42 @@ export function worldLayout(layout: LayoutResult, roads: RoadNetwork, citySeed: 
       track: Uint8Array.from(roads.roads, (r) => (r.track ? 1 : 0)),
     },
   };
+}
+
+/** The Timeline's Stints, as the page needs them: each one's file, Building type at creation, and the Stint it replaces. */
+export interface StintSource {
+  file: Uint32Array;
+  buildingType: Uint8Array;
+  from: Int32Array;
+}
+
+/**
+ * Gives every Stint the Lot it stands on. A Stint born with its file (ADD) or a Relocation takes the next Lot the
+ * layout handed that file, in order; a Renovation stands on the Lot of the Stint it replaces. Throws when the two
+ * disagree, since the page would otherwise draw a Building on the wrong Lot.
+ */
+export function stintTable(lots: readonly LotRecord[], stints: StintSource): StintTable {
+  const queues = new Map<number, number[]>();
+  lots.forEach((lot, index) => {
+    const queue = queues.get(lot.file) ?? [];
+    queue.push(index);
+    queues.set(lot.file, queue);
+  });
+  const lotOf = new Uint32Array(stints.file.length);
+  for (let s = 0; s < stints.file.length; s++) {
+    const from = stints.from[s]!;
+    if (from >= 0) {
+      lotOf[s] = lotOf[from]!;
+      continue;
+    }
+    const lot = queues.get(stints.file[s]!)?.shift();
+    if (lot === undefined) throw new Error(`the layout gives file ${stints.file[s]} no Lot for Stint ${s}`);
+    lotOf[s] = lot;
+  }
+  for (const [file, queue] of queues) {
+    if (queue.length > 0) throw new Error(`the layout gives file ${file} Lots that no Stint stands on`);
+  }
+  return { file: stints.file, lot: lotOf, buildingType: stints.buildingType };
 }
 
 /** What the naming step needs about each District: structure only. */

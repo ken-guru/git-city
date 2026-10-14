@@ -23,6 +23,8 @@ export interface FileStates {
   scaffolded: Uint8Array;
   buildingType: Uint8Array;
   language: Uint8Array;
+  /** The Stint each file occupies now (see the Stint table in format.ts). */
+  stint: Uint32Array;
 }
 
 /** The state before any event: nothing stands. Birth types and languages come from the world file. */
@@ -33,6 +35,7 @@ export function birthStates(buildingType: Uint8Array, language: Uint8Array): Fil
     scaffolded: new Uint8Array(buildingType.length),
     buildingType: Uint8Array.from(buildingType),
     language: Uint8Array.from(language),
+    stint: new Uint32Array(buildingType.length),
   };
 }
 
@@ -43,15 +46,20 @@ export function applySnapshot(state: FileStates, snapshot: ChunkSnapshot): void 
     state.scaffolded[file] = snapshot.scaffolded[i]!;
     state.buildingType[file] = snapshot.buildingType[i]!;
     state.language[file] = snapshot.language[i]!;
+    state.stint[file] = snapshot.stint[i]!;
   });
 }
 
-/** Applies one event (see the event kinds in format.ts). A file's birth type and language are not changed by ADD. */
-export function applyEvent(state: FileStates, kind: number, file: number, value: number): void {
+/**
+ * Applies one event (see the event kinds in format.ts). ADD, RELOCATE and RENOVATE create `stint` and make it the
+ * file's own; every other event leaves the file's Stint alone. A file's birth type and language are not changed by ADD.
+ */
+export function applyEvent(state: FileStates, kind: number, file: number, value: number, stint: number): void {
   switch (kind) {
     case EVENT_ADD:
       state.standing[file] = 1;
       state.floors[file] = value;
+      state.stint[file] = stint;
       break;
     case EVENT_DELETE:
       state.standing[file] = 0;
@@ -69,6 +77,7 @@ export function applyEvent(state: FileStates, kind: number, file: number, value:
     case EVENT_RELOCATE:
     case EVENT_RENOVATE:
       state.buildingType[file] = value;
+      state.stint[file] = stint;
       break;
     case EVENT_LANGUAGE:
       state.language[file] = value;

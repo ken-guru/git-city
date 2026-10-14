@@ -83,7 +83,7 @@ export function replayTo(chunk: Chunk, commit: number, birth: { buildingType: Ui
   const state = birthStates(birth.buildingType, birth.language);
   applySnapshot(state, chunk.snapshot);
   for (let i = 0; i < chunk.eventCommit.length && chunk.eventCommit[i]! <= commit; i++) {
-    applyEvent(state, chunk.eventKind[i]!, chunk.eventFile[i]!, chunk.eventValue[i]!);
+    applyEvent(state, chunk.eventKind[i]!, chunk.eventFile[i]!, chunk.eventValue[i]!, chunk.eventStint[i]!);
   }
   return state;
 }
