@@ -25,8 +25,23 @@ export const COHESION_SLACK = 8;
 /** A Block is 2 rows of 4 unit slots. */
 export const BLOCK_ROWS = 2;
 export const BLOCK_SLOTS_PER_ROW = 4;
-const MAX_WIDTH_STEP = 3;
-/** Paving: medium-low saturation and a fixed lightness, with seeded offsets of 15 and 6 points. */
+/** A Lot is sized for its width step plus this many unit slots of headroom. */
+export const LOT_HEADROOM_SLOTS = 2;
+/** A District's Role switches only when another Role's score exceeds the current one by this ratio. */
+export const ROLE_SWITCH_RATIO = 1.5;
+
+/** A cell of the Block grid. */
+interface Cell {
+  col: number;
+  row: number;
+}
+/**
+ * Paving: medium-low saturation and a fixed lightness, with seeded offsets of 15 and 6 points.
+ * All values are fractions of the full 0 to 1 range (absolute points, not relative percentages).
+ * Known limits, for the page and later tickets: the seeded village angle is recorded but the Block grid
+ * is not rotated by it; a Lot is sized from its Building's width step at birth, so a later wider step is
+ * not re-sized; a District that splits off in place does not yet take the opposite lightness offset.
+ */
 const PAVING_SATURATION = 0.42;
 const PAVING_LIGHTNESS = 0.55;
 const SATURATION_OFFSET = 0.15;
@@ -150,8 +165,9 @@ export class LayoutBuilder {
 
   apply(change: LayoutChange): void {
     for (const { path } of change.deleted) this.unstand(path);
+    // Manifests first, so that whether a directory splits off in place never depends on order within a commit.
+    for (const { path } of change.added) this.addManifest(path);
     for (const { file, path } of change.added) {
-      this.addManifest(path);
       this.stand(path);
       this.build(file, path);
     }
@@ -213,7 +229,7 @@ export class LayoutBuilder {
     district.neighbourhoods.add(neighbourhood);
     this.scoreRoles(district, path);
 
-    const slots = Math.min(this.widthStepOf(file) + 2, BLOCK_SLOTS_PER_ROW);
+    const slots = Math.min(this.widthStepOf(file) + LOT_HEADROOM_SLOTS, BLOCK_SLOTS_PER_ROW);
     const at = this.allocate(`${key}|${neighbourhood}`, district.village, neighbourhood, slots);
     this.lots.push({ file, block: at.block, slot: at.slot, slots });
   }
@@ -290,7 +306,7 @@ export class LayoutBuilder {
     const anchor = this.villages[village]!;
     const globalSpot = this.bestBlockSpot(anchor, village);
     const own = this.ownedBlocks.get(owner) ?? [];
-    let cohesive: { col: number; row: number } | undefined;
+    let cohesive: Cell | undefined;
     let cohesiveDist = Infinity;
     for (const id of own) {
       const b = this.blocks[id]!;
@@ -327,7 +343,7 @@ export class LayoutBuilder {
   }
 
   /** The free spot nearest the village centre, keeping one Block of open land from other villages if it can. */
-  private bestBlockSpot(anchor: VillageRecord, village: number): { col: number; row: number } {
+  private bestBlockSpot(anchor: VillageRecord, village: number): Cell {
     const buffered = this.nearest(
       (c, r) => !this.blockAt.has(cellKey(c, r)) && !this.nextToOtherVillage(c, r, village),
       BUFFER_SEARCH_RINGS,
@@ -356,8 +372,8 @@ export class LayoutBuilder {
     maxRing: number,
     fromCol: number,
     fromRow: number,
-  ): { col: number; row: number } {
-    let best: { col: number; row: number } | undefined;
+  ): Cell | undefined {
+    let best: Cell | undefined;
     let bestD = Infinity;
     for (let r = 0; r <= maxRing; r++) {
       for (let dr = -r; dr <= r; dr++) {
@@ -375,9 +391,7 @@ export class LayoutBuilder {
       }
       if (best && bestD <= (r + 1) ** 2) break;
     }
-    if (best) return best;
-    if (maxRing !== Infinity) return this.nearest(accept, Infinity, fromCol, fromRow);
-    throw new Error("no free spot found");
+    return best;
   }
 
   private scoreRoles(district: DistrictState, path: string): void {
@@ -401,7 +415,7 @@ export class LayoutBuilder {
     if (best === null) return;
     // A Role switches only when another clearly dominates the current one.
     const current = district.role === null ? 0 : (district.scores.get(district.role) ?? 0);
-    if (district.role === null || bestScore > current * 1.5) district.role = best;
+    if (district.role === null || bestScore > current * ROLE_SWITCH_RATIO) district.role = best;
   }
 }
 
@@ -461,7 +475,7 @@ function cellKey(col: number, row: number): string {
 }
 
 /** True when (col, row) comes before the other cell in the nearest-spot tie-break order. */
-function lessCell(col: number, row: number, other: { col: number; row: number }): boolean {
+function lessCell(col: number, row: number, other: Cell): boolean {
   return row < other.row || (row === other.row && col < other.col);
 }
 

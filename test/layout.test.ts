@@ -78,6 +78,19 @@ describe("Modules that appear partway through", () => {
     // The first two Lots stay where they were built, under the parent District.
     expect(lots.slice(0, 2).map((l) => l.file)).toEqual([0, 1]);
   });
+
+  it("gives the same answer whichever order a commit lists its manifest and its files", () => {
+    const first = new Changes()
+      .commit(["packages/web/a.ts"])
+      .commit(["packages/web/package.json", "packages/web/c.ts"]);
+    const second = new Changes()
+      .commit(["packages/web/a.ts"])
+      .commit(["packages/web/c.ts", "packages/web/package.json"]);
+    const village = (list: LayoutChange[]) =>
+      layoutHistory(list, { seed: 1 }).districts.find((d) => d.key === "packages/web")!.village;
+    expect(village(second.list)).toBe(village(first.list));
+    expect(village(first.list)).toBe(layoutHistory(first.list, { seed: 1 }).districts.find((d) => d.key === "packages")!.village);
+  });
 });
 
 describe("Villages", () => {
