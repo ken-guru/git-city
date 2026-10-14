@@ -108,7 +108,7 @@ export function highlightSpots(
   const seen = new Set<number>();
   for (let c = commit; c >= Math.max(0, commit - HIGHLIGHT_COMMITS) && spots.length < HIGHLIGHT_CAPACITY; c--) {
     if (whoOf(c) !== person) continue;
-    for (const stint of index.stintsAt(c)) {
+    for (const stint of index.allStintsAt(c)) {
       if (seen.has(stint)) continue;
       seen.add(stint);
       spots.push(pinSpotOf(world, timelines, stint, commit + 1, colourOf(c)));

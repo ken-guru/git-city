@@ -37,7 +37,8 @@ By default, none of the following are in the output:
 - Raw line or importer counts.
 - The mapping from Real names to Pseudonyms or Generated names.
 
-Revealing a name is always an explicit choice in config (`reveal` in `rules`). Nothing is revealed by default, and the
+Revealing a name is always an explicit choice in config: a `reveal` rule in `rules`, or the `real` level of `contributors`
+for Contributors' names. Nothing is revealed by default, and the
 `--private` flag ignores every reveal. See the [config reference](config.md).
 
 ## How to check it

@@ -6,6 +6,7 @@ import {
   type PavingColour,
   type PlacesFile,
 } from "../shared/places.js";
+import { NO_CONTENT } from "../shared/format.js";
 import type { Config, ContributorLevel } from "./config.js";
 import type { ContributorInput } from "./contributors.js";
 import type { Role } from "./layout.js";
@@ -329,8 +330,8 @@ export function encodePlaces(table: PlaceTable): string {
   return `${JSON.stringify(table.file)}\n`;
 }
 
-/** The id that marks an absent Contributor or commit message on a commit record in the world file. */
-export const NO_STRING = 0xffffffff;
+/** The id that marks an absent Contributor or commit message in the world file (the format's NO_CONTENT). */
+export const NO_STRING = NO_CONTENT;
 
 /** The name Automation shows under, for every bot together (SPEC §8). */
 export const AUTOMATION_NAME = "Automation";

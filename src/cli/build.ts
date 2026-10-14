@@ -15,6 +15,7 @@ import { readPipeline, type PipelineRead } from "./resume.js";
 import { planChunks, type SizeReport, sizeReport } from "./chunks.js";
 import type { RoadTable } from "./roadhistory.js";
 import { DEFAULT_THEME, hueFor, loadTheme, type Theme } from "./theme.js";
+import type { TimelineData } from "./timeline.js";
 import { type StepEra, type StepLevel, chooseStepLevel, groupTimeline, PEAK_BUILDINGS_WARNING, peakStanding, planSteps, recentFromFor, stepEras } from "./steps.js";
 import type { StintTable, WorldLayout } from "../shared/format.js";
 import { encodeSiteWorld, writeSite } from "./write.js";
@@ -149,18 +150,15 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   // Steps: the smallest grouping that fits the budget (or the pinned one). Only the output's commits move.
   // Everything keyed by commit (claims, events, Road build dates) is renumbered with the same plan.
   const worldFor = (stepOf: Uint32Array) => worldLayout(claimsAtSteps(layout, stepOf), roads, streets, seed, widthStep, rawTimeline.stints);
+  // The Contributors and messages of a Timeline, named with the names already in the City (`taken`) and the hidden terms.
+  const namedContent = (timeline: TimelineData, taken: string[], hidden: string[] = names.hidden) =>
+    commitContent(names.table, timeline, config, { theme, seed: seedText, hidden, private: options.private, taken });
   const sizeAt = (level: StepLevel) => {
     const plan = planSteps(rawTimeline.commitDays, level, recentFromFor(commits));
     const timeline = groupTimeline(rawTimeline, plan);
     const plans = planChunks(timeline);
     // Sized with the Contributors and messages it will hold; the City's other names are not known yet, so only places are taken.
-    const content = commitContent(names.table, timeline, config, {
-      theme,
-      seed: seedText,
-      hidden: names.hidden,
-      private: options.private,
-      taken: [places.file.city.name, ...places.file.districts.map((d) => d.name)],
-    });
+    const content = namedContent(timeline, [places.file.city.name, ...places.file.districts.map((d) => d.name)]);
     const worldBytes = encodeSiteWorld(timeline, plans, worldFor(plan.stepOf), config.exactTimes === true, content.columns);
     return sizeReport(worldBytes, plans);
   };
@@ -195,13 +193,11 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   });
   const hidden = [...names.hidden, ...cities.hiddenKeys];
   // Contributors and messages are named last, so their Generated names differ from every other name in the City.
-  const content = commitContent(names.table, timeline, config, {
-    theme,
-    seed: seedText,
+  const content = namedContent(
+    timeline,
+    [places.file.city.name, ...places.file.districts.map((d) => d.name), ...cities.file.cities.map((c) => c.name)],
     hidden,
-    private: options.private,
-    taken: [places.file.city.name, ...places.file.districts.map((d) => d.name), ...cities.file.cities.map((c) => c.name)],
-  });
+  );
 
   options.onPhase?.("Writing site");
   const sizes = await writeSite(

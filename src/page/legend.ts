@@ -32,10 +32,15 @@ export function renderLegend(root: HTMLElement, input: LegendInput, onHighlight:
       lit = value;
       button.setAttribute("aria-pressed", String(value));
     };
+    // A tap locks the highlight (aria-pressed); leaving or blurring then keeps it until the next tap.
     button.addEventListener("pointerenter", () => onHighlight(contributor));
-    button.addEventListener("pointerleave", () => onHighlight(undefined));
+    button.addEventListener("pointerleave", () => {
+      if (!lit) onHighlight(undefined);
+    });
     button.addEventListener("focus", () => onHighlight(contributor));
-    button.addEventListener("blur", () => onHighlight(undefined));
+    button.addEventListener("blur", () => {
+      if (!lit) onHighlight(undefined);
+    });
     button.addEventListener("click", () => {
       set(!lit);
       onHighlight(lit ? contributor : undefined);

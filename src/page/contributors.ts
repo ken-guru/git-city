@@ -2,7 +2,7 @@
  * Contributors and commit messages on the page (SPEC §11): the pins over changed Buildings, the legend, and the caption.
  * Everything here is pure, so it can be tested without a browser; the THREE layer and the DOM sit on top of it.
  */
-import { type Chunk, EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_RELOCATE, EVENT_RENOVATE } from "../shared/format.js";
+import { type Chunk, EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_RELOCATE, EVENT_RENOVATE, type World } from "../shared/format.js";
 import { easeOutCubic } from "./state.js";
 
 /** The people who get a colour of their own, and the legend's list (SPEC §11). */
@@ -28,12 +28,8 @@ export const OTHER_COLOUR = 0x6b7785;
 export const AUTOMATION_COLOUR = 0xb4bcc6;
 
 /** The world file's contributor columns, as the page reads them. */
-export interface ContributorColumns {
-  name: Uint32Array;
-  automation: Uint8Array;
-  /** Per Step: the Contributor of its newest commit. */
-  ofStep: Uint32Array;
-}
+/** The world file's contributor columns, as the page reads them. */
+export type ContributorColumns = NonNullable<World["contributors"]>;
 
 export interface People {
   /** Commits per Contributor, over the whole Timeline. */
@@ -85,8 +81,10 @@ export function rankPeople(columns: ContributorColumns, stepCommits: Uint32Array
 /** The Buildings each commit changes, from the chunks' events. Built as chunks arrive; the first event kinds only. */
 export interface ChangeIndex {
   add(chunk: Pick<Chunk, "eventCommit" | "eventStint" | "eventKind">): void;
-  /** The stints a commit changed, in event order, each once. */
+  /** The stints a pin shows for a commit: at most PINS_PER_COMMIT, in event order, each once. */
   stintsAt(commit: number): number[];
+  /** Every stint a commit changed, uncapped: a highlight lights up all of a person's Buildings. */
+  allStintsAt(commit: number): number[];
 }
 
 /** The events that change a Building: it is added, deleted, re-floored, relocated or renovated. */
@@ -107,6 +105,9 @@ export function changesIndex(): ChangeIndex {
     },
     stintsAt(commit) {
       return (byCommit.get(commit) ?? []).slice(0, PINS_PER_COMMIT);
+    },
+    allStintsAt(commit) {
+      return byCommit.get(commit) ?? [];
     },
   };
 }
