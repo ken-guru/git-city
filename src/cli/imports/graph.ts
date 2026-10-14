@@ -1,6 +1,6 @@
 import { parseJsonc } from "../jsonc.js";
 import { extractorFor, ImportCache, type RawImport } from "./extract.js";
-import { extendsTarget, ImportResolver, type Resolution, type Snapshot } from "./resolve.js";
+import { extendsTarget, ImportResolver, MAX_EXTENDS_DEPTH, type Resolution, type Snapshot } from "./resolve.js";
 
 /**
  * The import graph (SPEC §4), fed one commit at a time in history order. It keeps, for the commit it is at:
@@ -32,9 +32,6 @@ export interface ImportGraphOptions {
 }
 
 const JSON_FILE = /\.jsonc?$/;
-/** How far a tsconfig `extends` chain is followed. Deeper chains are left unresolved. */
-const MAX_EXTENDS_DEPTH = 8;
-
 /** The `extends` value of a tsconfig text, or undefined when it has none or does not parse. */
 function extendsValue(text: string): string | undefined {
   try {

@@ -57,7 +57,7 @@ export function buildingTypeOf(category: Category): BuildingType {
 export const RAIL_YARD_FLOOR_CAP = 1;
 
 /** Floors for the file at `path` with `lines` lines: its Category's cap applies. */
-export function floorsOf(path: string, lines: number): number {
+export function floorsForPath(path: string, lines: number): number {
   const cap = categoryOf(path) === "generated" ? RAIL_YARD_FLOOR_CAP : TUNING.floorCap;
   return floorsFor(lines, TUNING.floorK, cap);
 }

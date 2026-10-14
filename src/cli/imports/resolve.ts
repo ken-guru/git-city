@@ -41,6 +41,9 @@ const TS_FOR_JS = [".ts", ".tsx", ".d.ts", ".mts", ".cts"];
 const BUILD_DIRS = new Set(["dist", "build", "lib", "out"]);
 const BUILTINS = new Set([...builtinModules, ...builtinModules.map((m) => m.replace(/^node:/, ""))]);
 
+/** How far a tsconfig `extends` chain is followed. Deeper chains are left unresolved. */
+export const MAX_EXTENDS_DEPTH = 8;
+
 /** The path a tsconfig's `extends` value names, relative to the tsconfig at `configPath`. */
 export function extendsTarget(configPath: string, value: string): string {
   return normalize(join(dirname(configPath), value));
@@ -120,7 +123,11 @@ class Resolver {
 
     const workspace = this.workspaces().get(name);
     // A workspace package lives in this repo, so an entry it does not export is not an external dependency.
-    if (workspace !== undefined) return this.packageEntry(workspace, sub);
+    if (workspace !== undefined) {
+      const hit = this.packageEntry(workspace, sub);
+      if (hit) return hit;
+    }
+    // Not resolvable inside the repo: still a package, so a declared dependency keeps counting.
     return { kind: "package", name };
   }
 
@@ -262,7 +269,7 @@ class Resolver {
 
   private loadTsconfig(path: string, depth: number): TsconfigView | undefined {
     this.probe(path);
-    if (!this.snap.paths.has(path) || depth > 8) return undefined;
+    if (!this.snap.paths.has(path) || depth > MAX_EXTENDS_DEPTH) return undefined;
     const json = this.readJson(path);
     const dir = dirname(path);
     let view: TsconfigView | undefined;

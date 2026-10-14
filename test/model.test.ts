@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { BUILDING_TYPES, buildingTypeOf, categoryOf, floorsFor, floorsOf, languageOf, seedFor } from "../src/cli/model.js";
+import { BUILDING_TYPES, buildingTypeOf, categoryOf, floorsFor, floorsForPath, languageOf, seedFor } from "../src/cli/model.js";
 
 describe("rail-yard Buildings", () => {
   it("keeps generated, vendored and lockfile paths flat", () => {
     for (const path of ["dist/app.js", "vendor/lib/x.go", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"]) {
       expect(categoryOf(path), path).toBe("generated");
-      expect(floorsOf(path, 1_000_000), path).toBe(1);
+      expect(floorsForPath(path, 1_000_000), path).toBe(1);
     }
   });
 
   it("leaves other Categories at the normal Floor cap", () => {
-    expect(floorsOf("src/app.ts", 10_000_000)).toBe(32);
+    expect(floorsForPath("src/app.ts", 10_000_000)).toBe(32);
   });
 });
 

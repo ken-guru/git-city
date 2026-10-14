@@ -45,7 +45,7 @@ export function schemaErrors(schema: Schema, value: unknown, at = "$", root: Sch
   }
   if (Array.isArray(value)) {
     if (typeof schema.minItems === "number" && value.length < schema.minItems) errors.push(`${at} needs at least ${schema.minItems} items`);
-    if (isSchema(schema.items)) value.forEach((item, i) => errors.push(...schemaErrors(schema.items as Schema, item, `${at}[${i}]`, root)));
+    if (isPlainObject(schema.items)) value.forEach((item, i) => errors.push(...schemaErrors(schema.items as Schema, item, `${at}[${i}]`, root)));
   }
   if (isPlainObject(value)) {
     const properties = (isPlainObject(schema.properties) ? schema.properties : {}) as Record<string, Schema>;
@@ -55,7 +55,7 @@ export function schemaErrors(schema: Schema, value: unknown, at = "$", root: Sch
     for (const [key, item] of Object.entries(value)) {
       if (key in properties) errors.push(...schemaErrors(properties[key]!, item, `${at}.${key}`, root));
       else if (schema.additionalProperties === false) errors.push(`${at} has unknown key "${key}"`);
-      else if (isSchema(schema.additionalProperties)) errors.push(...schemaErrors(schema.additionalProperties as Schema, item, `${at}.${key}`, root));
+      else if (isPlainObject(schema.additionalProperties)) errors.push(...schemaErrors(schema.additionalProperties as Schema, item, `${at}.${key}`, root));
     }
   }
   if (Array.isArray(schema.allOf)) {
@@ -72,7 +72,7 @@ function resolveRef(root: Schema, ref: string): Schema {
   if (!ref.startsWith("#/")) throw new Error(`schema-check: only local references are supported, got ${ref}`);
   let node: unknown = root;
   for (const part of ref.slice(2).split("/")) node = (node as Record<string, unknown>)[part];
-  if (!isSchema(node)) throw new Error(`schema-check: ${ref} does not resolve`);
+  if (!isPlainObject(node)) throw new Error(`schema-check: ${ref} does not resolve`);
   return node as Schema;
 }
 
@@ -99,9 +99,5 @@ function typeMatches(type: string, value: unknown): boolean {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isSchema(value: unknown): boolean {
-  return isPlainObject(value);
 }
 

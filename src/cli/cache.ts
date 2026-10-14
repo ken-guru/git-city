@@ -19,17 +19,11 @@ export const CACHE_FOLDER = "git-city";
 const LAYER_DEFINITIONS = {
   facts: { sources: ["facts", "imports/extract"], dirs: ["facts"], dependents: ["commits"] },
   commits: { sources: ["history", "git"], dirs: ["commits"], dependents: ["run"] },
-  run: { sources: ["timeline", "model", "layout", "resume"], dirs: ["runs", "states"], dependents: [] },
+  // Shared modules the run state's contents come from are listed too, so changing their code clears the run layer.
+  run: { sources: ["timeline", "model", "layout", "resume", "../shared/buildings", "../shared/format"], dirs: ["runs", "states"], dependents: [] },
 } as const satisfies Record<string, { sources: readonly string[]; dirs: readonly string[]; dependents: readonly string[] }>;
 export type Layer = keyof typeof LAYER_DEFINITIONS;
 const LAYERS = Object.keys(LAYER_DEFINITIONS) as Layer[];
-
-/** The folders each layer owns, relative to the cache folder. */
-const LAYER_DIRS: Record<Layer, readonly string[]> = {
-  facts: LAYER_DEFINITIONS.facts.dirs,
-  commits: LAYER_DEFINITIONS.commits.dirs,
-  run: LAYER_DEFINITIONS.run.dirs,
-};
 
 /** The code of a module beside this one, in the form this file is running from (.ts under tests, .js when built). */
 function sourceText(name: string): Buffer {
@@ -239,7 +233,7 @@ export async function cacheStatus(repoDir: string): Promise<string[]> {
   for (const layer of LAYERS) {
     let bytes = 0;
     let files = 0;
-    for (const d of LAYER_DIRS[layer]) {
+    for (const d of LAYER_DEFINITIONS[layer].dirs) {
       const usage = await usageOf(join(dir, d));
       bytes += usage.bytes;
       files += usage.files;
@@ -311,7 +305,7 @@ async function reconcileStamps(dir: string, fresh: boolean): Promise<void> {
   // A layer is built from the ones before it, so clearing one clears only what depends on it.
   for (const layer of [...clear]) for (const dependent of dependentsOf(layer)) clear.add(dependent);
   for (const layer of clear) {
-    for (const d of LAYER_DIRS[layer]) await rm(join(dir, d), { recursive: true, force: true });
+    for (const d of LAYER_DEFINITIONS[layer].dirs) await rm(join(dir, d), { recursive: true, force: true });
   }
   await writeAtomic(join(dir, "stamps.json"), JSON.stringify(LAYER_STAMPS));
 }

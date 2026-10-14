@@ -118,7 +118,7 @@ describe("package.json imports, workspaces and exports", () => {
     expect(resolveImport(snap, "app/main.ts", "@acme/lib/feature").target).toEqual({ kind: "file", path: "packages/lib/src/feature.ts" });
   });
 
-  it("does not resolve a subpath that an exports map leaves out", () => {
+  it("does not resolve a workspace subpath that an exports map leaves out, but keeps it as a package", () => {
     const snap = repo({
       "app/main.ts": "",
       "package.json": `{ "name": "root", "workspaces": ["packages/*"] }`,
@@ -127,7 +127,7 @@ describe("package.json imports, workspaces and exports", () => {
       "packages/lib/src/internal.ts": "",
     });
 
-    expect(resolveImport(snap, "app/main.ts", "@acme/lib/src/internal").target).toBeUndefined();
+    expect(resolveImport(snap, "app/main.ts", "@acme/lib/src/internal").target).toEqual({ kind: "package", name: "@acme/lib" });
   });
 
   it("reports a bare package name as a package and drops builtins", () => {
