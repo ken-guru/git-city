@@ -48,10 +48,15 @@ export interface LotTable {
   lots: { file: ArrayLike<number>; block: ArrayLike<number>; slot: ArrayLike<number>; slots: ArrayLike<number> };
 }
 
+/** The centre of the Block a Lot is in, in world units. */
+export function lotBlock(table: LotTable, lot: number): Spot {
+  const block = table.lots.block[lot]!;
+  return blockSpot(table.blocks.x[block]!, table.blocks.z[block]!);
+}
+
 /** Where a Lot is on the ground: its Block's position plus its place within the Block. */
 export function placeLot(table: LotTable, lot: number): Spot {
-  const block = table.lots.block[lot]!;
-  const origin = blockSpot(table.blocks.x[block]!, table.blocks.z[block]!);
+  const origin = lotBlock(table, lot);
   const within = lotSpot(table.lots.slot[lot]!, table.lots.slots[lot]!);
   return { x: origin.x + within.x, z: origin.z + within.z };
 }

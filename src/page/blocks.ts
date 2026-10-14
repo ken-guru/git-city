@@ -115,7 +115,7 @@ export class BlockLayer {
   update(camera: Vector3, massFar: number): void {
     let changed = false;
     this.centres.forEach((c, i) => {
-      const distance = Math.hypot(c.x - camera.x, this.heights[i]! - camera.y, c.z - camera.z);
+      const distance = Math.hypot(c.x - camera.x, c.z - camera.z);
       const show = massShown(distance, massFar) ? 1 : 0;
       if (show === this.shown[i]) return;
       this.shown[i] = show;

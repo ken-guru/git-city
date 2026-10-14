@@ -26,6 +26,7 @@ import {
   scaffoldPose,
 } from "./state.js";
 import type { Spot } from "./lots.js";
+import { massShown } from "./blocks.js";
 
 /**
  * The modular kit. Every Building type is one unit-height body (y 0..1) plus props on its roof (y from 1 up).
@@ -318,6 +319,8 @@ export interface CityData {
   languages: LanguageSegment[][];
   /** Where a Stint stands on the ground, or undefined when it has no Lot (it is then never drawn). */
   place: (stint: number) => Spot | undefined;
+  /** The centre of the Block the Stint's Lot is in: beyond the mass distance, the Block draws as a mass instead. */
+  block: (stint: number) => Spot;
 }
 
 interface TypeMesh {
@@ -347,6 +350,8 @@ export class CityBuildings {
   private readonly data: CityData;
   /** The colour each Stint's instance last received, so only changed colours are written. */
   private readonly lastColour = new Map<number, number>();
+  /** Beyond this distance from the camera, a Block draws as a mass and its Buildings are not drawn (see `setDetail`). */
+  private massFar = Number.POSITIVE_INFINITY;
 
   constructor(scene: Scene, data: CityData, theme: keyof typeof PALETTE) {
     this.data = data;
@@ -431,6 +436,13 @@ export class CityBuildings {
     this.uniforms.uWindowNear.value = detail.windowNear;
     this.uniforms.uWindowFar.value = detail.windowFar;
     this.uniforms.uPropFar.value = detail.propFar;
+    this.massFar = detail.massFar;
+  }
+
+  /** Whether a Stint's Block is far enough from the camera to draw as a mass, which hides the Buildings inside it. */
+  private inMass(stint: number, camera: { x: number; z: number }): boolean {
+    const block = this.data.block(stint);
+    return massShown(Math.hypot(block.x - camera.x, block.z - camera.z), this.massFar);
   }
 
   /** Puts a Stint's instance on its Lot, or collapses it to nothing (also when the file has no Lot). */
@@ -456,8 +468,11 @@ export class CityBuildings {
     attribute.setXYZ(i, r, g, b);
   }
 
-  /** Sets every instance for time `t` (in commits) and at `commitsPerSecond` speed. */
-  update(t: number, commitsPerSecond: number): void {
+  /**
+   * Sets every instance for time `t` (in commits), at `commitsPerSecond` speed, and for a camera at `camera`
+   * (its horizontal position): Buildings in Blocks beyond the mass distance are not drawn.
+   */
+  update(t: number, commitsPerSecond: number, camera: { x: number; z: number }): void {
     const duration = durationFor(commitsPerSecond);
     this.uniforms.uTime.value = t;
     this.uniforms.uDuration.value = duration;
@@ -472,9 +487,10 @@ export class CityBuildings {
         kind.setX(i, pose.kind === KIND_NONE ? KIND_CHANGE : pose.kind);
         from.setX(i, pose.from);
         to.setX(i, pose.to);
-        if (pose.visible !== Boolean(this.onBuilding[f])) {
-          this.onBuilding[f] = pose.visible ? 1 : 0;
-          this.setPlacement(type.mesh, i, f, pose.visible);
+        const shown = pose.visible && !this.inMass(f, camera);
+        if (shown !== Boolean(this.onBuilding[f])) {
+          this.onBuilding[f] = shown ? 1 : 0;
+          this.setPlacement(type.mesh, i, f, shown);
         }
       });
       start.needsUpdate = kind.needsUpdate = from.needsUpdate = to.needsUpdate = true;
@@ -488,9 +504,10 @@ export class CityBuildings {
       this.scaffoldAttrs.from.setX(f, pose.from);
       this.scaffoldAttrs.to.setX(f, pose.to);
       this.scaffoldAttrs.height.setX(f, pose.height);
-      if (pose.visible !== Boolean(this.onScaffold[f])) {
-        this.onScaffold[f] = pose.visible ? 1 : 0;
-        this.setPlacement(this.scaffold, f, f, pose.visible);
+      const shown = pose.visible && !this.inMass(f, camera);
+      if (shown !== Boolean(this.onScaffold[f])) {
+        this.onScaffold[f] = shown ? 1 : 0;
+        this.setPlacement(this.scaffold, f, f, shown);
       }
     }
     for (const type of this.types) type.language.needsUpdate = true;

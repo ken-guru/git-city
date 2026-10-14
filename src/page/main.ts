@@ -6,7 +6,7 @@ import { CityBuildings } from "./buildings.js";
 import { addCountryside, type CountrysideHandle } from "./countryside.js";
 import { BlockLayer } from "./blocks.js";
 import { ChunkStream } from "./chunks.js";
-import { BLOCK_WORLD, cityExtent, placeLot } from "./lots.js";
+import { BLOCK_WORLD, cityExtent, lotBlock, placeLot } from "./lots.js";
 import { cityTitle, createDistrictLabels } from "./labels.js";
 import { LodController, type LodSettings, settingsFor } from "./lod.js";
 import { addRoads } from "./roads.js";
@@ -146,6 +146,7 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
       scaffolds: timelines.scaffolds,
       languages: timelines.languages,
       place: (stint) => placeLot(world, world.stints.lot[stint]!),
+      block: (stint) => lotBlock(world, world.stints.lot[stint]!),
     },
     theme,
   );
@@ -197,7 +198,7 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   player.hidden = false;
 
   function draw(t: number) {
-    city.update(t, TUNING.commitsPerSecond);
+    city.update(t, TUNING.commitsPerSecond, camera.position);
     blockLayer.update(camera.position, detail.massFar);
     const commit = Math.min(commitCount - 1, Math.max(0, Math.floor(t)));
     const day = new Date(world.commitDays[commit]! * SECONDS_PER_DAY * 1000).toISOString().slice(0, 10);
