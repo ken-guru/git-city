@@ -10,6 +10,13 @@ export interface CommitRecord {
   added: string[];
   /** Paths that disappear in this commit. A rename disappears here under its old path. */
   deleted: string[];
+  /** Standing paths whose content changed in this commit (status M or T). */
+  modified: string[];
+  /**
+   * Line counts after this commit, for the paths whose lines are known (added or modified files).
+   * Filled by the history extraction's file facts; absent paths count as one Floor.
+   */
+  lines?: Map<string, number>;
 }
 
 export class HistoryError extends Error {}
@@ -90,7 +97,7 @@ class RawLogParser {
       if (this.commit) yield this.commit;
       const seconds = Number(token.slice(1));
       if (!Number.isFinite(seconds)) throw new HistoryError(`unexpected commit header from git log: ${JSON.stringify(token)}`);
-      this.commit = { day: Math.floor(seconds / SECONDS_PER_DAY), added: [], deleted: [] };
+      this.commit = { day: Math.floor(seconds / SECONDS_PER_DAY), added: [], deleted: [], modified: [] };
       return;
     }
     const header = token.replace(/^\n/, "");
@@ -117,7 +124,10 @@ class RawLogParser {
       case "C":
         commit.added.push(to!);
         break;
-      // M (modified) and T (type change) leave the set of standing files unchanged.
+      case "M":
+      case "T":
+        commit.modified.push(from);
+        break;
     }
   }
 }
