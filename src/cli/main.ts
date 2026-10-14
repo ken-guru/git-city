@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { auditSite, AuditError } from "./audit.js";
 import { build } from "./build.js";
+import { cacheClear, cacheStatus, CacheError, LockError } from "./cache.js";
 import { ConfigError } from "./config.js";
 import { HistoryError } from "./history.js";
 import { PrivacyError } from "./privacy.js";
@@ -14,6 +15,8 @@ const DEFAULT_OUT = "git-city-site";
 
 /** Exit code for a failed privacy check (see SPEC §10). */
 const EXIT_PRIVACY = 2;
+/** Exit code when another run holds the cache lock (see SPEC §10). */
+const EXIT_LOCKED = 3;
 
 const HELP = `Usage: git-city [build] [options]
        git-city serve [dir] [--port <n>]
@@ -25,6 +28,7 @@ Commands:
   build          build the site (the default)
   serve [dir]    serve a built site on localhost (default dir: ${DEFAULT_OUT})
   audit [dir]    list every string in a built site (default dir: ${DEFAULT_OUT})
+  cache status|clear  inspect or remove the build cache in .git/git-city/
 
 Options:
   -C <path>        run as if started in <path>
@@ -33,6 +37,8 @@ Options:
   --config <path>  read this config file instead of the shared and personal configs
   --strict         fail the build on near-miss names
   --private        ignore every reveal in the config
+  --fresh          rebuild the cache from scratch
+  --wait           wait for another running build instead of failing
   --port <n>       port for serve, used exactly (default: the first free port
                    from ${DEFAULT_PORT} to ${DEFAULT_PORT + DEFAULT_PORT_ATTEMPTS - 1})
   -h, --help       show this help
@@ -57,6 +63,8 @@ async function main(argv: string[]): Promise<number> {
       config: { type: "string" },
       strict: { type: "boolean" },
       private: { type: "boolean" },
+      fresh: { type: "boolean" },
+      wait: { type: "boolean" },
       port: { type: "string" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
@@ -82,6 +90,8 @@ async function main(argv: string[]): Promise<number> {
       configPath: values.config === undefined ? undefined : resolve(cwd, values.config),
       strict: values.strict,
       private: values.private,
+      fresh: values.fresh,
+      wait: values.wait,
     });
     for (const warning of summary.warnings) process.stderr.write(`git-city: warning: ${warning}\n`);
     const lines =[`Built ${summary.commits} commits and ${summary.files} files from ${summary.branch} into ${summary.outDir}`];
@@ -101,6 +111,16 @@ async function main(argv: string[]): Promise<number> {
   if (command === "audit" && rest.length <= 1) {
     const lines = await auditSite(resolve(cwd, rest[0] ?? values.out ?? DEFAULT_OUT));
     process.stdout.write(lines.length ? `${lines.join("\n")}\n` : "");
+    return 0;
+  }
+
+  if (command === "cache" && rest.length === 1 && (rest[0] === "status" || rest[0] === "clear")) {
+    if (rest[0] === "status") {
+      process.stdout.write(`${(await cacheStatus(cwd)).join("\n")}\n`);
+    } else {
+      const dir = await cacheClear(cwd, values.wait === true);
+      process.stdout.write(`Cleared the cache at ${dir}\n`);
+    }
     return 0;
   }
 
@@ -133,9 +153,12 @@ main(process.argv.slice(2)).then(
       e instanceof ServeError ||
       e instanceof ConfigError ||
       e instanceof AuditError ||
+      e instanceof CacheError ||
+      e instanceof LockError ||
       e instanceof PrivacyError;
     process.stderr.write(`git-city: ${expected ? (e as Error).message : ((e as Error).stack ?? String(e))}\n`);
     if (usage) process.stderr.write(`Try "git-city --help".\n`);
+    if (e instanceof LockError) process.exit(EXIT_LOCKED);
     process.exit(e instanceof PrivacyError ? EXIT_PRIVACY : 1);
   },
 );

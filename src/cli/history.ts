@@ -46,6 +46,7 @@ interface RawWrite {
 }
 
 interface RawCommit {
+  hash: string;
   day: number;
   added: string[];
   deleted: string[];
@@ -101,7 +102,7 @@ export async function* readHistory(repoDir: string, head: string, report: Histor
   const args = [
     "log", "--first-parent", "--reverse", "--diff-merges=first-parent",
     "-M", "--raw", "-z", "--no-abbrev", "--no-textconv", "--no-ext-diff", "--no-relative", "--no-color",
-    "--format=%x01%ct", head, "--",
+    "--format=%x01%H %ct", head, "--",
   ];
   const parser = new RawLogParser();
   const known = new Map<string, FileFacts>();
@@ -110,13 +111,36 @@ export async function* readHistory(repoDir: string, head: string, report: Histor
     for (const commit of parser.push(part)) {
       batch.push(commit);
       if (batch.length === COMMITS_PER_BATCH) {
-        yield* await completeBatch(repoDir, batch, known, report);
+        for (const { commit: record } of await completeBatch(repoDir, batch, known, report)) yield record;
         batch = [];
       }
     }
   }
   for (const commit of parser.end()) batch.push(commit);
-  if (batch.length > 0) yield* await completeBatch(repoDir, batch, known, report);
+  if (batch.length > 0) for (const { commit: record } of await completeBatch(repoDir, batch, known, report)) yield record;
+}
+
+/**
+ * Reads exactly these commits, in the order given, with the same parsing as `readHistory`.
+ * Used by the cache to process only the commits it does not already hold.
+ */
+export async function readCommitBatch(
+  repoDir: string,
+  hashes: readonly string[],
+  known: Map<string, FileFacts>,
+  report: HistoryReport,
+): Promise<{ hash: string; commit: CommitRecord }[]> {
+  if (hashes.length === 0) return [];
+  const args = [
+    "log", "--no-walk=unsorted", "--diff-merges=first-parent",
+    "-M", "--raw", "-z", "--no-abbrev", "--no-textconv", "--no-ext-diff", "--no-relative", "--no-color",
+    "--format=%x01%H %ct", ...hashes, "--",
+  ];
+  const parser = new RawLogParser();
+  const raw: RawCommit[] = [];
+  for await (const part of gitStream(repoDir, args)) raw.push(...parser.push(part));
+  raw.push(...parser.end());
+  return completeBatch(repoDir, raw, known, report);
 }
 
 /** Reads the blobs a batch of commits needs (once per blob ID per run) and attaches their facts. */
@@ -125,7 +149,7 @@ async function completeBatch(
   batch: RawCommit[],
   known: Map<string, FileFacts>,
   report: HistoryReport,
-): Promise<CommitRecord[]> {
+): Promise<{ hash: string; commit: CommitRecord }[]> {
   const unknown = new Set<string>();
   for (const commit of batch) {
     for (const write of commit.writes) {
@@ -138,16 +162,19 @@ async function completeBatch(
     report.missingBlobs += resolved.missing;
   }
   return batch.map((commit) => ({
-    day: commit.day,
-    added: commit.added,
-    deleted: commit.deleted,
-    modified: commit.modified,
-    renamed: commit.renamed,
-    writes: commit.writes.map((write) => ({
-      path: write.path,
-      blob: write.blob,
-      facts: write.mode === SUBMODULE_MODE ? SUBMODULE_FACTS : known.get(write.blob)!,
-    })),
+    hash: commit.hash,
+    commit: {
+      day: commit.day,
+      added: commit.added,
+      deleted: commit.deleted,
+      modified: commit.modified,
+      renamed: commit.renamed,
+      writes: commit.writes.map((write) => ({
+        path: write.path,
+        blob: write.blob,
+        facts: write.mode === SUBMODULE_MODE ? SUBMODULE_FACTS : known.get(write.blob)!,
+      })),
+    },
   }));
 }
 
@@ -156,7 +183,7 @@ export async function isShallowRepository(repoDir: string): Promise<boolean> {
   return (await gitMaybe(repoDir, ["rev-parse", "--is-shallow-repository"])) === "true";
 }
 
-/** Incrementally parses `git log --raw -z --format=%x01%ct` output into commits. */
+/** Incrementally parses `git log --raw -z --format=%x01%H %ct` output into commits. */
 class RawLogParser {
   private rest: Buffer = Buffer.alloc(0);
   private commit: RawCommit | undefined;
@@ -191,9 +218,12 @@ class RawLogParser {
     }
     if (token.startsWith("\x01")) {
       if (this.commit) yield this.commit;
-      const seconds = Number(token.slice(1));
-      if (!Number.isFinite(seconds)) throw new HistoryError(`unexpected commit header from git log: ${JSON.stringify(token)}`);
-      this.commit = { day: Math.floor(seconds / SECONDS_PER_DAY), added: [], deleted: [], modified: [], renamed: [], writes: [] };
+      const [hash = "", time = ""] = token.slice(1).split(" ");
+      const seconds = Number(time);
+      if (!/^[0-9a-f]+$/.test(hash) || !Number.isFinite(seconds)) {
+        throw new HistoryError(`unexpected commit header from git log: ${JSON.stringify(token)}`);
+      }
+      this.commit = { hash, day: Math.floor(seconds / SECONDS_PER_DAY), added: [], deleted: [], modified: [], renamed: [], writes: [] };
       return;
     }
     const header = token.replace(/^\n/, "");

@@ -108,6 +108,51 @@ export class TimelineBuilder {
     for (const file of [...touched, ...this.scaffolded]) this.updateScaffolding(seq, file, day);
   }
 
+  /** Everything the builder holds, as JSON-safe values, so a run can resume from it exactly. */
+  snapshot(): TimelineSnapshot {
+    return {
+      days: this.days,
+      standing: [...this.standing],
+      alive: this.alive,
+      floors: this.floors,
+      changeDays: this.changeDays,
+      scaffolded: [...this.scaffolded],
+      buildingType: this.buildingType,
+      language: this.language,
+      currentType: this.currentType,
+      currentLanguage: this.currentLanguage,
+      seed: this.seed,
+      nextFile: this.nextFile,
+      filePaths: this.filePaths,
+      eventCommit: this.eventCommit,
+      eventFile: this.eventFile,
+      eventKind: this.eventKind,
+      eventValue: this.eventValue,
+    };
+  }
+
+  static restore(s: TimelineSnapshot): TimelineBuilder {
+    const b = new TimelineBuilder();
+    appendAll(b.days, s.days);
+    for (const [path, file] of s.standing) b.standing.set(path, file);
+    appendAll(b.alive, s.alive);
+    appendAll(b.floors, s.floors);
+    appendAll(b.changeDays, s.changeDays.map((days) => [...days]));
+    for (const file of s.scaffolded) b.scaffolded.add(file);
+    appendAll(b.buildingType, s.buildingType);
+    appendAll(b.language, s.language);
+    appendAll(b.currentType, s.currentType);
+    appendAll(b.currentLanguage, s.currentLanguage);
+    appendAll(b.seed, s.seed);
+    b.nextFile = s.nextFile;
+    appendAll(b.filePaths, s.filePaths);
+    appendAll(b.eventCommit, s.eventCommit);
+    appendAll(b.eventFile, s.eventFile);
+    appendAll(b.eventKind, (s.eventKind as EventKind[]));
+    appendAll(b.eventValue, s.eventValue);
+    return b;
+  }
+
   result() {
     return {
       commitDays: Int32Array.from(this.days),
@@ -192,3 +237,29 @@ export class TimelineBuilder {
 }
 
 export type TimelineData = ReturnType<TimelineBuilder["result"]>;
+
+/** A JSON-safe copy of a TimelineBuilder, written as a cache checkpoint. */
+export interface TimelineSnapshot {
+  days: number[];
+  standing: [string, number][];
+  alive: boolean[];
+  floors: number[];
+  changeDays: number[][];
+  scaffolded: number[];
+  buildingType: number[];
+  language: number[];
+  currentType: number[];
+  currentLanguage: number[];
+  seed: number[];
+  nextFile: number;
+  filePaths: string[];
+  eventCommit: number[];
+  eventFile: number[];
+  eventKind: number[];
+  eventValue: number[];
+}
+
+/** Appends by loop: spreading a long array into push() overflows the call stack on long histories. */
+function appendAll<T>(target: T[], items: readonly T[]): void {
+  for (const item of items) target.push(item);
+}
