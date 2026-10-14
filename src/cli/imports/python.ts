@@ -24,8 +24,26 @@ export function pythonSourceRoots(paths: ReadonlySet<string>, read: (path: strin
 interface PythonContext {
   /** Whether a path is in the commit. Records the probe. */
   exists(path: string): boolean;
+  /** Whether a directory holds Python files in the commit. Records the probe. */
+  hasPythonDirectory(path: string): boolean;
   /** Source roots from `pythonSourceRoots`. */
   roots: readonly string[];
+}
+
+/** Every directory above a path, from the top level down (the root "" is not included). */
+export function parentDirectories(path: string): string[] {
+  const parts = path.split("/").slice(0, -1);
+  return parts.map((_, i) => parts.slice(0, i + 1).join("/"));
+}
+
+/** PEP 503 normalisation of a distribution or import name: lowercase, each run of "-", "_" or "." as one "-". */
+export function normalisePythonName(name: string): string {
+  return name.toLowerCase().replace(/[-_.]+/g, "-");
+}
+
+/** Whether an import's top-level name matches a declared dependency name, by normalised name. */
+export function pythonNameMatches(importName: string, declared: string): boolean {
+  return normalisePythonName(importName) === normalisePythonName(declared);
 }
 
 /** Resolves a Python import from `fromPath`. `specifier` is the module as written, with its leading dots; `member` is a `from` import's name. */
@@ -42,12 +60,19 @@ export function resolvePythonImport(ctx: PythonContext, fromPath: string, specif
     }
     return moduleIn(ctx, base, parts, member);
   }
-  for (const root of orderRoots(ctx.roots, dirnameOf(fromPath))) {
+  const roots = orderRoots(ctx.roots, dirnameOf(fromPath));
+  for (const root of roots) {
     const hit = moduleIn(ctx, root, parts, member);
     if (hit) return hit;
   }
+  if (parts.length === 0) return undefined;
+  // A PEP 420 namespace package: a directory of Python files with no __init__.py. It is internal, with no file of its own.
+  const top = parts[0]!;
+  for (const root of roots) {
+    if (ctx.hasPythonDirectory(joinPath(root, top))) return undefined;
+  }
   // Not in the repo: the standard library is dropped; anything else is a package, named by its top-level module.
-  if (parts.length === 0 || STDLIB.has(parts[0]!)) return undefined;
+  if (STDLIB.has(top)) return undefined;
   return { kind: "package", name: parts[0]! };
 }
 

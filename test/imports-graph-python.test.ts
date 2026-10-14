@@ -58,6 +58,21 @@ describe("Python imports in the graph", () => {
     expect(repo.graph.packagesOf("app/main.py")).toEqual(["requests"]);
   });
 
+  it("treats a bare import of a namespace directory as internal until its last Python file goes", async () => {
+    const repo = new Repo();
+    await repo.commit({ "app/main.py": "import ns\nimport requests\n", "ns/mod.py": "" });
+
+    expect(repo.graph.packagesOf("app/main.py")).toEqual(["requests"]);
+
+    await repo.commit({}, ["ns/mod.py"]);
+
+    expect(repo.graph.packagesOf("app/main.py")).toEqual(["ns", "requests"]);
+
+    await repo.commit({ "ns/other.py": "" });
+
+    expect(repo.graph.packagesOf("app/main.py")).toEqual(["requests"]);
+  });
+
   it("re-resolves an absolute import when a pyproject.toml gives its source root", async () => {
     const repo = new Repo();
     await repo.commit({

@@ -104,6 +104,16 @@ describe("Python imports that are not Roads", () => {
     expect(resolveIn(files, "app/main.py", "os.path").target).toBeUndefined();
   });
 
+  it("treats a bare import of an in-repo namespace directory as internal, not a package", () => {
+    const files = { "app/main.py": "", "ns/mod.py": "" };
+    expect(resolveIn(files, "app/main.py", "ns").target).toBeUndefined();
+  });
+
+  it("still reports a bare import as a package when no Python file lies under it", () => {
+    const files = { "app/main.py": "", "ns/data.json": "" };
+    expect(resolveIn(files, "app/main.py", "ns").target).toEqual({ kind: "package", name: "ns" });
+  });
+
   it("reports a third-party import as a package, named by its top-level module", () => {
     const files = { "app/main.py": "" };
     expect(resolveIn(files, "app/main.py", "requests.adapters").target).toEqual({ kind: "package", name: "requests" });

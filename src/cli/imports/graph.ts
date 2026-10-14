@@ -1,6 +1,6 @@
 import { parseJsonc } from "../jsonc.js";
 import type { RawImport } from "./extract.js";
-import { isPyproject } from "./python.js";
+import { isPyproject, isPythonFile, parentDirectories } from "./python.js";
 import { extendsTarget, ImportResolver, MAX_EXTENDS_DEPTH, type Resolution, type Snapshot } from "./resolve.js";
 
 /**
@@ -90,9 +90,12 @@ export class ImportGraph {
   private readonly importersOfProbe = new Map<string, Set<string>>();
   /** Targets whose importer set changed during the current `apply`. */
   private touched = new Set<string>();
+  /** Directories holding Python files, with how many such files each holds. Kept with `paths`, for namespace packages. */
+  private readonly pythonDirs = new Map<string, number>();
   private readonly resolverView: Snapshot = {
     paths: this.paths,
     read: (path) => this.configText.get(path),
+    hasPythonDirectory: (path) => this.pythonDirs.has(path),
   };
 
   /** One resolver for the whole run, so manifests and the workspace map are not rebuilt per specifier. */
@@ -108,6 +111,7 @@ export class ImportGraph {
     const changed = new Set<string>();
     let configChanged = false;
     for (const path of commit.deleted) {
+      if (this.paths.has(path) && isPythonFile(path)) for (const dir of this.unlinkPythonDirs(path)) changed.add(dir);
       this.paths.delete(path);
       this.clear(path);
       this.files.delete(path);
@@ -120,6 +124,7 @@ export class ImportGraph {
     const extracted: string[] = [];
     const jsonWritten: string[] = [];
     for (const { path, blob, specifiers } of commit.writes) {
+      if (!this.paths.has(path) && isPythonFile(path)) for (const dir of this.linkPythonDirs(path)) changed.add(dir);
       this.paths.add(path);
       changed.add(path);
       if (CONFIG_TEXT_FILE.test(path) || isPyproject(path)) {
@@ -204,7 +209,10 @@ export class ImportGraph {
 
   static restore(options: ImportGraphOptions, s: GraphSnapshot): ImportGraph {
     const graph = new ImportGraph(options);
-    for (const path of s.paths) graph.paths.add(path);
+    for (const path of s.paths) {
+      graph.paths.add(path);
+      if (isPythonFile(path)) graph.linkPythonDirs(path);
+    }
     for (const [path, text] of s.configText) graph.configText.set(path, text);
     for (const [path, blob] of s.jsonBlobs) graph.jsonBlobs.set(path, blob);
     for (const path of s.extendedPaths) graph.extendedPaths.add(path);
@@ -255,6 +263,33 @@ export class ImportGraph {
     const target = extendsTarget(path, value);
     this.extendedPaths.add(target);
     await this.loadConfigText(target, depth + 1);
+  }
+
+  /**
+   * Counts a Python file into each directory above it. Returns the directories that just came into existence, so
+   * the importers that probed them can be re-resolved.
+   */
+  private linkPythonDirs(path: string): string[] {
+    const appeared: string[] = [];
+    for (const dir of parentDirectories(path)) {
+      const count = this.pythonDirs.get(dir) ?? 0;
+      this.pythonDirs.set(dir, count + 1);
+      if (count === 0) appeared.push(dir);
+    }
+    return appeared;
+  }
+
+  /** The inverse of `linkPythonDirs`: returns the directories that just lost their last Python file. */
+  private unlinkPythonDirs(path: string): string[] {
+    const vanished: string[] = [];
+    for (const dir of parentDirectories(path)) {
+      const count = (this.pythonDirs.get(dir) ?? 0) - 1;
+      if (count <= 0) {
+        this.pythonDirs.delete(dir);
+        vanished.push(dir);
+      } else this.pythonDirs.set(dir, count);
+    }
+    return vanished;
   }
 
   /** Removes everything `importer` contributed: its edges, packages and probes. */

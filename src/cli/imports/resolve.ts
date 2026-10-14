@@ -1,6 +1,6 @@
 import { builtinModules } from "node:module";
 import { parseJsonc } from "../jsonc.js";
-import { isPythonFile, pythonSourceRoots, resolvePythonImport } from "./python.js";
+import { isPythonFile, parentDirectories, pythonSourceRoots, resolvePythonImport } from "./python.js";
 
 /**
  * Import resolution (SPEC §4, Resolve), for TS/JS. A specifier is resolved against one commit's path set
@@ -14,12 +14,19 @@ import { isPythonFile, pythonSourceRoots, resolvePythonImport } from "./python.j
 export interface Snapshot {
   readonly paths: ReadonlySet<string>;
   read(path: string): string | undefined;
+  /** Whether a directory holds a Python file in the commit (directly or below). Used for PEP 420 namespace packages. */
+  hasPythonDirectory(path: string): boolean;
 }
 
 /** A commit's files: each path maps to its text (use "" for a source file whose text is not needed). */
 export function createSnapshot(files: Record<string, string>): Snapshot {
   const paths = new Set(Object.keys(files));
-  return { paths, read: (path) => (paths.has(path) ? files[path] : undefined) };
+  const pythonDirs = new Set(Object.keys(files).filter(isPythonFile).flatMap(parentDirectories));
+  return {
+    paths,
+    read: (path) => (paths.has(path) ? files[path] : undefined),
+    hasPythonDirectory: (path) => pythonDirs.has(path),
+  };
 }
 
 /** Where an import points. A file in the repo, or a package outside it (classified later by manifest). */
@@ -113,7 +120,15 @@ class Resolver {
 
   private python(fromPath: string, specifier: string, member: string | undefined): Resolution | undefined {
     this.pythonRoots ??= pythonSourceRoots(this.snap.paths, (path) => this.snap.read(path));
-    return resolvePythonImport({ exists: (path) => this.exists(path), roots: this.pythonRoots }, fromPath, specifier, member);
+    const ctx = {
+      exists: (path: string) => this.exists(path),
+      hasPythonDirectory: (path: string) => {
+        this.probe(path);
+        return this.snap.hasPythonDirectory(path);
+      },
+      roots: this.pythonRoots,
+    };
+    return resolvePythonImport(ctx, fromPath, specifier, member);
   }
 
   private resolve(fromPath: string, specifier: string): Resolution | undefined {
