@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { CacheSession, scopeOf, scopeOfCheckpoint } from "./cache.js";
 import { loadConfig } from "./config.js";
@@ -46,6 +46,8 @@ export interface BuildOptions {
   fresh?: boolean;
   /** `--wait`: wait for another run to finish instead of failing. */
   wait?: boolean;
+  /** Called as each phase starts, for the interactive progress display. */
+  onPhase?: (phase: string) => void;
 }
 
 export interface BuildSummary {
@@ -63,6 +65,10 @@ export interface BuildSummary {
   warnings: string[];
   /** Compressed sizes of the site's data, against the budget. */
   sizes: SizeReport;
+  /** Whether git ignores the output folder; undefined when it lies outside the repository. */
+  outputIgnored?: boolean;
+  /** The output folder relative to the repository, with a trailing slash, for the .gitignore hint. */
+  outputIgnoreEntry?: string;
   /** The Theme the names and colours came from. */
   theme: string;
   /** The Steps used, per era of history (SPEC §9). */
@@ -83,6 +89,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   const seedText = options.seed ?? config.naming.seed ?? (await rootCommit(options.repoDir, head));
   const seed = seedNumber(seedText);
 
+  options.onPhase?.("Reading history");
   const cache = await CacheSession.open(options.repoDir, { fresh: options.fresh, wait: options.wait });
   let read: PipelineRead;
   try {
@@ -109,6 +116,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   const { pipeline } = read;
   const rawTimeline = pipeline.timeline.result();
   const commits = rawTimeline.commitDays.length;
+  options.onPhase?.("Naming");
   const names = nameFiles(rawTimeline.filePaths, config, { private: options.private });
   if (options.strict && names.nearMisses.length > 0) {
     throw new PrivacyError(
@@ -145,6 +153,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     );
   }
 
+  options.onPhase?.("Writing site");
   const sizes = await writeSite(
     outDir,
     options.pageDir ?? DEFAULT_PAGE_DIR,
@@ -154,6 +163,9 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     places,
     (staging) => scanOutput(staging, names.hidden),
   );
+  const entry = relative(options.repoDir, outDir);
+  const inside = entry !== "" && !entry.startsWith("..") && !isAbsolute(entry);
+  const outputIgnoreEntry = inside ? `${entry.split(sep).join("/")}/` : undefined;
   return {
     branch,
     commits,
@@ -166,6 +178,8 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     warnings,
     theme: theme.name,
     sizes,
+    outputIgnored: inside ? (await gitMaybe(options.repoDir, ["check-ignore", "-q", "--", entry])) !== undefined : undefined,
+    outputIgnoreEntry,
   };
 }
 
