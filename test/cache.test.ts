@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { build } from "../src/cli/build.js";
+import { build, readBlobText, rootCommit } from "../src/cli/build.js";
 import { cacheClear, cacheDirFor, cacheStatus, CacheSession, LAYER_STAMPS, LockError } from "../src/cli/cache.js";
 import { resolveTimelineHead } from "../src/cli/history.js";
-import { readTimeline, type TimelineRead } from "../src/cli/resume.js";
+import { readPipeline, type PipelineRead } from "../src/cli/resume.js";
+import { seedNumber } from "../src/cli/namer.js";
 import { FixtureRepo } from "./fixture.js";
 
 const cleanups: (() => void)[] = [];
@@ -40,12 +41,13 @@ async function siteOf(repo: FixtureRepo, options: { fresh?: boolean; wait?: bool
   return filesOf(outDir);
 }
 
-/** Reads the Timeline through the cache without advancing any checkpoint. */
-async function readOnce(repoDir: string, fresh = false): Promise<TimelineRead> {
+/** Runs the pipeline through the cache without advancing any checkpoint, with the City seed a build would use. */
+async function readOnce(repoDir: string, fresh = false): Promise<PipelineRead> {
   const { head, branch } = await resolveTimelineHead(repoDir);
+  const seed = seedNumber(await rootCommit(repoDir, head));
   const cache = await CacheSession.open(repoDir, { fresh });
   try {
-    return await readTimeline(repoDir, head, branch, cache);
+    return await readPipeline(repoDir, head, branch, cache, { seed, readText: readBlobText(repoDir) });
   } finally {
     await cache.close();
   }
@@ -108,6 +110,18 @@ describe("incremental build", () => {
   });
 });
 
+describe("facts layer", () => {
+  it("persists each TS file's import specifiers, so an unchanged blob is never parsed again", async () => {
+    const repo = fixture().write("src/app.ts", "import './util';\n").commit("first");
+
+    await siteOf(repo);
+
+    const facts = join(await cacheDirFor(repo.dir), "facts");
+    const stored = readdirSync(facts).map((name) => readFileSync(join(facts, name), "utf8")).join("\n");
+    expect(stored).toContain('"specifier":"./util"');
+  });
+});
+
 describe("history rewrites", () => {
   it("roll back to the newest checkpoint still on the first-parent chain", async () => {
     const repo = history();
@@ -144,6 +158,29 @@ describe("history rewrites", () => {
     const read = await readOnce(repo.dir);
     expect(read.resumedFrom).toBeUndefined();
     expect(read.read).toBe(1);
+  });
+});
+
+describe("unreadable blobs", () => {
+  it("a re-run counts a blob it cannot read as empty, warns, and still matches a fresh run", async () => {
+    const repo = history();
+    await siteOf(repo);
+    repo.write("broken.txt", "this blob will go missing\n").commit("fourth");
+    const blob = repo.git("rev-parse", "HEAD:broken.txt").trim();
+    // Remove the loose object so git cannot read this file version on the re-run.
+    rmSync(join(repo.dir, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
+
+    const root = mkdtempSync(join(tmpdir(), "git-city-site-"));
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+    const pageDir = join(root, "page");
+    mkdirSync(pageDir);
+    writeFileSync(join(pageDir, "index.html"), "<!doctype html>stub page");
+    const resumed = await build({ repoDir: repo.dir, outDir: join(root, "resumed"), pageDir });
+    const fresh = await build({ repoDir: repo.dir, outDir: join(root, "fresh"), pageDir, fresh: true });
+
+    expect(resumed.warnings.join("\n")).toContain("could not be read");
+    expect(filesOf(join(root, "resumed"))).toEqual(filesOf(join(root, "fresh")));
+    expect(fresh.warnings.join("\n")).toContain("could not be read");
   });
 });
 
@@ -185,6 +222,30 @@ describe("lock", () => {
 });
 
 describe("version stamps", () => {
+  it("derives each stamp from the code of its layer, as a layer name and a content hash", () => {
+    for (const layer of ["facts", "commits", "run", "layout"] as const) {
+      expect(LAYER_STAMPS[layer]).toMatch(new RegExp(`^${layer}-[0-9a-f]{12}$`));
+    }
+    expect(new Set(Object.values(LAYER_STAMPS)).size).toBe(4);
+  });
+
+  it("a changed commits stamp clears the commit and run layers and keeps the facts", async () => {
+    const repo = history();
+    await siteOf(repo);
+    const dir = await cacheDirFor(repo.dir);
+    const factsBefore = readdirSync(join(dir, "facts")).length;
+    writeFileSync(join(dir, "stamps.json"), JSON.stringify({ ...LAYER_STAMPS, commits: "commits-0" }));
+
+    const session = await CacheSession.open(repo.dir);
+    const checkpoints = await session.checkpoints((await resolveTimelineHead(repo.dir)).branch);
+    const facts = session.facts.size;
+    await session.close();
+
+    expect(checkpoints).toEqual([]);
+    expect(facts).toBeGreaterThan(0);
+    expect(readdirSync(join(dir, "facts")).length).toBe(factsBefore);
+  });
+
   it("a changed facts stamp clears the facts, commit and run layers", async () => {
     const repo = history();
     await siteOf(repo);
@@ -223,7 +284,8 @@ describe("cache command", () => {
     await siteOf(repo);
 
     const before = (await cacheStatus(repo.dir)).join("\n");
-    expect(before).toMatch(/facts: stamp facts-1/);
+    expect(before).toMatch(new RegExp(`facts: stamp ${LAYER_STAMPS.facts}`));
+    expect(before).toMatch(new RegExp(`layout: stamp ${LAYER_STAMPS.layout}`));
     expect(before).toMatch(/checkpoints for main: 1/);
 
     await cacheClear(repo.dir);

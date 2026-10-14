@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { build } from "../src/cli/build.js";
+import { seedNumber } from "../src/cli/namer.js";
 import { type Chunk, decodeChunk, decodeWorld, EVENT_ADD, FORMAT_VERSION } from "../src/shared/format.js";
 import { dayOf, FixtureRepo } from "./fixture.js";
 
@@ -201,4 +202,77 @@ function lifetimes(chunk: Chunk): [number, number | null][] {
   return [...born]
     .map(([file, commit]): [number, number | null] => [commit, died.get(file) ?? null])
     .sort((x, y) => x[0] - y[0] || (x[1] ?? Infinity) - (y[1] ?? Infinity));
+}
+
+describe("layout and import graph in the build", () => {
+  it("gives a file its Floors from its real line count", async () => {
+    const repo = fixture().write("big.ts", "x\n".repeat(900)).commit("first");
+
+    const { chunks } = await buildSite(repo);
+
+    // ceil(sqrt(900) / 3) = 10 Floors.
+    const add = chunks[0]!.eventKind.indexOf(EVENT_ADD);
+    expect(chunks[0]!.eventValue[add]).toBe(10);
+  });
+
+  it("writes the City seed, the village, the Blocks and the Lots into the world file", async () => {
+    const repo = fixture().write("a.txt").write("src/b.ts").commit("first");
+    const root = repo.git("rev-list", "--max-parents=0", "HEAD").trim();
+
+    const { world } = await buildSite(repo);
+
+    // The root's files and src/ are two Districts, so two villages, each with its first Block claimed in commit 0.
+    expect(world.citySeed).toBe(seedNumber(root));
+    expect(world.villages.x).toHaveLength(2);
+    expect([...world.blocks.village]).toEqual([0, 1]);
+    expect([...world.blocks.claimed]).toEqual([0, 0]);
+    expect([...world.lots.file]).toEqual([0, 1]);
+    expect([...world.lots.block]).toEqual([0, 1]);
+    expect([...world.lots.slot]).toEqual([0, 0]);
+    expect([...world.lots.slots]).toEqual([2, 2]);
+  });
+
+  it("widens a Building whose fan-in reaches a step, and sizes its Lot for it", async () => {
+    const repo = fixture()
+      .write("src/shared.ts", "export const s = 1;\n")
+      .write("src/a.ts", "import './shared';\n")
+      .write("src/b.ts", "import './shared';\n")
+      .write("src/c.ts", "import './shared';\n")
+      .commit("first");
+
+    const { world } = await buildSite(repo);
+
+    // Three importers make fan-in 3, the first width step. The Lot for it is one step of headroom wider.
+    const wide = world.widthStep.indexOf(1);
+    expect(wide).toBeGreaterThanOrEqual(0);
+    expect(world.lots.slots[world.lots.file.indexOf(wide)]).toBe(3);
+  });
+
+  it("resumes import edges across a checkpoint and matches a fresh run", async () => {
+    const repo = fixture()
+      .write("src/shared.ts", "export const s = 1;\n")
+      .write("src/a.ts", "import './shared';\n")
+      .commit("first");
+    await buildBytes(repo);
+
+    repo.write("src/b.ts", "import './shared';\n").write("src/c.ts", "import './shared';\n").write("src/d.ts", "import './shared';\n").commit("second");
+
+    const resumed = await buildBytes(repo);
+    const fresh = await buildBytes(repo, { fresh: true });
+
+    expect(resumed.world).toEqual(fresh.world);
+    expect(resumed.world.byteLength).toBeGreaterThan(0);
+  });
+});
+
+/** Builds `repo` and returns the world file's bytes, for comparing a resumed run with a fresh one. */
+async function buildBytes(repo: FixtureRepo, options: { fresh?: boolean } = {}): Promise<{ world: Uint8Array }> {
+  const root = mkdtempSync(join(tmpdir(), "git-city-bytes-"));
+  cleanups.push(() => rmSync(root, { recursive: true, force: true }));
+  const pageDir = join(root, "page");
+  mkdirSync(pageDir);
+  writeFileSync(join(pageDir, "index.html"), "<!doctype html>stub page");
+  const outDir = join(root, "git-city-site");
+  await build({ repoDir: repo.dir, outDir, pageDir, ...options });
+  return { world: readFileSync(join(outDir, "world.bin")) };
 }

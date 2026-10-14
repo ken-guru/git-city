@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { encodeWorld } from "../shared/format.js";
+import { encodeWorld, type WorldLayout } from "../shared/format.js";
 import { planChunks, sizeReport, type SizeReport, writeChunks } from "./chunks.js";
 import { encodePlaces, encodeStrings, type PlaceTable, type StringTable } from "./naming.js";
 import type { TimelineData } from "./timeline.js";
@@ -18,6 +18,7 @@ export async function writeSite(
   outDir: string,
   pageDir: string,
   timeline: TimelineData,
+  layout: WorldLayout,
   names: StringTable,
   places: PlaceTable,
   check: (stagingDir: string) => Promise<void>,
@@ -26,6 +27,8 @@ export async function writeSite(
   const staging = `${outDir}.staging`;
   await rm(staging, { recursive: true, force: true });
   await cp(pageDir, staging, { recursive: true });
+  await mkdir(join(staging, "chunks"), { recursive: true });
+
   const plans = planChunks(timeline);
   await writeChunks(join(staging, "chunks"), plans, outDir);
   const world = encodeWorld({
@@ -35,6 +38,7 @@ export async function writeSite(
     language: timeline.language,
     seed: timeline.seed,
     chunks: plans.map((p) => ({ firstCommit: p.firstCommit, hash: p.hash })),
+    ...layout,
   });
   await writeFile(join(staging, "world.bin"), world);
   await writeFile(join(staging, "strings.json"), encodeStrings(names));

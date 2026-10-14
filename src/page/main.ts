@@ -122,8 +122,8 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   ground.rotation.x = -Math.PI / 2;
   scene.add(ground);
   addCountryside(scene, {
-    // The world file has no City seed yet, so the first file's seed stands in: stable for the repo's life.
-    seed: world.seed[0] ?? 0,
+    // The City seed the CLI wrote into the world file: the same seed the layout used.
+    seed: world.citySeed,
     theme: colours === PALETTE.dark ? "dark" : "light",
     keepOut: extent / 2 + TUNING.groundMargin,
   });
@@ -154,7 +154,14 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
   controls.enableDamping = true;
 
   const labels = places
-    ? createDistrictLabels(scene, places, TUNING.blockSpacing, extent * TUNING.labelDistance, TUNING.labelHeight)
+    ? createDistrictLabels(
+        scene,
+        places,
+        TUNING.blockSpacing,
+        extent * TUNING.labelDistance,
+        TUNING.labelHeight,
+        colours === PALETTE.dark ? "dark" : "light",
+      )
     : undefined;
   if (labels) document.body.append(labels.element);
   if (places) document.title = cityTitle(places);

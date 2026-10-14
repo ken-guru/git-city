@@ -23,6 +23,11 @@ export interface ThemeNamerOptions {
   seed: string;
   /** True when a candidate is unique in the City and passes the leak checks. */
   accept: (candidate: string) => boolean;
+  /**
+   * True when a text would reveal a hidden term. A Role noun is only a suffix, so it is refused for leaking alone, never
+   * for being taken. Defaults to never leaking.
+   */
+  leaks?: (text: string) => boolean;
 }
 
 /** Candidates tried before a name is given up on. */
@@ -71,9 +76,10 @@ export class ThemeNamer implements Namer {
    */
   private nounFor(role: Role | null): string | undefined {
     const { roleNouns } = this.options.theme;
+    const leaks = this.options.leaks ?? (() => false);
     const own: ThemeKey = role ?? "fallback";
-    if (this.options.accept(roleNouns[own])) return roleNouns[own];
-    if (this.options.accept(roleNouns.fallback)) return roleNouns.fallback;
+    if (!leaks(roleNouns[own])) return roleNouns[own];
+    if (!leaks(roleNouns.fallback)) return roleNouns.fallback;
     return undefined;
   }
 

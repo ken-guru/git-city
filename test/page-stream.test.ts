@@ -61,6 +61,12 @@ function publish(timeline: ChunkInput, chunkCommits: number) {
       language: timeline.language,
       seed: new Uint32Array(timeline.fileCount),
       chunks: plans.map((p) => ({ firstCommit: p.firstCommit, hash: p.hash })),
+      citySeed: 0,
+      widthStep: new Uint8Array(timeline.fileCount),
+      villages: { x: new Float32Array(0), z: new Float32Array(0), angle: new Float32Array(0) },
+      blocks: { village: new Uint32Array(0), x: new Float32Array(0), z: new Float32Array(0), claimed: new Uint32Array(0), brick: new Uint8Array(0) },
+      lots: { file: new Uint32Array(0), block: new Uint32Array(0), slot: new Uint8Array(0), slots: new Uint8Array(0) },
+      roads: { a: new Uint32Array(0), b: new Uint32Array(0), forward: new Uint8Array(0), backward: new Uint8Array(0), track: new Uint8Array(0) },
     }),
   );
   const bytes = new Map(world.chunks.map((c, i) => [c.name, plans[i]!.bytes]));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type LayoutChange, type LotRecord, footprintSlots, layoutHistory } from "../src/cli/layout.js";
+import { type LayoutChange, LayoutBuilder, type LayoutSnapshot, type LotRecord, footprintSlots, layoutHistory } from "../src/cli/layout.js";
 import { countryside } from "../src/shared/countryside.js";
 
 /**
@@ -230,9 +230,29 @@ describe("Roles and paving", () => {
     expect(sets[0]).toEqual(layoutHistory(history.list, { seed: 1 }).districts.map((d) => d.paving));
     expect(sets[0]).not.toEqual(sets[1]);
     const sats = sets[0]!.map((p) => p.saturation);
-    const lights = sets[0]!.map((p) => p.lightness);
+    const lights = sets[0]!.map((p) => p.lightness.light);
     expect(Math.max(...sats) - Math.min(...sats)).toBeLessThanOrEqual(0.3);
     expect(Math.max(...lights) - Math.min(...lights)).toBeLessThanOrEqual(0.12);
+  });
+
+  it("fixes lightness per page theme, so the dark page paves darker than the light one", () => {
+    const { districts } = layoutHistory(new Changes().commit(["src/a.ts"]).list, { seed: 1 });
+    const [district] = districts;
+    expect(district!.paving.lightness.dark).toBeLessThan(district!.paving.lightness.light);
+  });
+
+  it("gives a District split off in place the opposite lightness offset from its parent's", () => {
+    const history = new Changes()
+      .commit(["packages/web/a.ts", "packages/x/b.ts"])
+      .commit(["packages/web/package.json", "packages/web/c.ts"]);
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const { districts } = layoutHistory(history.list, { seed });
+      const parent = districts.find((d) => d.key === "packages");
+      const child = districts.find((d) => d.key === "packages/web");
+      expect(child, `seed ${seed}`).toBeDefined();
+      const offset = (d: typeof parent) => d!.paving.lightness.light - 0.55;
+      expect(Math.sign(offset(child)), `seed ${seed}`).toBe(-Math.sign(offset(parent)));
+    }
   });
 });
 
@@ -276,10 +296,35 @@ describe("Cut points and re-runs", () => {
     }
   });
 
-  it("a re-run equals a fresh run", () => {
+  it("a run resumed from a saved snapshot equals a fresh run, Roles included", () => {
     const list = generated();
     const options = { seed: 99 };
-    expect(layoutHistory(list, options)).toEqual(layoutHistory(list, options));
+    const fresh = layoutHistory(list, options);
+    for (const cut of [1, 17, 40, 59]) {
+      const head = new LayoutBuilder(options);
+      for (const change of list.slice(0, cut)) head.apply(change);
+      // Through JSON, as the cache stores it.
+      const saved = JSON.parse(JSON.stringify(head.snapshot())) as LayoutSnapshot;
+      const resumed = LayoutBuilder.restore(options, saved)!;
+      for (const change of list.slice(cut)) resumed.apply(change);
+      expect(resumed.result(), `cut ${cut}`).toEqual(fresh);
+    }
+  });
+
+  it("keeps a District's Role when resumed, so one more file does not flip it", () => {
+    const options = { seed: 1 };
+    const history = new Changes().commit(["src/auth/a.ts", "src/auth/b.ts"]);
+    const head = new LayoutBuilder(options);
+    for (const change of history.list) head.apply(change);
+    const resumed = LayoutBuilder.restore(options, JSON.parse(JSON.stringify(head.snapshot())))!;
+    // Tests score 3 against auth's 2: more, but not past the 1.5 switch ratio, so the Role stays.
+    resumed.apply(new Changes().commit(["src/tests/unit/spec.ts"]).list[0]!);
+    expect(resumed.result().districts.find((d) => d.key === "src")?.role).toBe("auth");
+  });
+
+  it("refuses a snapshot made under another seed", () => {
+    const builder = new LayoutBuilder({ seed: 1 });
+    expect(LayoutBuilder.restore({ seed: 2 }, builder.snapshot())).toBeUndefined();
   });
 });
 
@@ -387,8 +432,105 @@ describe("Identity across history", () => {
 
   it("clamps a Building's footprint to its Lot when it outgrows the Lot", () => {
     const lot: LotRecord = { file: 0, block: 0, slot: 0, slots: 2 };
-    expect(footprintSlots(lot, 0)).toBe(2);
+    // A footprint is the Building's own width (its step plus one slot); the Lot's spare slot is the headroom.
+    expect(footprintSlots(lot, 0)).toBe(1);
     expect(footprintSlots(lot, 3)).toBe(2);
     expect(footprintSlots({ ...lot, slots: 4 }, 3)).toBe(4);
+  });
+});
+
+describe("width steps, Lot growth and Block placement", () => {
+  it("re-sizes a Lot in place when its Building widens, keeping its first slot", () => {
+    const list: LayoutChange[] = [
+      ...new Changes().commit(["src/a.ts"]).list,
+      { added: [], deleted: [], widths: [{ file: 0, step: 3 }] },
+    ];
+
+    const { lots } = layoutHistory(list, { seed: 1 });
+
+    expect(lots).toEqual([{ file: 0, block: 0, slot: 0, slots: 4 }]);
+  });
+
+  it("clamps the footprint to the Lot when a neighbour stops it growing in place", () => {
+    const list: LayoutChange[] = [
+      ...new Changes().commit(["src/a.ts", "src/b.ts"]).list,
+      { added: [], deleted: [], widths: [{ file: 0, step: 3 }] },
+    ];
+
+    const { lots } = layoutHistory(list, { seed: 1 });
+
+    // a.ts holds slots 0 and 1 and b.ts holds 2 and 3, so a.ts cannot grow past its Lot of two.
+    expect(lots[0]).toEqual({ file: 0, block: 0, slot: 0, slots: 2 });
+    expect(footprintSlots(lots[0]!, 3)).toBe(2);
+  });
+
+  it("records the commit that claimed each Block", () => {
+    const list = new Changes().commit(["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"]).commit(["src/e.ts"]).list;
+
+    const { blocks } = layoutHistory(list, { seed: 1 });
+
+    expect(blocks.map((b) => b.claimedAt)).toEqual([0, 1]);
+  });
+
+  it("turns a village's Block grid by its seeded angle, keeping each Block's distance from the anchor", () => {
+    const list = new Changes().commit(["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"]).list;
+
+    const { villages, blocks } = layoutHistory(list, { seed: 7 });
+    const anchor = blocks[0]!;
+    const second = blocks[1]!;
+    const village = villages[anchor.village]!;
+    // The first Block of a village is its anchor, which sits on the village centre.
+    expect(anchor.x).toBeCloseTo(village.col);
+    expect(anchor.z).toBeCloseTo(village.row);
+    const dc = second.col - village.col;
+    const dr = second.row - village.row;
+    expect(Math.hypot(second.x - anchor.x, second.z - anchor.z)).toBeCloseTo(Math.hypot(dc, dr));
+    const turn = Math.atan2(second.z - anchor.z, second.x - anchor.x) - Math.atan2(dr, dc);
+    expect(Math.cos(turn)).toBeCloseTo(Math.cos(village.angle));
+    expect(Math.sin(turn)).toBeCloseTo(Math.sin(village.angle));
+  });
+
+  it("gives a re-added Module a new District record", () => {
+    const list = new Changes()
+      .commit(["pkg/a/package.json", "pkg/a/x.ts"])
+      .commit([], ["pkg/a/package.json"])
+      .commit(["pkg/a/package.json"])
+      .commit(["pkg/a/y.ts"]).list;
+
+    const { districts } = layoutHistory(list, { seed: 1 });
+
+    // Birth order: pkg/a (0), the merged-into District pkg (1), then the re-added pkg/a (2).
+    const records = districts.filter((d) => d.key === "pkg/a");
+    expect(records).toHaveLength(1);
+    expect(records[0]!.index).toBe(2);
+  });
+});
+
+describe("LayoutBuilder snapshots", () => {
+  it("restores from a JSON snapshot and then lays out the rest exactly as an unbroken run", () => {
+    const list = new Changes()
+      .commit(["src/a.ts", "src/b.ts", "src/c.ts", "packages/web/package.json", "packages/web/x.ts"])
+      .commit(["src/d.ts", "src/e.ts", "src/f.ts"], ["src/a.ts"])
+      .rename([["src/b.ts", "packages/web/b.ts"]])
+      .commit(["src/g.ts"]).list;
+    const options = { seed: 7, widthStepOf: (file: number) => file % 4 };
+    const cut = 2;
+
+    const first = new LayoutBuilder(options);
+    for (const change of list.slice(0, cut)) first.apply(change);
+    const snapshot = JSON.parse(JSON.stringify(first.snapshot())) as LayoutSnapshot;
+    const resumed = LayoutBuilder.restore(options, snapshot)!;
+    for (const change of list.slice(cut)) {
+      first.apply(change);
+      resumed.apply(change);
+    }
+
+    expect(resumed.result()).toEqual(first.result());
+    expect(resumed.result()).toEqual(layoutHistory(list, options));
+  });
+
+  it("refuses a snapshot laid out from a different City seed", () => {
+    const builder = new LayoutBuilder({ seed: 1 });
+    expect(LayoutBuilder.restore({ seed: 2 }, builder.snapshot())).toBeUndefined();
   });
 });

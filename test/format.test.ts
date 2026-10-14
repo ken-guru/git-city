@@ -22,6 +22,15 @@ function emptySnapshot() {
   };
 }
 
+const emptyLayout = {
+  citySeed: 0,
+  widthStep: new Uint8Array(3),
+  villages: { x: new Float32Array(0), z: new Float32Array(0), angle: new Float32Array(0) },
+  blocks: { village: new Uint32Array(0), x: new Float32Array(0), z: new Float32Array(0), claimed: new Uint32Array(0), brick: new Uint8Array(0) },
+  lots: { file: new Uint32Array(0), block: new Uint32Array(0), slot: new Uint8Array(0), slots: new Uint8Array(0) },
+  roads: { a: new Uint32Array(0), b: new Uint32Array(0), forward: new Uint8Array(0), backward: new Uint8Array(0), track: new Uint8Array(0) },
+};
+
 describe("binary format", () => {
   it("round-trips a world's per-file Building attributes", () => {
     const bytes = encodeWorld({
@@ -31,6 +40,7 @@ describe("binary format", () => {
       language: Uint8Array.of(1, 0, 10),
       seed: Uint32Array.of(1, 4_000_000_000, 7),
       chunks: [{ firstCommit: 0, hash: new Uint8Array(CHUNK_HASH_BYTES) }],
+      ...emptyLayout,
     });
 
     const world = decodeWorld(bytes);
@@ -82,5 +92,49 @@ describe("binary format", () => {
     expect([...chunk.eventKind]).toEqual([EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_SCAFFOLD_ON, EVENT_SCAFFOLD_OFF]);
     expect([...chunk.eventValue]).toEqual([5, 0, 9, 0, 0]);
     expect([...chunk.eventFile]).toEqual([1, 0, 0, 0, 0]);
+  });
+});
+
+describe("layout section of the world file", () => {
+  const layout = {
+    citySeed: 123_456,
+    widthStep: Uint8Array.of(0, 3),
+    villages: { x: Float32Array.of(0, 10.5), z: Float32Array.of(-2, 4), angle: Float32Array.of(0.25, 3.5) },
+    blocks: {
+      village: Uint32Array.of(0, 1, 1),
+      x: Float32Array.of(1, 2.5, -3),
+      z: Float32Array.of(0, 0.5, 9),
+      claimed: Uint32Array.of(0, 4, 7),
+      brick: Uint8Array.of(0, 1, 0),
+    },
+    lots: { file: Uint32Array.of(0, 1), block: Uint32Array.of(0, 2), slot: Uint8Array.of(0, 4), slots: Uint8Array.of(2, 4) },
+    roads: { a: Uint32Array.of(0), b: Uint32Array.of(1), forward: Uint8Array.of(2), backward: Uint8Array.of(0), track: Uint8Array.of(0) },
+  };
+
+  it("round-trips the city seed, width steps, villages, Blocks, Lots and Roads", () => {
+    const world = decodeWorld(
+      encodeWorld({
+        commitDays: Int32Array.of(19000),
+        fileCount: 2,
+        buildingType: Uint8Array.of(0, 0),
+        language: Uint8Array.of(0, 0),
+        seed: Uint32Array.of(1, 2),
+        chunks: [{ firstCommit: 0, hash: new Uint8Array(CHUNK_HASH_BYTES) }],
+        ...layout,
+      }),
+    );
+
+    expect(world.citySeed).toBe(123_456);
+    expect([...world.widthStep]).toEqual([0, 3]);
+    expect([...world.villages.x]).toEqual([0, 10.5]);
+    expect([...world.villages.angle]).toEqual([0.25, 3.5]);
+    expect([...world.blocks.village]).toEqual([0, 1, 1]);
+    expect([...world.blocks.z]).toEqual([0, 0.5, 9]);
+    expect([...world.blocks.claimed]).toEqual([0, 4, 7]);
+    expect([...world.blocks.brick]).toEqual([0, 1, 0]);
+    expect([...world.lots.slot]).toEqual([0, 4]);
+    expect([...world.lots.slots]).toEqual([2, 4]);
+    expect([...world.roads.forward]).toEqual([2]);
+    expect([...world.roads.track]).toEqual([0]);
   });
 });
