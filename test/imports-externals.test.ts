@@ -207,6 +207,14 @@ describe("the dependency report for the build summary", () => {
 
   it("gives a Highway at least one Lane even with no importing file", () => {
     expect(highwayLanes(0)).toBe(1);
-    expect(highwayLanes(7)).toBe(7);
+    expect(highwayLanes(7)).toBe(6);
+    expect(highwayLanes(2)).toBe(2);
+  });
+
+  it("caps a Highway at 6 Lanes each way, the same cap as a Road", () => {
+    expect(highwayLanes(50)).toBe(6);
+    const declared = [decl("npm", "heavy")];
+    const report = externalReport(declared, declared, new Map([[importerKey("npm", "heavy"), 50]]));
+    expect(report.dependencies[0]).toMatchObject({ importers: 50, lanes: 6 });
   });
 });

@@ -1,3 +1,4 @@
+import { MAX_LANES } from "./roads.js";
 import { normalisePythonName } from "./python.js";
 
 /**
@@ -428,9 +429,12 @@ function requirementsDeclared(text: string): string[] {
   return [...names];
 }
 
-/** Highway Lanes for one External Dependency: one per importing file, at least 1 each way (SPEC §7). */
+/**
+ * Highway Lanes for one External Dependency: one per importing file, at least 1 each way and at most MAX_LANES each way,
+ * the same cap as a Road's Lanes (SPEC §7). The cap bounds the Lanes counted, not the connections behind them.
+ */
 export function highwayLanes(importingFiles: number): number {
-  return Math.max(1, importingFiles);
+  return Math.min(MAX_LANES, Math.max(1, importingFiles));
 }
 
 /** One declared dependency as the build summary lists it. `city` is the External City key, or undefined for the Outskirts. */

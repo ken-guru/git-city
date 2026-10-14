@@ -1,4 +1,4 @@
-import { type ExternalCitiesFile } from "../shared/externals.js";
+import { type ExternalCitiesFile, MAX_HIGHWAY_WIDTH } from "../shared/externals.js";
 
 /**
  * Where the horizon, the orbital motorway's access Highways, the spurs and the External Cities stand in the page's world
@@ -163,7 +163,7 @@ export interface LaneBand {
  * so no Lane overlaps another. More Lanes make a wider road.
  */
 export function laneBands(lanes: number): LaneBand[] {
-  const count = Math.max(1, Math.floor(lanes));
+  const count = drawnLanes(lanes);
   const bands: LaneBand[] = [];
   for (const direction of [1, -1] as const) {
     for (let i = 0; i < count; i++) {
@@ -173,7 +173,13 @@ export function laneBands(lanes: number): LaneBand[] {
   return bands;
 }
 
-/** The total width of a Highway with `lanes` Lanes each way, including the centre marking. */
+/** The total width of a Highway with `lanes` Lanes each way, including the centre marking, never wider than MAX_HIGHWAY_WIDTH. */
 export function highwayWidth(lanes: number): number {
-  return MARKING_WIDTH + 2 * LANE_WIDTH * Math.max(1, Math.floor(lanes));
+  return Math.min(MAX_HIGHWAY_WIDTH, MARKING_WIDTH + 2 * LANE_WIDTH * drawnLanes(lanes));
+}
+
+/** The Lanes each way that are drawn: at least 1, and no more than fit within MAX_HIGHWAY_WIDTH. */
+function drawnLanes(lanes: number): number {
+  const fit = Math.floor((MAX_HIGHWAY_WIDTH - MARKING_WIDTH) / (2 * LANE_WIDTH));
+  return Math.max(1, Math.min(fit, Math.floor(lanes)));
 }

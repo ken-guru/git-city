@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Mesh, MeshLambertMaterial, RingGeometry, Scene } from "three";
-import { type ExternalCitiesFile, parseExternalCities } from "../src/shared/externals.js";
+import { type ExternalCitiesFile, MAX_HIGHWAY_WIDTH, parseExternalCities } from "../src/shared/externals.js";
 import { ExternalLayer } from "../src/page/externals.js";
 import {
   BRIDGE_SAMPLES,
@@ -134,7 +134,8 @@ describe("Lanes beyond road width", () => {
   it("packs each Lane edge to edge on either side of the centre line, so no two Lanes overlap", () => {
     for (const lanes of [1, 2, 3, 6]) {
       const bands = laneBands(lanes);
-      expect(bands).toHaveLength(2 * lanes);
+      // At most four Lanes each way are drawn (see the maximum width test below).
+      expect(bands).toHaveLength(2 * Math.min(lanes, 4));
       // Sorted by where each band starts, no band reaches into the next.
       const spans = bands.map((b) => [b.offset - b.width / 2, b.offset + b.width / 2] as const).sort((a, b) => a[0] - b[0]);
       for (let i = 1; i < spans.length; i++) expect(spans[i]![0]).toBeGreaterThanOrEqual(spans[i - 1]![1] - 1e-9);
@@ -142,6 +143,16 @@ describe("Lanes beyond road width", () => {
       expect(bands.filter((b) => b.direction === 1).every((b) => b.offset > 0)).toBe(true);
       expect(bands.filter((b) => b.direction === -1).every((b) => b.offset < 0)).toBe(true);
     }
+  });
+
+  it("draws a Highway with 6 Lanes each way at the widest the Lanes fit under MAX_HIGHWAY_WIDTH, and no wider", () => {
+    // Four Lanes each way fit under the maximum (0.15 + 8 × 0.7 = 5.75); a fifth would take the road past it.
+    const widest = MARKING_WIDTH + 2 * LANE_WIDTH * 4;
+    expect(highwayWidth(6)).toBeCloseTo(widest, 10);
+    expect(highwayWidth(50)).toBeCloseTo(widest, 10);
+    expect(widest).toBeLessThanOrEqual(MAX_HIGHWAY_WIDTH);
+    expect(laneBands(6)).toHaveLength(8);
+    expect(laneBands(50)).toHaveLength(8);
   });
 
   it("makes a road wider with more Lanes, and keeps at least one Lane each way", () => {

@@ -8,6 +8,12 @@ export const EXTERNAL_CITIES_FORMAT_VERSION = 2;
 /** Segments the horizon ring is divided into, each carrying its own Lanes. */
 export const RING_SEGMENTS = 64;
 
+/**
+ * The widest a Highway is drawn, in world units. Its Lanes grow the road only up to this width; the Lanes counted in
+ * the data are not capped by it. A tuning value.
+ */
+export const MAX_HIGHWAY_WIDTH = 6;
+
 /** A Highway's travel along the ring: from its village's angle to its City's angle, with the Lanes it carries. */
 export interface RingArc {
   from: number;

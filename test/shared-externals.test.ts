@@ -62,6 +62,12 @@ describe("Lanes on the ring", () => {
     expect(lanes).toEqual([4, 1, 1, 1, 1, 1, 1, 4]);
   });
 
+  it("does not cap the sums: Lanes from many arcs add up past the Highway cap", () => {
+    // Ten arcs of 6 Lanes all cross segment 0: the sum is 60, not capped at 6.
+    const arcs = Array.from({ length: 10 }, () => ({ from: 0, to: Math.PI / 4, lanes: 6 }));
+    expect(ringLanesOf(arcs, 8)[0]).toBe(60);
+  });
+
   it("keeps at least 1 Lane on every segment", () => {
     expect(ringLanesOf([], 4)).toEqual([1, 1, 1, 1]);
   });
