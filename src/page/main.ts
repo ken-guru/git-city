@@ -2,6 +2,7 @@ import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, Pe
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { decodeChunk, decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
 import { CityBuildings } from "./buildings.js";
+import { addCountryside } from "./countryside.js";
 import { buildTimelines, gridColumns, gridSlot, TRANSITION_COMMITS } from "./state.js";
 
 /** Tuning values for the City. The player and camera tickets replace the rest. */
@@ -89,6 +90,12 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>) {
   const ground = new Mesh(new PlaneGeometry(extent + TUNING.groundMargin, extent + TUNING.groundMargin), new MeshLambertMaterial({ color: colours.ground }));
   ground.rotation.x = -Math.PI / 2;
   scene.add(ground);
+  addCountryside(scene, {
+    // The world file has no City seed yet, so the first file's seed stands in: stable for the repo's life.
+    seed: world.seed[0] ?? 0,
+    theme: colours === PALETTE.dark ? "dark" : "light",
+    keepOut: extent / 2 + TUNING.groundMargin,
+  });
 
   const origin = ((columns - 1) * TUNING.lotSpacing) / 2;
   const place = (file: number) => {

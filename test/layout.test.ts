@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type LayoutChange, layoutHistory } from "../src/cli/layout.js";
+import { countryside } from "../src/shared/countryside.js";
 
 /**
  * Seams under test (pre-agreed with the ticket): the layout module's public interface,
@@ -265,5 +266,36 @@ describe("Cut points and re-runs", () => {
     const list = generated();
     const options = { seed: 99 };
     expect(layoutHistory(list, options)).toEqual(layoutHistory(list, options));
+  });
+});
+
+describe("Countryside terrain", () => {
+  const land = (levelOf: (col: number, row: number) => "flat" | "hill" | "river") => ({ levelAt: levelOf });
+
+  it("keeps every Block off rivers and hills by default when there is room", () => {
+    const paths = [
+      ...Array.from({ length: 30 }, (_, i) => `src/f${i}.ts`),
+      ...Array.from({ length: 30 }, (_, i) => `lib/g${i}.ts`),
+      ...Array.from({ length: 30 }, (_, i) => `docs/h${i}.md`),
+    ];
+    const seed = 3;
+    const { blocks } = layoutHistory(new Changes().commit(paths).list, { seed });
+    const countrysideLand = countryside(seed);
+    for (const b of blocks) expect(countrysideLand.levelAt(b.col, b.row)).toBe("flat");
+  });
+
+  it("relaxes to hills when every cell is hill, and to anything when every cell is river", () => {
+    const paths = ["src/a.ts", "lib/b.ts", "docs/c.md"];
+    const hills = layoutHistory(new Changes().commit(paths).list, { seed: 1, terrain: land(() => "hill") });
+    expect(hills.villages).toHaveLength(3);
+    const rivers = layoutHistory(new Changes().commit(paths).list, { seed: 1, terrain: land(() => "river") });
+    expect(rivers.villages).toHaveLength(3);
+    expect(rivers.blocks).toHaveLength(3);
+  });
+
+  it("prefers flat land over hills when both are open", () => {
+    const hillsNear = land((col, row) => (Math.max(Math.abs(col), Math.abs(row)) <= 3 ? "hill" : "flat"));
+    const { blocks } = layoutHistory(new Changes().commit(["src/a.ts", "src/b.ts", "src/c.ts"]).list, { seed: 1, terrain: hillsNear });
+    for (const b of blocks) expect(hillsNear.levelAt(b.col, b.row)).toBe("flat");
   });
 });
