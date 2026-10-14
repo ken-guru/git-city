@@ -1,5 +1,6 @@
 import type { BuildSummary } from "./build.js";
 import { describeSizes, FIRST_PLAY_BUDGET_BYTES, type SizeReport, TOTAL_BUDGET_BYTES } from "./chunks.js";
+import { describeSteps } from "./steps.js";
 
 /** More standing Buildings than this and the page leans on level of detail (SPEC §10 scale warnings). */
 export const MANY_BUILDINGS = 20_000;
@@ -29,7 +30,7 @@ export function formatBuildSummary(summary: BuildSummary): string {
     lines.push(`Near-miss: "${miss.text}" is close to a hidden name or Concept (use --strict to fail on these)`);
   }
   lines.push(`Theme: ${summary.theme}`);
-  lines.push("Steps: none used (every commit is shown on its own)");
+  lines.push(...describeSteps(summary.steps));
   lines.push(...describeSizes(summary.sizes));
   if (summary.configSources.length > 0) lines.push(`Config: ${summary.configSources.join(", ")}`);
   if (summary.outputIgnored === false) {

@@ -4,7 +4,7 @@
  * All integers are little-endian; arrays are stored column by column.
  */
 
-export const FORMAT_VERSION = 4;
+export const FORMAT_VERSION = 5;
 
 const WORLD_MAGIC = 0x57435447; // "GTCW"
 const CHUNK_MAGIC = 0x43435447; // "GTCC"
@@ -47,8 +47,10 @@ export interface ChunkRef {
 /** Everything that never changes during playback. Always fetched fresh. */
 export interface World {
   formatVersion: number;
-  /** Day of each commit (days since 1970-01-01 UTC), in sequence order. */
+  /** Day of each Step (days since 1970-01-01 UTC), in sequence order: the day of its first commit. */
   commitDays: Int32Array;
+  /** Per Step: how many commits it holds (1 for a single commit). Steps are described in SPEC §9. */
+  stepCommits: Uint32Array;
   /** Number of files ever standing; file ids run from 0 to fileCount - 1. */
   fileCount: number;
   /** Per file: its Building type (index into BUILDING_TYPES). */
@@ -128,7 +130,7 @@ export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { c
   }
   const { villages, blocks, lots, roads } = world;
   const size =
-    20 + world.commitDays.length * 4 + n * FILE_ATTRIBUTE_BYTES + world.chunks.length * (4 + CHUNK_HASH_BYTES) +
+    20 + world.commitDays.length * 8 + n * FILE_ATTRIBUTE_BYTES + world.chunks.length * (4 + CHUNK_HASH_BYTES) +
     4 + n + 4 + villages.x.length * VILLAGE_BYTES + 4 + blocks.x.length * BLOCK_BYTES +
     4 + lots.file.length * LOT_BYTES + 4 + roads.a.length * ROAD_BYTES;
   const w = new Writer(size);
@@ -138,6 +140,8 @@ export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { c
   w.u32(world.fileCount);
   w.u32(world.chunks.length);
   for (const day of world.commitDays) w.i32(day);
+  if (world.stepCommits.length !== world.commitDays.length) throw new Error("stepCommits differs in length from commitDays");
+  for (const count of world.stepCommits) w.u32(count);
   w.bytes(world.buildingType);
   w.bytes(world.language);
   for (const seed of world.seed) w.u32(seed);
@@ -187,6 +191,8 @@ export function decodeWorld(bytes: Uint8Array): World {
   const chunkCount = r.u32();
   const commitDays = new Int32Array(commitCount);
   for (let i = 0; i < commitCount; i++) commitDays[i] = r.i32();
+  const stepCommits = new Uint32Array(commitCount);
+  for (let i = 0; i < commitCount; i++) stepCommits[i] = r.u32();
   const buildingType = r.bytes(fileCount);
   const language = r.bytes(fileCount);
   const seed = r.u32s(fileCount);
@@ -247,6 +253,7 @@ export function decodeWorld(bytes: Uint8Array): World {
   return {
     formatVersion: r.formatVersion,
     commitDays,
+    stepCommits,
     fileCount,
     buildingType,
     language,

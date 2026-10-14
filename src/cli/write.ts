@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { cp, mkdir, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { encodeWorld, type WorldLayout } from "../shared/format.js";
-import { planChunks, sizeReport, type SizeReport, writeChunks } from "./chunks.js";
+import { type PlannedChunk, planChunks, sizeReport, type SizeReport, writeChunks } from "./chunks.js";
 import { encodePlaces, encodeStrings, type PlaceTable, type StringTable } from "./naming.js";
 import type { TimelineData } from "./timeline.js";
 
@@ -31,15 +31,7 @@ export async function writeSite(
 
   const plans = planChunks(timeline);
   await writeChunks(join(staging, "chunks"), plans, outDir);
-  const world = encodeWorld({
-    commitDays: timeline.commitDays,
-    fileCount: timeline.fileCount,
-    buildingType: timeline.buildingType,
-    language: timeline.language,
-    seed: timeline.seed,
-    chunks: plans.map((p) => ({ firstCommit: p.firstCommit, hash: p.hash })),
-    ...layout,
-  });
+  const world = encodeSiteWorld(timeline, plans, layout);
   await writeFile(join(staging, "world.bin"), world);
   await writeFile(join(staging, "strings.json"), encodeStrings(names));
   await writeFile(join(staging, "places.json"), encodePlaces(places));
@@ -58,6 +50,20 @@ export async function writeSite(
   await rename(staging, outDir);
   await rm(old, { recursive: true, force: true });
   return sizes;
+}
+
+/** The world file for a Timeline (already grouped into Steps) with its chunk plans and layout. */
+export function encodeSiteWorld(timeline: TimelineData, plans: readonly PlannedChunk[], layout: WorldLayout): Uint8Array {
+  return encodeWorld({
+    commitDays: timeline.commitDays,
+    stepCommits: timeline.stepCommits,
+    fileCount: timeline.fileCount,
+    buildingType: timeline.buildingType,
+    language: timeline.language,
+    seed: timeline.seed,
+    chunks: plans.map((p) => ({ firstCommit: p.firstCommit, hash: p.hash })),
+    ...layout,
+  });
 }
 
 /** Refuses to replace a folder that holds something other than an earlier GitCity output. */

@@ -14,6 +14,7 @@ const summary: BuildSummary = {
   warnings: [],
   sizes: { chunks: 1, worldBytes: 100, firstPlayBytes: 2048, totalBytes: 4096 },
   theme: "modern",
+  steps: [],
   outputIgnored: false,
 };
 
@@ -23,7 +24,8 @@ describe("build report", () => {
     expect(text).toContain("Built 2 commits and 2 files from main into /repo/git-city-site");
     expect(text).toContain("Revealed 0 names.");
     expect(text).toContain("Theme: modern");
-    expect(text).toContain("Steps: none");
+    // The summary names only the Steps that were used, so a history kept per commit has no Steps line (SPEC §10).
+    expect(text).not.toContain("Steps:");
     expect(text).toContain(".gitignore");
     expect(text).toContain('Run "git-city serve"');
   });
