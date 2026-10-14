@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CommitRecord } from "../src/cli/history.js";
 import { TimelineBuilder } from "../src/cli/timeline.js";
-import { EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_SCAFFOLD_OFF, EVENT_SCAFFOLD_ON } from "../src/shared/format.js";
+import { EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_LANGUAGE, EVENT_RELOCATE, EVENT_RENOVATE, EVENT_SCAFFOLD_OFF, EVENT_SCAFFOLD_ON } from "../src/shared/format.js";
 
 function commit(day: number, change: Partial<Omit<CommitRecord, "day">> = {}): CommitRecord {
   return { day, added: [], deleted: [], modified: [], writes: [], ...change };
@@ -91,5 +91,62 @@ describe("timeline builder: deletes", () => {
       [1, 0, EVENT_DELETE, 0],
       [2, 1, EVENT_ADD, 1],
     ]);
+  });
+});
+
+describe("timeline builder: identity across history", () => {
+  const rename = (from: string, to: string) => ({ deleted: [from], added: [to], renamed: [{ from, to }] });
+
+  it("keeps a renamed file's id, seed and events when the rename stays in its directory", () => {
+    const result = run([commit(1, { added: ["a.ts"] }), commit(2, rename("a.ts", "b.ts"))]);
+
+    expect(result.fileCount).toBe(1);
+    expect(result.filePaths).toEqual(["b.ts"]);
+    expect(eventsOf(result)).toEqual([[0, 0, EVENT_ADD, 1]]);
+  });
+
+  it("records a Renovation on the same file when a rename changes its Building type", () => {
+    const result = run([commit(1, { added: ["app.ts"] }), commit(2, rename("app.ts", "app.md"))]);
+
+    expect(result.fileCount).toBe(1);
+    // office to library; the language also changes from TypeScript to none.
+    expect(eventsOf(result).slice(1)).toEqual([
+      [1, 0, EVENT_RENOVATE, 2],
+      [1, 0, EVENT_LANGUAGE, 0],
+    ]);
+  });
+
+  it("records a language change on the same file when a rename changes only its language", () => {
+    const result = run([commit(1, { added: ["app.ts"] }), commit(2, rename("app.ts", "app.js"))]);
+
+    expect(eventsOf(result).slice(1)).toEqual([[1, 0, EVENT_LANGUAGE, 2]]); // JavaScript
+  });
+
+  it("relocates a file moved to another directory, keeping its name and id", () => {
+    const result = run([
+      commit(1, { added: ["a/x.ts", "a/y.ts", "a/z.ts"] }),
+      commit(2, rename("a/x.ts", "b/x.ts")),
+    ]);
+
+    expect(result.fileCount).toBe(3);
+    expect(result.filePaths[0]).toBe("a/x.ts");
+    expect(eventsOf(result).slice(3)).toEqual([[1, 0, EVENT_RELOCATE, 0]]);
+  });
+
+  it("moves a whole directory with no Relocation or delete events", () => {
+    const result = run([
+      commit(1, { added: ["src/auth/a.ts", "src/auth/b.ts"] }),
+      commit(2, {
+        deleted: ["src/auth/a.ts", "src/auth/b.ts"],
+        added: ["src/identity/a.ts", "src/identity/b.ts"],
+        renamed: [
+          { from: "src/auth/a.ts", to: "src/identity/a.ts" },
+          { from: "src/auth/b.ts", to: "src/identity/b.ts" },
+        ],
+      }),
+    ]);
+
+    expect(result.fileCount).toBe(2);
+    expect(eventsOf(result).filter(([, , kind]) => kind === EVENT_RELOCATE || kind === EVENT_DELETE)).toEqual([]);
   });
 });

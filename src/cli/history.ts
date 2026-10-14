@@ -23,6 +23,11 @@ export interface CommitRecord {
   /** Standing paths whose content changed in this commit (status M or T). */
   modified: string[];
   /**
+   * Renames in this commit, also listed in `deleted` (old path) and `added` (new path): the same file moved.
+   * A copy is not a rename and is not listed here.
+   */
+  renamed?: { from: string; to: string }[];
+  /**
    * Line counts after this commit, for the paths whose lines are known (added or modified files).
    * Filled by the history extraction's file facts; absent paths count as one Floor.
    */
@@ -46,6 +51,7 @@ interface RawCommit {
   added: string[];
   deleted: string[];
   modified: string[];
+  renamed: { from: string; to: string }[];
   writes: RawWrite[];
 }
 
@@ -162,6 +168,7 @@ async function completeBatch(
       added: commit.added,
       deleted: commit.deleted,
       modified: commit.modified,
+      renamed: commit.renamed,
       writes: commit.writes.map((write) => ({
         path: write.path,
         blob: write.blob,
@@ -216,7 +223,7 @@ class RawLogParser {
       if (!/^[0-9a-f]+$/.test(hash) || !Number.isFinite(seconds)) {
         throw new HistoryError(`unexpected commit header from git log: ${JSON.stringify(token)}`);
       }
-      this.commit = { hash, day: Math.floor(seconds / SECONDS_PER_DAY), added: [], deleted: [], modified: [], writes: [] };
+      this.commit = { hash, day: Math.floor(seconds / SECONDS_PER_DAY), added: [], deleted: [], modified: [], renamed: [], writes: [] };
       return;
     }
     const header = token.replace(/^\n/, "");
@@ -245,6 +252,7 @@ class RawLogParser {
       case "R":
         commit.deleted.push(from);
         commit.added.push(to!);
+        commit.renamed.push({ from, to: to! });
         write(to!);
         break;
       case "C":

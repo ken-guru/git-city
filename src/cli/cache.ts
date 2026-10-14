@@ -16,8 +16,8 @@ export const CACHE_FOLDER = "git-city";
  */
 export const LAYER_STAMPS = {
   facts: "facts-1",
-  commits: "commits-1",
-  run: "run-1",
+  commits: "commits-2",
+  run: "run-2",
 } as const;
 export type Layer = keyof typeof LAYER_STAMPS;
 const LAYERS = Object.keys(LAYER_STAMPS) as Layer[];
