@@ -1,3 +1,5 @@
+import { type Countryside, countryside, mix } from "../shared/countryside.js";
+
 /**
  * Layout: decides where every Building's Lot stands, as a fold over the Timeline in history order.
  * Every decision uses only what came before it, so a prefix of the history yields a prefix of the
@@ -8,6 +10,8 @@
 export interface LayoutChange {
   added: { file: number; path: string }[];
   deleted: { file: number; path: string }[];
+  /** Files that kept their identity under a new path (a rename). Same file id; a new directory means a Relocation. */
+  moved?: (PathMove & { file: number })[];
 }
 
 export interface LayoutOptions {
@@ -17,6 +21,10 @@ export interface LayoutOptions {
   categoryOf?: (path: string) => string;
   /** Width step (0 narrowest, 3 widest) of a file when it is built. Defaults to 0. */
   widthStepOf?: (file: number) => number;
+  /** The land Villages and Blocks are placed on. Defaults to the Countryside for `seed`. */
+  terrain?: Pick<Countryside, "levelAt">;
+  /** Hue per Role, from the Theme's palette. Defaults to the built-in palette. */
+  hueOf?: (role: Role) => number;
 }
 
 /** Tuning values. Starting points, named so they can be configured. */
@@ -27,6 +35,8 @@ export const BLOCK_ROWS = 2;
 export const BLOCK_SLOTS_PER_ROW = 4;
 /** A Lot is sized for its width step plus this many unit slots of headroom. */
 export const LOT_HEADROOM_SLOTS = 2;
+/** The share of a directory's files that must move to one new directory in one commit for it to count as a whole-directory move. */
+export const WHOLE_DIRECTORY_SHARE = 0.8;
 /** A District's Role switches only when another Role's score exceeds the current one by this ratio. */
 export const ROLE_SWITCH_RATIO = 1.5;
 
@@ -49,8 +59,15 @@ const LIGHTNESS_OFFSET = 0.06;
 const STONE = { hue: 40, saturation: 0.08 } as const;
 /** The yellow-green to green band reserved for the Countryside. Paving never uses it. */
 const GREEN_BAND = { from: 70, to: 160 } as const;
-/** Ring search limit before a village may grow next to a neighbour. */
+/** Ring search limit before a village may grow next to a neighbour, or before terrain relaxes. */
 const BUFFER_SEARCH_RINGS = 256;
+/**
+ * Terrain relaxation when there is no room: 0 flat land only, 1 hills allowed (rivers still not),
+ * 2 anything. Villages avoid rivers and hills, and the last step is unrestricted, so a spot always exists.
+ */
+const RELAX_STEPS = 3;
+/** Ring search limit for the terrain-restricted steps: a spot that needs more rings is left to a later step. */
+const RELAX_SEARCH_RINGS = 48;
 
 export const ROLES = [
   "tests", "docs", "api", "ui", "auth", "data", "cli", "infra", "utils", "core", "config", "build",
@@ -117,6 +134,10 @@ export interface BlockRecord {
   brickOffset: number;
 }
 
+/**
+ * A Lot a Building stood on. A Building that is relocated gets a new record under the same file id;
+ * its last record is where it stands now, and earlier ones are Lots left empty.
+ */
 export interface LotRecord {
   file: number;
   block: number;
@@ -124,6 +145,15 @@ export interface LotRecord {
   slot: number;
   slots: number;
 }
+
+/** A path that moved: the same file, from one path to another. */
+export interface PathMove {
+  from: string;
+  to: string;
+}
+
+/** A directory whose files moved together, as the layout relabels it: `from` is now `to`. */
+export type DirectoryMove = PathMove;
 
 export interface LayoutResult {
   districts: DistrictRecord[];
@@ -135,11 +165,22 @@ export interface LayoutResult {
 
 interface DistrictState {
   key: string;
+  /** Birth order of the District: never reused, so a District that merged back and returned is a new one. */
   index: number;
   village: number;
   neighbourhoods: Set<string>;
   scores: Map<Role, number>;
   role: Role | null;
+}
+
+/** Whether a directory is `dir` itself or lies below it. */
+function within(path: string, dir: string): boolean {
+  return path === dir || path.startsWith(dir + "/");
+}
+
+/** The key of a Neighbourhood's owner: the District it is drawn in and its name. Unambiguous, so it can be parsed back. */
+function ownerKey(district: string, neighbourhood: string): string {
+  return JSON.stringify([district, neighbourhood]);
 }
 
 /** Mutable layout state. Feed it commits in order with `apply`, read it with `result`. */
@@ -149,28 +190,46 @@ export class LayoutBuilder {
   private readonly standingDirs = new Map<string, number>();
   private readonly inPlace = new Set<string>();
   private readonly districts = new Map<string, DistrictState>();
+  /** Directories whose manifest went this commit; each merges back once the commit's manifests are known. */
+  private readonly vanishedManifests = new Set<string>();
+  private nextDistrictIndex = 0;
   private readonly villages: VillageRecord[] = [];
   private readonly blocks: BlockRecord[] = [];
   private readonly lots: LotRecord[] = [];
   private readonly blockAt = new Map<string, number>();
   private readonly blockSlots: boolean[][] = [];
+  /** Blocks each Neighbourhood owns, keyed by `ownerKey`. */
   private readonly ownedBlocks = new Map<string, number[]>();
   private readonly categoryOf: (path: string) => string;
   private readonly widthStepOf: (file: number) => number;
+  private readonly terrain: Pick<Countryside, "levelAt">;
 
   constructor(private readonly options: LayoutOptions) {
     this.categoryOf = options.categoryOf ?? guessCategory;
     this.widthStepOf = options.widthStepOf ?? (() => 0);
+    this.terrain = options.terrain ?? countryside(options.seed);
   }
 
   apply(change: LayoutChange): void {
+    const moved = change.moved ?? [];
+    const whole = wholeDirectoryMoves(moved, (dir) => this.standingDirs.get(dir) ?? 0);
     for (const { path } of change.deleted) this.unstand(path);
+    for (const { from } of moved) this.unstand(from);
     // Manifests first, so that whether a directory splits off in place never depends on order within a commit.
     for (const { path } of change.added) this.addManifest(path);
-    for (const { file, path } of change.added) {
-      this.stand(path);
-      this.build(file, path);
-    }
+    for (const { to } of moved) this.addManifest(to);
+    for (const dir of this.vanishedManifests) this.mergeDistrict(dir);
+    this.vanishedManifests.clear();
+
+    for (const directory of whole.directories) this.relabel(directory);
+    for (const { path } of change.added) this.stand(path);
+    for (const { to } of moved) this.stand(to);
+    for (const { file, path } of change.added) this.build(file, path);
+    moved.forEach(({ file, from, to }, i) => {
+      // A rename within its directory keeps its Lot; a whole-directory move keeps its Lots too.
+      if (whole.covered.has(i) || splitPath(from).dir === splitPath(to).dir) return;
+      this.build(file, to);
+    });
   }
 
   result(): LayoutResult {
@@ -181,7 +240,7 @@ export class LayoutBuilder {
         village: d.village,
         neighbourhoods: [...d.neighbourhoods],
         role: d.role,
-        paving: paving(this.options.seed, d.index, d.role),
+        paving: paving(this.options.seed, d.index, d.role, this.options.hueOf),
       }));
     return {
       districts,
@@ -196,8 +255,9 @@ export class LayoutBuilder {
     if (dir === "" || !MANIFEST_NAMES.has(name) || this.manifestPaths.has(path)) return;
     this.manifestPaths.add(path);
     this.manifestDirs.set(dir, (this.manifestDirs.get(dir) ?? 0) + 1);
-    // A manifest arriving in a directory that already holds files splits off in place.
+    // A manifest arriving in a directory that already holds files splits off in place; otherwise it founds a village.
     if ((this.standingDirs.get(dir) ?? 0) > 0) this.inPlace.add(dir);
+    else this.inPlace.delete(dir);
   }
 
   private stand(path: string): void {
@@ -213,8 +273,10 @@ export class LayoutBuilder {
     const { dir, name } = splitPath(path);
     if (dir !== "" && MANIFEST_NAMES.has(name) && this.manifestPaths.delete(path)) {
       const count = (this.manifestDirs.get(dir) ?? 1) - 1;
-      if (count === 0) this.manifestDirs.delete(dir);
-      else this.manifestDirs.set(dir, count);
+      if (count === 0) {
+        this.manifestDirs.delete(dir);
+        this.vanishedManifests.add(dir);
+      } else this.manifestDirs.set(dir, count);
     }
   }
 
@@ -223,15 +285,36 @@ export class LayoutBuilder {
     const dir = splitPath(path).dir;
     const dirs = dir === "" ? [] : dir.split("/");
     const key = this.districtOf(dirs);
-    const district = this.districtFor(key, dirs);
+    const district = this.districtFor(key);
     const rootDepth = key === "." ? 0 : key.split("/").length;
     const neighbourhood = dirs.length > rootDepth ? dirs.slice(0, rootDepth + 1).join("/") : key;
     district.neighbourhoods.add(neighbourhood);
     this.scoreRoles(district, path);
 
-    const slots = Math.min(this.widthStepOf(file) + LOT_HEADROOM_SLOTS, BLOCK_SLOTS_PER_ROW);
-    const at = this.allocate(`${key}|${neighbourhood}`, district.village, neighbourhood, slots);
+    const slots = slotsFor(this.widthStepOf(file));
+    const at = this.allocate(ownerKey(key, neighbourhood), district.village, neighbourhood, slots);
     this.lots.push({ file, block: at.block, slot: at.slot, slots });
+  }
+
+  /**
+   * A whole directory moved: each of its Neighbourhoods keeps its Blocks, Lots and village, and takes the new name.
+   * Nothing is rebuilt.
+   */
+  private relabel({ from, to }: DirectoryMove): void {
+    for (const owner of [...this.ownedBlocks.keys()]) {
+      const [district, neighbourhood] = JSON.parse(owner) as [string, string];
+      if (!within(neighbourhood, from)) continue;
+      const renamed = to + neighbourhood.slice(from.length);
+      const blocks = this.ownedBlocks.get(owner)!;
+      this.ownedBlocks.delete(owner);
+      for (const id of blocks) this.blocks[id]!.neighbourhood = renamed;
+      const newDistrict = this.districtOf(renamed.split("/"));
+      const target = ownerKey(newDistrict, renamed);
+      this.ownedBlocks.set(target, [...(this.ownedBlocks.get(target) ?? []), ...blocks]);
+      this.districts.get(district)?.neighbourhoods.delete(neighbourhood);
+      const village = this.blocks[blocks[0]!]!.village;
+      this.districtFor(newDistrict, village).neighbourhoods.add(renamed);
+    }
   }
 
   /** The District a path belongs to: nearest ancestor with a manifest, else its top-level directory, else ".". */
@@ -243,43 +326,86 @@ export class LayoutBuilder {
     return dirs[0] ?? ".";
   }
 
-  private districtFor(key: string, dirs: string[]): DistrictState {
+  /**
+   * The District with this key, created if it is new. A new District either takes the village it is given (a merge or
+   * a relabelled directory), splits off in place inside its nearest ancestor District's village, or founds its own village.
+   */
+  private districtFor(key: string, villageHint?: number): DistrictState {
     const existing = this.districts.get(key);
     if (existing) return existing;
-    const village = this.inPlace.has(key) ? this.parentVillage(dirs, key) : this.foundVillage(key);
+    const parent = villageHint === undefined && this.inPlace.has(key) ? this.parentDistrict(key) : undefined;
+    const village = villageHint ?? parent?.village ?? this.foundVillage(key);
     const district: DistrictState = {
       key,
-      index: this.districts.size,
+      index: this.nextDistrictIndex++,
       village,
       neighbourhoods: new Set(),
       scores: new Map(),
       role: null,
     };
     this.districts.set(key, district);
+    // Its Neighbourhoods were drawn in the parent District; they now belong to this one, with the same Blocks.
+    if (parent) this.moveOwners(parent, district, (nb) => within(nb, key));
     return district;
   }
 
-  /** The village of the nearest ancestor District, for a Module that splits off in place. */
-  private parentVillage(dirs: string[], key: string): number {
-    for (let depth = dirs.length - 1; depth >= 1; depth--) {
-      const parent = this.districts.get(dirs.slice(0, depth).join("/"));
-      if (parent) return parent.village;
+  /** The nearest ancestor District of a key (dirs above it), if one exists. */
+  private parentDistrict(key: string): DistrictState | undefined {
+    const segments = key.split("/");
+    for (let depth = segments.length - 1; depth >= 1; depth--) {
+      const parent = this.districts.get(segments.slice(0, depth).join("/"));
+      if (parent) return parent;
     }
-    return this.foundVillage(key);
+    return undefined;
+  }
+
+  /** A District whose manifest went merges back into the District its files now belong to, and is gone for good. */
+  private mergeDistrict(key: string): void {
+    if (this.manifestDirs.has(key)) return;
+    const district = this.districts.get(key);
+    if (!district) return;
+    const next = this.districtOf(key.split("/"));
+    if (next === key) return;
+    const target = this.districtFor(next, district.village);
+    this.moveOwners(district, target, () => true);
+    this.districts.delete(key);
+  }
+
+  /** Hands the Neighbourhoods of `from` that match `scope` over to `to`, along with their Blocks. */
+  private moveOwners(from: DistrictState, to: DistrictState, scope: (neighbourhood: string) => boolean): void {
+    for (const owner of [...this.ownedBlocks.keys()]) {
+      const [district, neighbourhood] = JSON.parse(owner) as [string, string];
+      if (district !== from.key || !scope(neighbourhood)) continue;
+      const target = ownerKey(to.key, neighbourhood);
+      this.ownedBlocks.set(target, [...(this.ownedBlocks.get(target) ?? []), ...this.ownedBlocks.get(owner)!]);
+      this.ownedBlocks.delete(owner);
+      from.neighbourhoods.delete(neighbourhood);
+      to.neighbourhoods.add(neighbourhood);
+    }
   }
 
   /** Founds a village at the free spot nearest the centre that keeps VILLAGE_SPACING from every other village. */
   private foundVillage(key: string): number {
-    const spot = this.nearest(
-      (c, r) => !this.blockAt.has(cellKey(c, r)) && !this.anyBlockWithin(c, r, VILLAGE_SPACING - 1),
-      Infinity,
-      0,
-      0,
-    )!;
+    let spot: Cell | undefined;
+    for (let step = 0; step < RELAX_STEPS && !spot; step++) {
+      spot = this.nearest(
+        (c, r) => !this.blockAt.has(cellKey(c, r)) && !this.anyBlockWithin(c, r, VILLAGE_SPACING - 1) && this.terrainAllows(step, c, r),
+        step < RELAX_STEPS - 1 ? RELAX_SEARCH_RINGS : Infinity,
+        0,
+        0,
+      );
+    }
     const id = this.villages.length;
     const angle = seeded(this.options.seed, id, 0) * Math.PI * 2;
-    this.villages.push({ id, district: key, col: spot.col, row: spot.row, angle });
+    this.villages.push({ id, district: key, col: spot!.col, row: spot!.row, angle });
     return id;
+  }
+
+  /** Whether a cell may take a Block at a relaxation step (see RELAX_STEPS). */
+  private terrainAllows(step: number, col: number, row: number): boolean {
+    if (step >= RELAX_STEPS - 1) return true;
+    const level = this.terrain.levelAt(col, row);
+    return step === 0 ? level === "flat" : level !== "river";
   }
 
   private anyBlockWithin(col: number, row: number, radius: number): boolean {
@@ -302,29 +428,12 @@ export class LayoutBuilder {
   }
 
   /** Claims a Block for a Neighbourhood, preferring its own Blocks (within COHESION_SLACK) over the nearest free spot. */
-  private claimBlock(owner: string, village: number, neighbourhood: string): number {
-    const anchor = this.villages[village]!;
-    const globalSpot = this.bestBlockSpot(anchor, village);
+  private claimBlock(owner: string, villageOfDistrict: number, neighbourhood: string): number {
     const own = this.ownedBlocks.get(owner) ?? [];
-    let cohesive: Cell | undefined;
-    let cohesiveDist = Infinity;
-    for (const id of own) {
-      const b = this.blocks[id]!;
-      for (let dr = -1; dr <= 1; dr++) {
-        for (let dc = -1; dc <= 1; dc++) {
-          const c = b.col + dc;
-          const r = b.row + dr;
-          if ((dc === 0 && dr === 0) || this.blockAt.has(cellKey(c, r)) || this.nextToOtherVillage(c, r, village)) continue;
-          const d = Math.hypot(c - anchor.col, r - anchor.row);
-          if (d < cohesiveDist || (d === cohesiveDist && lessCell(c, r, cohesive!))) {
-            cohesive = { col: c, row: r };
-            cohesiveDist = d;
-          }
-        }
-      }
-    }
-    const globalDist = Math.hypot(globalSpot.col - anchor.col, globalSpot.row - anchor.row);
-    const spot = cohesive && cohesiveDist <= globalDist + COHESION_SLACK ? cohesive : globalSpot;
+    // A Neighbourhood stays in the village its Blocks are in, even if its District has since moved.
+    const village = own.length > 0 ? this.blocks[own[0]!]!.village : villageOfDistrict;
+    const anchor = this.villages[village]!;
+    const spot = this.claimSpot(owner, anchor, village);
 
     const id = this.blocks.length;
     this.blocks.push({
@@ -342,15 +451,54 @@ export class LayoutBuilder {
     return id;
   }
 
-  /** The free spot nearest the village centre, keeping one Block of open land from other villages if it can. */
-  private bestBlockSpot(anchor: VillageRecord, village: number): Cell {
-    const buffered = this.nearest(
-      (c, r) => !this.blockAt.has(cellKey(c, r)) && !this.nextToOtherVillage(c, r, village),
-      BUFFER_SEARCH_RINGS,
-      anchor.col,
-      anchor.row,
-    );
-    return buffered ?? this.nearest((c, r) => !this.blockAt.has(cellKey(c, r)), Infinity, anchor.col, anchor.row)!;
+  /**
+   * The spot for a new Block: a Neighbourhood's own Block neighbour within COHESION_SLACK of the nearest free spot
+   * if there is one, else that nearest free spot. The nearest free spot keeps one Block of open land from other
+   * Villages if it can. Terrain relaxes in steps before the buffer does, so each Block tries flat land first.
+   */
+  private claimSpot(owner: string, anchor: VillageRecord, village: number): Cell {
+    for (const buffered of [true, false]) {
+      for (let step = 0; step < RELAX_STEPS; step++) {
+        const last = step === RELAX_STEPS - 1;
+        const free = this.nearest(
+          (c, r) =>
+            !this.blockAt.has(cellKey(c, r)) &&
+            (!buffered || !this.nextToOtherVillage(c, r, village)) &&
+            this.terrainAllows(step, c, r),
+          !last ? RELAX_SEARCH_RINGS : buffered ? BUFFER_SEARCH_RINGS : Infinity,
+          anchor.col,
+          anchor.row,
+        );
+        if (!free) continue;
+        const cohesive = this.cohesiveSpot(owner, anchor, village, step);
+        const globalDist = Math.hypot(free.col - anchor.col, free.row - anchor.row);
+        return cohesive && cohesive.dist <= globalDist + COHESION_SLACK ? cohesive.cell : free;
+      }
+    }
+    throw new Error("no free Block spot found, even with unlimited search");
+  }
+
+  /** The free cell next to one of a Neighbourhood's own Blocks, nearest the village centre, at a relaxation step. */
+  private cohesiveSpot(owner: string, anchor: VillageRecord, village: number, step: number): { cell: Cell; dist: number } | undefined {
+    let best: Cell | undefined;
+    let bestDist = Infinity;
+    for (const id of this.ownedBlocks.get(owner) ?? []) {
+      const b = this.blocks[id]!;
+      for (let dr = -1; dr <= 1; dr++) {
+        for (let dc = -1; dc <= 1; dc++) {
+          const c = b.col + dc;
+          const r = b.row + dr;
+          if ((dc === 0 && dr === 0) || this.blockAt.has(cellKey(c, r)) || this.nextToOtherVillage(c, r, village)) continue;
+          if (!this.terrainAllows(step, c, r)) continue;
+          const d = Math.hypot(c - anchor.col, r - anchor.row);
+          if (d < bestDist || (d === bestDist && lessCell(c, r, best!))) {
+            best = { col: c, row: r };
+            bestDist = d;
+          }
+        }
+      }
+    }
+    return best && { cell: best, dist: bestDist };
   }
 
   private nextToOtherVillage(col: number, row: number, village: number): boolean {
@@ -423,6 +571,60 @@ const CATEGORY_ROLE: Record<string, Role | undefined> = {
   tests: "tests", docs: "docs", build: "build", config: "config", data: "data",
 };
 
+/** The Lot size, in unit slots, for a Building of a given width step: its step plus headroom, at most a Block row. */
+export function slotsFor(widthStep: number): number {
+  return Math.min(widthStep + LOT_HEADROOM_SLOTS, BLOCK_SLOTS_PER_ROW);
+}
+
+/**
+ * The slots a Building's footprint takes on its Lot at a width step. A Building that outgrows its Lot
+ * keeps the Lot's size: the footprint is clamped, and the Building only gets taller.
+ */
+export function footprintSlots(lot: LotRecord, widthStep: number): number {
+  return Math.min(slotsFor(widthStep), lot.slots);
+}
+
+/**
+ * Whole-directory moves in one commit. A directory counts as moved when at least WHOLE_DIRECTORY_SHARE of its
+ * standing files move to one new directory, keeping their relative paths. Shallowest directories win, so a move of
+ * a whole tree is one move. `covered` holds the indexes of the moves a whole-directory move accounts for.
+ * `standingUnder` counts the files standing under a directory before the commit.
+ */
+export function wholeDirectoryMoves(
+  moves: readonly PathMove[],
+  standingUnder: (dir: string) => number,
+): { directories: DirectoryMove[]; covered: Set<number> } {
+  const directories: DirectoryMove[] = [];
+  const covered = new Set<number>();
+  const candidates = [...new Set(moves.flatMap((m) => ancestors(m.from)))].sort(
+    (a, b) => a.split("/").length - b.split("/").length || (a < b ? -1 : a > b ? 1 : 0),
+  );
+  for (const dir of candidates) {
+    const counts = new Map<string, number>();
+    moves.forEach((move, i) => {
+      const target = covered.has(i) ? undefined : targetDirectory(dir, move);
+      if (target !== undefined) counts.set(target, (counts.get(target) ?? 0) + 1);
+    });
+    for (const [target, count] of counts) {
+      if (count < WHOLE_DIRECTORY_SHARE * standingUnder(dir)) continue;
+      directories.push({ from: dir, to: target });
+      moves.forEach((move, i) => {
+        if (targetDirectory(dir, move) === target) covered.add(i);
+      });
+      break;
+    }
+  }
+  return { directories, covered };
+}
+
+/** Where a move takes files under `dir` (keeping their path below it), or undefined when it does not. */
+function targetDirectory(dir: string, move: PathMove): string | undefined {
+  if (!within(move.from, dir) || move.from === dir) return undefined;
+  const rest = move.from.slice(dir.length + 1);
+  if (!move.to.endsWith("/" + rest)) return undefined;
+  return move.to.slice(0, move.to.length - rest.length - 1);
+}
+
 /** Layout over a whole Timeline, or over any prefix of one. */
 export function layoutHistory(changes: Iterable<LayoutChange>, options: LayoutOptions): LayoutResult {
   const builder = new LayoutBuilder(options);
@@ -431,11 +633,16 @@ export function layoutHistory(changes: Iterable<LayoutChange>, options: LayoutOp
 }
 
 /** Paving for a District: its Role's hue, or stone, with seeded offsets that stay for the District's life. */
-export function paving(seed: number, index: number, role: Role | null): LayoutResult["districts"][number]["paving"] {
+export function paving(
+  seed: number,
+  index: number,
+  role: Role | null,
+  hueOf: (role: Role) => number = (r) => ROLE_HUE[r],
+): LayoutResult["districts"][number]["paving"] {
   const lightness = PAVING_LIGHTNESS + (seeded(seed, index, 2) * 2 - 1) * LIGHTNESS_OFFSET;
   if (role === null) return { hue: STONE.hue, saturation: STONE.saturation, lightness };
   const saturation = PAVING_SATURATION + (seeded(seed, index, 1) * 2 - 1) * SATURATION_OFFSET;
-  return { hue: avoidGreen(ROLE_HUE[role]), saturation, lightness };
+  return { hue: avoidGreen(hueOf(role)), saturation, lightness };
 }
 
 function avoidGreen(hue: number): number {
@@ -446,12 +653,6 @@ function avoidGreen(hue: number): number {
 /** A unit in [0, 1) from the seed, a salt and a lane: the same inputs always give the same value. */
 function seeded(seed: number, salt: number, lane: number): number {
   return mix(mix(seed ^ mix(salt)) + lane) / 2 ** 32;
-}
-
-function mix(value: number): number {
-  let a = Math.imul(value ^ (value >>> 16), 0x45d9f3b);
-  a = Math.imul(a ^ (a >>> 16), 0x45d9f3b);
-  return (a ^ (a >>> 16)) >>> 0;
 }
 
 /** First free run of `slots` unit slots within one Block row, as the first slot index, or undefined. */
@@ -479,13 +680,13 @@ function lessCell(col: number, row: number, other: Cell): boolean {
   return row < other.row || (row === other.row && col < other.col);
 }
 
-function splitPath(path: string): { dir: string; name: string } {
+export function splitPath(path: string): { dir: string; name: string } {
   const at = path.lastIndexOf("/");
   return at === -1 ? { dir: "", name: path } : { dir: path.slice(0, at), name: path.slice(at + 1) };
 }
 
 /** Every directory above a path, shallowest first, not including the root. */
-function ancestors(path: string): string[] {
+export function ancestors(path: string): string[] {
   const parts = path.split("/").slice(0, -1);
   return parts.map((_, i) => parts.slice(0, i + 1).join("/"));
 }

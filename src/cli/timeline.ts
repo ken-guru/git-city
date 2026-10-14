@@ -1,12 +1,25 @@
 import { BUILDING_TYPES } from "../shared/buildings.js";
-import { EVENT_ADD, EVENT_DELETE, EVENT_FLOORS, EVENT_SCAFFOLD_OFF, EVENT_SCAFFOLD_ON, type EventKind } from "../shared/format.js";
+import {
+  EVENT_ADD,
+  EVENT_DELETE,
+  EVENT_FLOORS,
+  EVENT_LANGUAGE,
+  EVENT_RELOCATE,
+  EVENT_RENOVATE,
+  EVENT_SCAFFOLD_OFF,
+  EVENT_SCAFFOLD_ON,
+  type EventKind,
+} from "../shared/format.js";
 import type { CommitRecord } from "./history.js";
+import { ancestors, type PathMove, splitPath, wholeDirectoryMoves } from "./layout.js";
 import { buildingTypeOf, categoryOf, floorsFor, languageOf, seedFor, TUNING } from "./model.js";
 
 /**
  * Turns commits into numbered files and events.
- * Every add gives a new file id; a path that comes back later is a new file.
- * Events: add and delete, Floors changes, and scaffolding on and off (see the event kinds in the format).
+ * Every add gives a new file id; a path that comes back later is a new file. A rename keeps its file id:
+ * within its directory it changes only the name, into another directory it is a Relocation, and a whole
+ * directory moving together is no event at all (the layout relabels it).
+ * Events: add and delete, Floors changes, scaffolding on and off, and the identity events (see the event kinds in the format).
  */
 export class TimelineBuilder {
   private readonly days: number[] = [];
@@ -19,8 +32,12 @@ export class TimelineBuilder {
   private readonly changeDays: number[][] = [];
   /** File ids whose scaffolding is up. */
   private readonly scaffolded = new Set<number>();
+  /** Per file id: its Building type and language at birth. Events carry any later change. */
   private readonly buildingType: number[] = [];
   private readonly language: number[] = [];
+  /** Per file id: the Building type and language it has now. */
+  private readonly currentType: number[] = [];
+  private readonly currentLanguage: number[] = [];
   private readonly seed: number[] = [];
   private nextFile = 0;
   /** The path each file id was born with, indexed by file id. */
@@ -35,14 +52,24 @@ export class TimelineBuilder {
     const day = commit.day;
     this.days.push(day);
 
+    // A rename whose old path does not stand is not a rename here: its new path is simply added.
+    const renames = (commit.renamed ?? []).filter((r) => this.standing.has(r.from));
+    const renamedFrom = new Set(renames.map((r) => r.from));
+    const renamedTo = new Set(renames.map((r) => r.to));
+    const whole = wholeDirectoryMoves(renames, this.standingCounts(renames));
+
     for (const path of commit.deleted) {
+      if (renamedFrom.has(path)) continue;
       const file = this.standing.get(path);
       if (file === undefined) continue;
       this.retire(seq, path, file);
     }
 
+    renames.forEach((move, i) => this.rename(seq, move, whole.covered.has(i)));
+
     const touched = new Set<number>();
     for (const path of commit.added) {
+      if (renamedTo.has(path)) continue;
       const previous = this.standing.get(path);
       if (previous !== undefined) this.retire(seq, path, previous);
 
@@ -53,8 +80,12 @@ export class TimelineBuilder {
       this.alive.push(true);
       this.floors.push(floors);
       this.changeDays.push([]);
-      this.buildingType.push(BUILDING_TYPES.indexOf(buildingTypeOf(categoryOf(path))));
-      this.language.push(languageOf(path));
+      const type = BUILDING_TYPES.indexOf(buildingTypeOf(categoryOf(path)));
+      const language = languageOf(path);
+      this.buildingType.push(type);
+      this.language.push(language);
+      this.currentType.push(type);
+      this.currentLanguage.push(language);
       this.seed.push(seedFor(file));
       this.event(seq, file, EVENT_ADD, floors);
       touched.add(file);
@@ -77,6 +108,51 @@ export class TimelineBuilder {
     for (const file of [...touched, ...this.scaffolded]) this.updateScaffolding(seq, file, day);
   }
 
+  /** Everything the builder holds, as JSON-safe values, so a run can resume from it exactly. */
+  snapshot(): TimelineSnapshot {
+    return {
+      days: this.days,
+      standing: [...this.standing],
+      alive: this.alive,
+      floors: this.floors,
+      changeDays: this.changeDays,
+      scaffolded: [...this.scaffolded],
+      buildingType: this.buildingType,
+      language: this.language,
+      currentType: this.currentType,
+      currentLanguage: this.currentLanguage,
+      seed: this.seed,
+      nextFile: this.nextFile,
+      filePaths: this.filePaths,
+      eventCommit: this.eventCommit,
+      eventFile: this.eventFile,
+      eventKind: this.eventKind,
+      eventValue: this.eventValue,
+    };
+  }
+
+  static restore(s: TimelineSnapshot): TimelineBuilder {
+    const b = new TimelineBuilder();
+    appendAll(b.days, s.days);
+    for (const [path, file] of s.standing) b.standing.set(path, file);
+    appendAll(b.alive, s.alive);
+    appendAll(b.floors, s.floors);
+    appendAll(b.changeDays, s.changeDays.map((days) => [...days]));
+    for (const file of s.scaffolded) b.scaffolded.add(file);
+    appendAll(b.buildingType, s.buildingType);
+    appendAll(b.language, s.language);
+    appendAll(b.currentType, s.currentType);
+    appendAll(b.currentLanguage, s.currentLanguage);
+    appendAll(b.seed, s.seed);
+    b.nextFile = s.nextFile;
+    appendAll(b.filePaths, s.filePaths);
+    appendAll(b.eventCommit, s.eventCommit);
+    appendAll(b.eventFile, s.eventFile);
+    appendAll(b.eventKind, (s.eventKind as EventKind[]));
+    appendAll(b.eventValue, s.eventValue);
+    return b;
+  }
+
   result() {
     return {
       commitDays: Int32Array.from(this.days),
@@ -91,6 +167,41 @@ export class TimelineBuilder {
       eventKind: Uint8Array.from(this.eventKind),
       eventValue: Uint8Array.from(this.eventValue),
     };
+  }
+
+  /** A file keeps its id under its new path. Renames are not changes: they do not count towards scaffolding. */
+  private rename(seq: number, move: PathMove, wholeDirectory: boolean) {
+    const file = this.standing.get(move.from)!;
+    this.standing.delete(move.from);
+    const previous = this.standing.get(move.to);
+    if (previous !== undefined) this.retire(seq, move.to, previous);
+    this.standing.set(move.to, file);
+
+    // A Relocation keeps the name it was born with; any other rename shows its new path.
+    const relocated = !wholeDirectory && splitPath(move.from).dir !== splitPath(move.to).dir;
+    if (!relocated) this.filePaths[file] = move.to;
+
+    const type = BUILDING_TYPES.indexOf(buildingTypeOf(categoryOf(move.to)));
+    const language = languageOf(move.to);
+    const typeChanged = type !== this.currentType[file];
+    const languageChanged = language !== this.currentLanguage[file];
+    this.currentType[file] = type;
+    this.currentLanguage[file] = language;
+    if (relocated) this.event(seq, file, EVENT_RELOCATE, type);
+    else if (typeChanged) this.event(seq, file, EVENT_RENOVATE, type);
+    if (languageChanged) this.event(seq, file, EVENT_LANGUAGE, language);
+  }
+
+  /** Files standing under each directory a rename leaves, before the commit: what a whole-directory move is measured against. */
+  private standingCounts(renames: readonly { from: string }[]): (dir: string) => number {
+    const wanted = new Set(renames.flatMap((r) => ancestors(r.from)));
+    const counts = new Map<string, number>();
+    if (wanted.size > 0) {
+      for (const path of this.standing.keys()) {
+        for (const dir of ancestors(path)) if (wanted.has(dir)) counts.set(dir, (counts.get(dir) ?? 0) + 1);
+      }
+    }
+    return (dir) => counts.get(dir) ?? 0;
   }
 
   private retire(seq: number, path: string, file: number) {
@@ -126,3 +237,29 @@ export class TimelineBuilder {
 }
 
 export type TimelineData = ReturnType<TimelineBuilder["result"]>;
+
+/** A JSON-safe copy of a TimelineBuilder, written as a cache checkpoint. */
+export interface TimelineSnapshot {
+  days: number[];
+  standing: [string, number][];
+  alive: boolean[];
+  floors: number[];
+  changeDays: number[][];
+  scaffolded: number[];
+  buildingType: number[];
+  language: number[];
+  currentType: number[];
+  currentLanguage: number[];
+  seed: number[];
+  nextFile: number;
+  filePaths: string[];
+  eventCommit: number[];
+  eventFile: number[];
+  eventKind: number[];
+  eventValue: number[];
+}
+
+/** Appends by loop: spreading a long array into push() overflows the call stack on long histories. */
+function appendAll<T>(target: T[], items: readonly T[]): void {
+  for (const item of items) target.push(item);
+}

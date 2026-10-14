@@ -25,7 +25,7 @@ export interface FileFacts {
 export const SUBMODULE_FACTS: FileFacts = { kind: "submodule", size: 0, lines: 0, lineEquivalent: 0 };
 
 /** Facts for a blob git could not read (for example, missing in a partial clone). */
-const MISSING_FACTS: FileFacts = { kind: "text", size: 0, lines: 0, lineEquivalent: 0 };
+export const MISSING_FACTS: FileFacts = { kind: "text", size: 0, lines: 0, lineEquivalent: 0 };
 
 export interface ResolvedFacts {
   facts: Map<string, FileFacts>;

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { parsePlaces } from "../shared/places.js";
 
 export class AuditError extends Error {}
 
@@ -15,5 +16,16 @@ export async function auditSite(dir: string): Promise<string[]> {
   if (!Array.isArray(strings) || !strings.every((s) => typeof s === "string")) {
     throw new AuditError(`strings.json in ${dir} is not a list of strings`);
   }
-  return strings.map((text, id) => `${id}\t${text}`);
+  const lines = strings.map((text, id) => `${id}\t${text}`);
+  // Names of Districts, Neighbourhoods and the City come from places.json, which older sites may not have.
+  const placesFile = join(dir, "places.json");
+  if (existsSync(placesFile)) {
+    const places = parsePlaces(await readFile(placesFile, "utf8"));
+    lines.push(`city\t${places.city.name}`);
+    for (const district of places.districts) {
+      lines.push(`district ${district.id}\t${district.name}`);
+      for (const n of district.neighbourhoods) lines.push(`neighbourhood ${district.id}.${n.id}\t${n.name}`);
+    }
+  }
+  return lines;
 }
