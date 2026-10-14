@@ -1,4 +1,4 @@
-import { type CacheSession, scopeOf } from "./cache.js";
+import { type CacheSession, scopeOf, scopeOfCheckpoint } from "./cache.js";
 import { git } from "./git.js";
 import { type CommitRecord, COMMITS_PER_BATCH, HistoryError, type HistoryReport, readCommitBatch } from "./history.js";
 import { Pipeline, type PipelineOptions } from "./pipeline.js";
@@ -49,7 +49,7 @@ export async function readPipeline(
   for (let i = checkpoints.length - 1; i >= 0; i--) {
     const checkpoint = checkpoints[i]!;
     const at = position.get(checkpoint.commit);
-    if (at === undefined || (checkpoint.scope ?? "") !== scope) continue; // another scope (exclude rules) is never resumed
+    if (at === undefined || scopeOfCheckpoint(checkpoint) !== scope) continue; // another scope (exclude rules) is never resumed
     const state = await cache.loadState(branch, checkpoint);
     const layout = await cache.loadLayout(branch, checkpoint);
     if (state === undefined || layout === undefined) continue; // a missing layer: fall back to an older checkpoint

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CacheSession, scopeOf } from "./cache.js";
+import { CacheSession, scopeOf, scopeOfCheckpoint } from "./cache.js";
 import { loadConfig } from "./config.js";
 import { gitMaybe, git } from "./git.js";
 import { isShallowRepository, resolveTimelineHead } from "./history.js";
@@ -87,7 +87,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   let read: PipelineRead;
   try {
     const previous = (await cache.checkpoints(branch)).at(-1);
-    if (previous !== undefined && (previous.scope ?? "") !== scopeOf(config.exclude)) {
+    if (previous !== undefined && scopeOfCheckpoint(previous) !== scopeOf(config.exclude)) {
       warnings.push("the exclude rules changed since the last build, so the City is rebuilt in full and its layout changes");
     }
     read = await readPipeline(options.repoDir, head, branch, cache, pipelineOptions(options.repoDir, seed, theme, config.exclude));
@@ -107,9 +107,9 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
     warnings.push(`${read.missingBlobs} file versions could not be read and were counted as empty (missing objects; is this a partial clone?)`);
   }
   const { pipeline } = read;
-  const timeline0 = pipeline.timeline.result();
-  const commits = timeline0.commitDays.length;
-  const names = nameFiles(timeline0.filePaths, config, { private: options.private });
+  const rawTimeline = pipeline.timeline.result();
+  const commits = rawTimeline.commitDays.length;
+  const names = nameFiles(rawTimeline.filePaths, config, { private: options.private });
   if (options.strict && names.nearMisses.length > 0) {
     throw new PrivacyError(
       `${names.nearMisses.length} near-miss${names.nearMisses.length === 1 ? "" : "es"} found; --strict fails the build`,
@@ -118,7 +118,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
 
   const layout = pipeline.layout.result();
   const roads = roadsOf(layout, pipeline.graph.districtLinks((path) => pipeline.layout.districtForPath(path)));
-  const widthStep = Uint8Array.from({ length: timeline0.fileCount }, (_, file) => pipeline.layout.stepOf(file));
+  const widthStep = Uint8Array.from({ length: rawTimeline.fileCount }, (_, file) => pipeline.layout.stepOf(file));
   const places = namePlaces(placeInputs(layout), config, {
     theme,
     seed: seedText,
@@ -128,17 +128,17 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
 
   // Steps: the smallest grouping that fits the budget (or the pinned one). Only the output's commits move.
   const sizeAt = (level: StepLevel) => {
-    const plan = planSteps(timeline0.commitDays, level, recentFromFor(commits));
-    const timeline = groupTimeline(timeline0, plan);
+    const plan = planSteps(rawTimeline.commitDays, level, recentFromFor(commits));
+    const timeline = groupTimeline(rawTimeline, plan);
     const plans = planChunks(timeline);
     const worldBytes = encodeSiteWorld(timeline, plans, worldLayout(claimsAtSteps(layout, plan.stepOf), roads, seed, widthStep));
     return sizeReport(worldBytes, plans);
   };
   const choice = chooseStepLevel(config.scale.timeline ?? "auto", commits, sizeAt);
   warnings.push(...choice.warnings);
-  const plan = planSteps(timeline0.commitDays, choice.level, choice.recentFrom);
-  const timeline = groupTimeline(timeline0, plan);
-  const peak = peakStanding(timeline0.eventKind);
+  const plan = planSteps(rawTimeline.commitDays, choice.level, choice.recentFrom);
+  const timeline = groupTimeline(rawTimeline, plan);
+  const peak = peakStanding(rawTimeline.eventKind);
   if (peak > PEAK_BUILDINGS_WARNING) {
     warnings.push(
       `${peak} Buildings stand at once, above ${PEAK_BUILDINGS_WARNING}: the page will lean on level of detail; consider exclude in the config`,
@@ -157,7 +157,7 @@ export async function build(options: BuildOptions): Promise<BuildSummary> {
   return {
     branch,
     commits,
-    files: timeline0.fileCount,
+    files: rawTimeline.fileCount,
     steps: stepEras(plan, commits, choice.recentFrom),
     outDir,
     configSources: config.sources,

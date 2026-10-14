@@ -88,6 +88,8 @@ export function stepEras(plan: StepPlan, commits: number, recentFrom: number): S
 
 /** The steps' one-line descriptions for the build summary, one per era. */
 export function describeSteps(eras: readonly StepEra[]): string[] {
+  // Only history that is actually grouped is reported; a history kept per commit prints nothing.
+  if (eras.every((era) => era.level === "commit")) return [];
   return eras.map((era) => {
     const range = `commits ${era.fromCommit + 1} to ${era.toCommit}`;
     return era.level === "commit"

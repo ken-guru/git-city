@@ -105,6 +105,11 @@ export function scopeOf(exclude: readonly string[] | undefined): string {
   return createHash("sha256").update(JSON.stringify([...exclude].sort())).digest("hex").slice(0, 16);
 }
 
+/** The scope a checkpoint was saved in. Checkpoints from before scopes existed have the empty scope. */
+export function scopeOfCheckpoint(checkpoint: Checkpoint | undefined): string {
+  return checkpoint?.scope ?? "";
+}
+
 const LOCK_FILE = "lock";
 const LOCK_POLL_MS = 200;
 
@@ -258,7 +263,7 @@ export class CacheSession {
     scope: string,
   ): Promise<void> {
     const existing = await this.checkpoints(branch);
-    if (existing.at(-1)?.commit === head && (existing.at(-1)?.scope ?? "") === scope && existsSync(stateFile(this.dir, branch, head)) && existsSync(layoutFile(this.dir, branch, head))) {
+    if (existing.at(-1)?.commit === head && scopeOfCheckpoint(existing.at(-1)) === scope && existsSync(stateFile(this.dir, branch, head)) && existsSync(layoutFile(this.dir, branch, head))) {
       return;
     }
     const live = existing.filter((c) => chain.has(c.commit) && c.commit !== head);
