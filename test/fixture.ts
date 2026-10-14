@@ -46,7 +46,8 @@ export class FixtureRepo {
   }
 
   remove(): void {
-    rmSync(this.dir, { recursive: true, force: true });
+    // A background Git process can still be writing into .git for a moment after a command returns, so retry.
+    rmSync(this.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 }
 
