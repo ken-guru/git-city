@@ -25,6 +25,13 @@ export const IDLE_SECONDS = 12;
 export const SHOT_SECONDS = 7;
 /** The camera's distance from its aim at the end of a postcard, as a share of the start (a slow push-in). */
 export const PUSH_IN = 0.92;
+/** Postcard framing, from the cluster's radius R: height HEIGHT_BASE + HEIGHT_PER_RADIUS * R, set back SETBACK_PER_RADIUS * R + SETBACK_BASE. */
+export const HEIGHT_BASE = 1.5;
+export const HEIGHT_PER_RADIUS = 0.15;
+export const SETBACK_PER_RADIUS = 1.6;
+export const SETBACK_BASE = 5;
+/** How fast eased values close the gap to their goal, per second. */
+export const EASE_RATE = 4;
 
 /** What one Stint of a Building needs from the timelines and the layout. */
 export interface StintInput {
@@ -206,10 +213,10 @@ export function frameFor(summary: ClusterSummary, land: { x: number; z: number }
     dx /= length;
     dz /= length;
   }
-  const setback = 1.6 * r + 5;
+  const setback = SETBACK_PER_RADIUS * r + SETBACK_BASE;
   return {
     aim: { x: summary.x, y: summary.aimY, z: summary.z },
-    position: { x: summary.x + dx * setback, y: 1.5 + 0.15 * r, z: summary.z + dz * setback },
+    position: { x: summary.x + dx * setback, y: HEIGHT_BASE + HEIGHT_PER_RADIUS * r, z: summary.z + dz * setback },
   };
 }
 
@@ -235,7 +242,7 @@ export function shotAt(elapsed: number, shotCount: number, reducedMotion: boolea
 /** Eases a value towards its goal each frame; reduced motion jumps. */
 export function easeToward(value: number, goal: number, dt: number, reducedMotion: boolean): number {
   if (reducedMotion) return goal;
-  return value + (goal - value) * (1 - Math.exp(-4 * dt));
+  return value + (goal - value) * (1 - Math.exp(-EASE_RATE * dt));
 }
 
 /**

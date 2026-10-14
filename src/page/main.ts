@@ -263,7 +263,11 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
       focusedCommit = commit;
       const facts = buildingFacts(stints, ownerOf, commit, durationFor(TUNING.commitsPerSecond), FOLLOW_WINDOW);
       focusSummaries = summarise(facts);
-      focus = chooseFocus([...focusSummaries.values()], focus);
+      // Only clusters with standing Buildings have a centre to aim at.
+      focus = chooseFocus(
+        [...focusSummaries.values()].filter((s) => s.standing > 0),
+        focus,
+      );
     }
     const goal = focus === undefined ? undefined : focusSummaries.get(focus);
     if (!goal) return;
