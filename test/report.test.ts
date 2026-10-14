@@ -10,6 +10,7 @@ const summary: BuildSummary = {
   outDir: "/repo/git-city-site",
   configSources: [],
   revealed: [],
+  revealedContributors: 0,
   nearMisses: [],
   warnings: [],
   sizes: { chunks: 1, worldBytes: 100, firstPlayBytes: 2048, totalBytes: 4096 },

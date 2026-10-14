@@ -1,6 +1,6 @@
 import { Color, DirectionalLight, HemisphereLight, Mesh, MeshLambertMaterial, PerspectiveCamera, PlaneGeometry, Scene, WebGLRenderer } from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
-import { decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
+import { type Chunk, decodeWorld, FormatVersionError, SECONDS_PER_DAY, type World } from "../shared/format.js";
 import { type ExternalCitiesFile, parseExternalCities } from "../shared/externals.js";
 import { type PlacesFile, parsePlaces } from "../shared/places.js";
 import { ExternalLayer } from "./externals.js";
@@ -14,6 +14,8 @@ import { cityTitle, createDistrictLabels } from "./labels.js";
 import { LodController, type LodSettings, settingsFor } from "./lod.js";
 import { RoadLayer } from "./roads.js";
 import { appendTimelines, buildTimelines, durationFor, TRANSITION_COMMITS, type Timelines } from "./state.js";
+import { type ChangeIndex, changesIndex } from "./contributors.js";
+import { createContributorView } from "./contributor-view.js";
 
 /** Tuning values for the City. The player and camera tickets replace the rest. */
 const TUNING = {
@@ -80,8 +82,10 @@ async function main() {
   const stream = new ChunkStream(world, (name) => fetchBytes(`chunks/${name}`));
   // The first chunk is needed to play at all; the rest stream in behind it, in order.
   let timelines: Timelines;
+  let first: Chunk;
   try {
-    timelines = buildTimelines(await stream.load(0), world.stints.file.length, world.language);
+    first = await stream.load(0);
+    timelines = buildTimelines(first, world.stints.file.length, world.language);
   } catch (e) {
     if (e instanceof FormatVersionError) return showVersionNotice();
     throw e;
@@ -100,10 +104,24 @@ async function main() {
   } catch (e) {
     console.warn("External Cities could not be loaded", e);
   }
-  play(world, timelines, stream, places, externals);
+  // Contributors and commit messages (SPEC §11) are read only when the output holds them; their names live in strings.json.
+  let strings: string[] | undefined;
+  if (world.contributors || world.messages) {
+    try {
+      strings = JSON.parse(new TextDecoder().decode(await fetchBytes("strings.json", { cache: "no-store" })));
+    } catch (e) {
+      console.warn("Contributor names could not be loaded", e);
+    }
+  }
+  const changes = changesIndex();
+  changes.add(first);
+  play(world, timelines, stream, places, externals, { changes, strings });
   stream
     .loadAll((index, chunk) => {
-      if (index > 0) appendTimelines(timelines, chunk, world.language);
+      if (index > 0) {
+        appendTimelines(timelines, chunk, world.language);
+        changes.add(chunk);
+      }
     })
     .catch((e: unknown) => {
       if (e instanceof FormatVersionError) return showVersionNotice();
@@ -111,7 +129,14 @@ async function main() {
     });
 }
 
-function play(world: World, timelines: Timelines, stream: ChunkStream, places?: PlacesFile, externals?: ExternalCitiesFile) {
+function play(
+  world: World,
+  timelines: Timelines,
+  stream: ChunkStream,
+  places?: PlacesFile,
+  externals?: ExternalCitiesFile,
+  contributions?: { changes: ChangeIndex; strings?: string[] },
+) {
   const commitCount = world.commitDays.length;
   const endTime = commitCount - 1 + TRANSITION_COMMITS;
   // The City's extent is set by its Blocks: the layout places them all, so the page frames what it has.
@@ -205,6 +230,9 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
     : undefined;
   if (labels) document.body.append(labels.element);
   if (places) document.title = cityTitle(places);
+  const contributorView = contributions
+    ? createContributorView(scene, world, timelines, contributions.changes, contributions.strings)
+    : undefined;
 
   function resize() {
     renderer.setSize(innerWidth, innerHeight);
@@ -253,6 +281,7 @@ function play(world: World, timelines: Timelines, stream: ChunkStream, places?: 
     status.textContent = Math.floor(t) > stream.loadedThrough()
       ? "Loading this part of history…"
       : `Commit ${commit + 1} of ${commitCount} · ${when}`;
+    contributorView?.update(t, TUNING.commitsPerSecond, when);
   }
 
   renderer.setAnimationLoop((now) => {

@@ -6,7 +6,8 @@ import type { Theme, ThemeKey } from "./theme.js";
  * Every candidate passes through `accept`, which the naming step supplies (uniqueness and leak checks).
  */
 export interface NamingMetadata {
-  kind: "city" | "district" | "neighbourhood";
+  /** A person is a Contributor's Generated name (SPEC §8): a given name and a family name from the Theme. */
+  kind: "city" | "district" | "neighbourhood" | "person";
   /** Birth order within its kind: the index in creation order. */
   birthOrder: number;
   /** A District's Role, or null when none was detected. Ignored for other kinds. */
@@ -46,23 +47,34 @@ export class ThemeNamer implements Namer {
     const suffixes = metadata.kind === "neighbourhood" ? theme.streetSuffixes : undefined;
     const tailFor = (attempt: number) => noun ?? suffixes?.[draw(this.key(metadata, attempt, "tail"), suffixes.length)];
     const join = (proper: string, tail: string | undefined) => (tail === undefined ? proper : `${proper} ${tail}`);
+    // A person's name is two words from the Theme's person pieces; a place's is one word from its word pieces.
+    const pieces =
+      metadata.kind === "person"
+        ? { prefixes: theme.personNames.given, suffixes: theme.personNames.family }
+        : theme.wordPieces;
+    const joinPieces = (a: string, b: string) => (metadata.kind === "person" ? `${a} ${b}` : `${a}${b}`);
+    const { prefixes, suffixes: suffixPieces } = pieces;
+    const properAt = (attempt: number) => {
+      const prefix = prefixes[draw(this.key(metadata, attempt, "prefix"), prefixes.length)]!;
+      const suffix = suffixPieces[draw(this.key(metadata, attempt, "suffix"), suffixPieces.length)]!;
+      return joinPieces(prefix, suffix);
+    };
 
     // Seeded draws first, so a City's names are stable and varied.
     for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
-      const candidate = join(this.properName(metadata, attempt), tailFor(attempt));
+      const candidate = join(properAt(attempt), tailFor(attempt));
       if (this.options.accept(candidate)) return candidate;
     }
     // The pool of word pieces is finite, so try every combination in order before giving up.
-    const { prefixes, suffixes: suffixPieces } = theme.wordPieces;
     const tail = tailFor(0);
     for (const prefix of prefixes) {
       for (const suffix of suffixPieces) {
-        const candidate = join(`${prefix}${suffix}`, tail);
+        const candidate = join(joinPieces(prefix, suffix), tail);
         if (this.options.accept(candidate)) return candidate;
       }
     }
     // Then a numeral on the first candidate, which keeps the name unique and leak-checked.
-    const base = join(`${prefixes[0]}${suffixPieces[0]}`, tail);
+    const base = join(joinPieces(prefixes[0]!, suffixPieces[0]!), tail);
     for (let n = 2; n < ATTEMPTS + 2; n++) {
       const candidate = `${base} ${n}`;
       if (this.options.accept(candidate)) return candidate;
@@ -81,14 +93,6 @@ export class ThemeNamer implements Namer {
     if (!leaks(roleNouns[own])) return roleNouns[own];
     if (!leaks(roleNouns.fallback)) return roleNouns.fallback;
     return undefined;
-  }
-
-  /** Proper name from the word pieces. Depends only on the seed, Theme, kind and birth order, so it never changes. */
-  private properName(metadata: NamingMetadata, attempt: number): string {
-    const { prefixes, suffixes } = this.options.theme.wordPieces;
-    const prefix = prefixes[draw(this.key(metadata, attempt, "prefix"), prefixes.length)]!;
-    const suffix = suffixes[draw(this.key(metadata, attempt, "suffix"), suffixes.length)]!;
-    return `${prefix}${suffix}`;
   }
 
   private key(metadata: NamingMetadata, attempt: number, part: string): string {

@@ -27,6 +27,9 @@ export function formatBuildSummary(summary: BuildSummary): string {
     lines.push(`Revealed ${summary.revealed.length} name${summary.revealed.length === 1 ? "" : "s"}:`);
     for (const r of summary.revealed) lines.push(`  ${r.text}`);
   } else lines.push("Revealed 0 names.");
+  if (summary.revealedContributors > 0) {
+    lines.push(`Revealed ${summary.revealedContributors} Contributor name${summary.revealedContributors === 1 ? "" : "s"}.`);
+  }
   for (const miss of summary.nearMisses) {
     lines.push(`Near-miss: "${miss.text}" is close to a hidden name or Concept (use --strict to fail on these)`);
   }

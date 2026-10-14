@@ -6,7 +6,8 @@ import {
   type PavingColour,
   type PlacesFile,
 } from "../shared/places.js";
-import type { Config } from "./config.js";
+import type { Config, ContributorLevel } from "./config.js";
+import type { ContributorInput } from "./contributors.js";
 import type { Role } from "./layout.js";
 import { ThemeNamer } from "./namer.js";
 import { conceptWords, resolveConcept, resolveItem, type ItemPolicy } from "./rules.js";
@@ -326,6 +327,135 @@ function sourceIndex(source: "pseudonym" | "real" | "generated" | "label"): numb
 /** The places.json text. Only the naming step's table can be passed in. */
 export function encodePlaces(table: PlaceTable): string {
   return `${JSON.stringify(table.file)}\n`;
+}
+
+/** The id that marks an absent Contributor or commit message on a commit record in the world file. */
+export const NO_STRING = 0xffffffff;
+
+/** The name Automation shows under, for every bot together (SPEC §8). */
+export const AUTOMATION_NAME = "Automation";
+
+/** Commit messages longer than this are cut short, with an ellipsis. */
+const MESSAGE_LIMIT = 160;
+
+/** Anything shaped like an email address: never written to the output, even inside a commit message. */
+const EMAIL_LIKE = /[^\s<>()"',;]+@[^\s<>()"',;]+/g;
+
+export interface ContributionOptions extends NameOptions {
+  /**
+   * The contributor level the City is named at. A person's Real name is shown only at `real`, and under `--private`
+   * a Generated name stands in for it. Off means `contributors` is empty (the caller passes none).
+   */
+  level: ContributorLevel;
+  theme: Theme;
+  /** The seed text for Generated names. Never written to the output. */
+  seed: string;
+  /** The hidden terms from `nameFiles`: no contributor or message may contain one. */
+  hidden: readonly string[];
+  /** Names already in the City (Districts, External Cities, the City): a Generated name must differ from them. */
+  taken: readonly string[];
+  /** The subject line of each Step's newest commit, when commit messages are on. */
+  subjects?: readonly string[];
+}
+
+/**
+ * The naming step's output for Contributors and commit messages. Their strings are appended to the file names in the
+ * same table, so `strings.json` stays the only text in the output and the final scan covers them.
+ */
+export interface ContributionNaming {
+  table: StringTable;
+  /** Per Contributor, in the order given: the string id of its name. */
+  contributorName: Uint32Array;
+  /** Per Step: the string id of its commit message, or NO_STRING. Present only when messages are on. */
+  message?: Uint32Array;
+  /** How many Contributors' Real names are shown (SPEC §8). */
+  revealed: number;
+}
+
+/**
+ * Names Contributors (SPEC §8) and commit messages (SPEC §11). A pseudonym rule for a contributor wins; a
+ * Concept Pseudonym applies to every name and message; a message with a hidden term, or with nothing left once
+ * email addresses are removed, is shown without its text.
+ */
+export function nameContributions(
+  table: StringTable,
+  contributors: readonly ContributorInput[],
+  config: Config,
+  options: ContributionOptions,
+): ContributionNaming {
+  const ignoreReveal = options.private === true;
+  const rules = config.rules;
+  const { pseudonymConcepts, hiddenConcepts } = conceptPolicies(rules, ignoreReveal);
+  const hidden = [...options.hidden];
+  const taken = new Set(options.taken.map((name) => name.toLowerCase()));
+  const leaks = (text: string) => containsAny(text, hidden) || findNearMisses(text, hidden).length > 0;
+  const accept = (candidate: string) => !taken.has(candidate.toLowerCase()) && !leaks(candidate);
+  const namer = new ThemeNamer({ theme: options.theme, seed: options.seed, accept, leaks });
+
+  const strings = [...table.strings];
+  let revealed = 0;
+  let person = 0;
+  // Fixed names first, so a Generated name never takes one (as for Districts). Anonymous numbers count every person
+  // in first-commit order, pseudonymous ones included, so a Contributor keeps its number when a rule changes.
+  const fixed: (string | undefined)[] = contributors.map((c) => {
+    if (c.automation) return AUTOMATION_NAME;
+    const ordinal = ++person;
+    const policy = contributorPolicy(rules, c, ignoreReveal);
+    if (policy.name.mode === "pseudonym") return replaceConcepts(policy.name.as, pseudonymConcepts);
+    if (options.level === "anonymous") return `Contributor ${ordinal}`;
+    if (options.level === "real" && !ignoreReveal) {
+      const candidate = replaceConcepts(c.name, pseudonymConcepts);
+      if (candidate !== "" && !containsAny(candidate, hiddenConcepts) && !containsAny(candidate, hidden)) {
+        revealed++;
+        return candidate;
+      }
+    }
+    return undefined;
+  });
+  for (const text of fixed) if (text !== undefined) taken.add(text.toLowerCase());
+
+  // A Generated name's birth order is the Contributor's index, so it never changes as later Contributors appear.
+  const contributorName = Uint32Array.from(contributors, (_, i) => {
+    const text = fixed[i] ?? namer.name({ kind: "person", birthOrder: i, role: null });
+    taken.add(text.toLowerCase());
+    strings.push(text);
+    return strings.length - 1;
+  });
+
+  let message: Uint32Array | undefined;
+  if (options.subjects !== undefined) {
+    const ids = new Map<string, number>();
+    message = Uint32Array.from(options.subjects, (subject) => {
+      const text = messageText(subject, pseudonymConcepts, hidden);
+      if (text === undefined) return NO_STRING;
+      const known = ids.get(text);
+      if (known !== undefined) return known;
+      strings.push(text);
+      ids.set(text, strings.length - 1);
+      return strings.length - 1;
+    });
+  }
+
+  return { table: { strings, [SEALED]: true } as StringTable, contributorName, message, revealed };
+}
+
+/** The policy a contributor's rules give. A rule can name a contributor by its mailmapped name or its email. */
+function contributorPolicy(rules: Config["rules"], c: ContributorInput, ignoreReveal: boolean): ItemPolicy {
+  const byKey = resolveItem(rules, { contributor: c.key }, { ignoreReveal });
+  if (byKey.name.mode === "pseudonym") return byKey;
+  return resolveItem(rules, { contributor: c.name }, { ignoreReveal });
+}
+
+/**
+ * A commit message's shown text: the subject without email addresses, Concept Pseudonyms applied, and cut short.
+ * Undefined when nothing is left, or when the text holds a hidden term (the message is then not shown).
+ */
+export function messageText(subject: string, pseudonymConcepts: readonly { word: string; as: string }[], hidden: readonly string[]): string | undefined {
+  const withoutEmails = subject.replace(EMAIL_LIKE, "").replace(/\s+/g, " ").trim();
+  if (withoutEmails === "") return undefined;
+  const text = replaceConcepts(withoutEmails, pseudonymConcepts);
+  if (containsAny(text, hidden)) return undefined;
+  return text.length > MESSAGE_LIMIT ? `${text.slice(0, MESSAGE_LIMIT - 1).trimEnd()}…` : text;
 }
 
 /**

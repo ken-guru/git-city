@@ -9,6 +9,10 @@
     "prefixes": ["North", "Bright", "Vector", "Nimbus", "Cobalt", "Lumen", "Harbor", "Summit", "Quartz", "Ember", "Atlas", "Signal"],
     "suffixes": ["gate", "field", "point", "view", "works", "reach", "park", "ridge", "wood", "side"]
   },
+  "personNames": {
+    "given": ["Ada", "Ravi", "Mina", "Theo", "Lena", "Omar", "Iris", "Noah", "Sofia", "Kenji", "Priya", "Leo"],
+    "family": ["Nakamura", "Okafor", "Lindqvist", "Moreau", "Haddad", "Kowalski", "Brennan", "Ferreira", "Tanaka", "Osei"]
+  },
   "streetSuffixes": ["Street", "Avenue", "Road", "Drive", "Way", "Row"],
   "roleNouns": {
     "tests": "Lab",

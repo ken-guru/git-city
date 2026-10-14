@@ -4,7 +4,7 @@
  * All integers are little-endian; arrays are stored column by column.
  */
 
-export const FORMAT_VERSION = 9;
+export const FORMAT_VERSION = 10;
 
 const WORLD_MAGIC = 0x57435447; // "GTCW"
 const CHUNK_MAGIC = 0x43435447; // "GTCC"
@@ -124,7 +124,17 @@ export interface World {
    * factor of its Block streets, times 100 (SPEC §7: streets widen with strength, up to 2×).
    */
   districts: { index: Uint32Array; street: Uint8Array };
+  /**
+   * Contributors (SPEC §8), present only when contributors are on: per Contributor, its name (a string id in
+   * strings.json) and whether it is Automation; per Step, the index of the Contributor who made its newest commit.
+   */
+  contributors?: { name: Uint32Array; automation: Uint8Array; ofStep: Uint32Array };
+  /** Per Step: the string id of its commit message, or NO_CONTENT when it has none. Present only with commit messages (SPEC §11). */
+  messages?: Uint32Array;
 }
+
+/** The value that marks an absent Contributor or message in a per-Step column. */
+export const NO_CONTENT = 0xffffffff;
 
 /**
  * The state of every standing file as the chunk's first commit begins, before its own events. Columns run
@@ -188,6 +198,7 @@ const LOT_BYTES = 4 + 4 + 1 + 1;
 const ROAD_BYTES = 4 + 4 + 1 + 1 + 1;
 const STINT_BYTES = 4 + 4 + 1;
 const DISTRICT_BYTES = 4 + 1;
+const CONTRIBUTOR_BYTES = 4 + 1;
 /** The chunk header: magic, version, first commit, and the counts of standing files, Blocks, Roads and events. */
 const CHUNK_HEADER_BYTES = 4 * 7;
 
@@ -197,11 +208,14 @@ export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { c
     throw new Error("per-file columns differ in length from fileCount");
   }
   const { villages, blocks, lots, roads } = world;
+  const { contributors, messages } = world;
   const size =
     20 + world.commitDays.length * 8 + n * FILE_ATTRIBUTE_BYTES + world.chunks.length * (4 + CHUNK_HASH_BYTES) +
     4 + n + 4 + villages.x.length * VILLAGE_BYTES + 4 + blocks.x.length * BLOCK_BYTES +
     4 + lots.file.length * LOT_BYTES + 4 + roads.a.length * ROAD_BYTES + 4 + world.stints.file.length * STINT_BYTES +
-    4 + world.districts.index.length * DISTRICT_BYTES + 4 + (world.commitSeconds ? world.commitDays.length * 4 : 0);
+    4 + world.districts.index.length * DISTRICT_BYTES + 4 + (world.commitSeconds ? world.commitDays.length * 4 : 0) +
+    4 + (contributors ? 4 + contributors.name.length * CONTRIBUTOR_BYTES + world.commitDays.length * 4 : 0) +
+    4 + (messages ? world.commitDays.length * 4 : 0);
   const w = new Writer(size);
   w.u32(WORLD_MAGIC);
   w.u32(FORMAT_VERSION);
@@ -270,6 +284,22 @@ export function encodeWorld(world: Omit<World, "formatVersion" | "chunks"> & { c
   }
   w.u32(world.commitSeconds ? 1 : 0);
   if (world.commitSeconds) for (const seconds of world.commitSeconds) w.u32(seconds);
+  // Then the opt-in sections, each behind a flag: the Contributors, and the Steps' commit messages.
+  w.u32(contributors ? 1 : 0);
+  if (contributors) {
+    if (contributors.ofStep.length !== world.commitDays.length) throw new Error("contributors.ofStep differs in length from commitDays");
+    w.u32(contributors.name.length);
+    for (let i = 0; i < contributors.name.length; i++) {
+      w.u32(contributors.name[i]!);
+      w.bytes(contributors.automation.subarray(i, i + 1));
+    }
+    for (const contributor of contributors.ofStep) w.u32(contributor);
+  }
+  w.u32(messages ? 1 : 0);
+  if (messages) {
+    if (messages.length !== world.commitDays.length) throw new Error("messages differs in length from commitDays");
+    for (const message of messages) w.u32(message);
+  }
   return w.done();
 }
 
@@ -356,6 +386,18 @@ export function decodeWorld(bytes: Uint8Array): World {
   const exact = r.u32() === 1;
   const commitSeconds = exact ? new Uint32Array(commitCount) : undefined;
   if (commitSeconds) for (let i = 0; i < commitCount; i++) commitSeconds[i] = r.u32();
+  let contributors: World["contributors"];
+  if (r.u32() === 1) {
+    const count = r.u32();
+    const name = new Uint32Array(count);
+    const automation = new Uint8Array(count);
+    for (let i = 0; i < count; i++) {
+      name[i] = r.u32();
+      automation[i] = r.bytes(1)[0]!;
+    }
+    contributors = { name, automation, ofStep: r.u32s(commitCount) };
+  }
+  const messages = r.u32() === 1 ? r.u32s(commitCount) : undefined;
 
   return {
     formatVersion: r.formatVersion,
@@ -375,6 +417,8 @@ export function decodeWorld(bytes: Uint8Array): World {
     roads,
     stints,
     districts,
+    ...(contributors ? { contributors } : {}),
+    ...(messages ? { messages } : {}),
   };
 }
 

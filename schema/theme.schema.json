@@ -27,6 +27,15 @@
         "suffixes": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[a-z]+$" } }
       }
     },
+    "personNames": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["given", "family"],
+      "properties": {
+        "given": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Z][a-z]+$" } },
+        "family": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Z][a-z]+$" } }
+      }
+    },
     "streetSuffixes": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^[A-Za-z ]+$" } },
     "roleNouns": {
       "type": "object",

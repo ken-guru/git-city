@@ -30,9 +30,17 @@ export const RULE_ACTIONS: readonly RuleAction[] = ["pseudonym", "reveal", "allo
 export const TIMELINE_SETTINGS = ["auto", "commit", "day", "week", "month"] as const;
 export type TimelineSetting = (typeof TIMELINE_SETTINGS)[number];
 
+/** The `contributors` setting (SPEC §8): `off` shows no contributors; the others name them in the order given. */
+export const CONTRIBUTOR_LEVELS = ["off", "anonymous", "generated", "real"] as const;
+export type ContributorLevel = (typeof CONTRIBUTOR_LEVELS)[number];
+
 export interface Config {
   /** Rules in file order: the last matching rule wins. */
   rules: Rule[];
+  /** Whether contributors appear, and how they are named (SPEC §8). Off by default. */
+  contributors?: ContributorLevel;
+  /** Whether commit messages appear as captions (SPEC §11). Off by default. */
+  commitMessages?: boolean;
   naming: { seed?: string };
   /** The Theme named in the config. The `--theme` flag wins over it. */
   theme?: string;
@@ -84,12 +92,16 @@ export function parseConfig(text: string, source: string): Config {
   const scale = root.scale === undefined ? {} : parseScale(root.scale, source);
   const exactTimes = root.exactTimes === undefined ? {} : { exactTimes: root.exactTimes === true };
   const externals = root.externals === undefined ? undefined : parseExternals(root.externals, source);
+  const contributors = root.contributors === undefined ? undefined : (root.contributors as ContributorLevel);
+  const commitMessages = root.commitMessages === undefined ? undefined : root.commitMessages === true;
   return {
     rules,
     naming,
     exclude,
     scale,
     sources: [source],
+    ...(contributors === undefined ? {} : { contributors }),
+    ...(commitMessages === undefined ? {} : { commitMessages }),
     ...exactTimes,
     ...(theme === undefined ? {} : { theme }),
     ...(externals === undefined ? {} : { externals }),
@@ -156,6 +168,8 @@ export function loadConfig(paths: readonly string[]): Config {
     merged.scale = { ...merged.scale, ...config.scale };
     // The last file that sets it wins, as for the other settings (the personal config comes last).
     if (config.exactTimes !== undefined) merged.exactTimes = config.exactTimes;
+    if (config.contributors !== undefined) merged.contributors = config.contributors;
+    if (config.commitMessages !== undefined) merged.commitMessages = config.commitMessages;
     if (config.externals !== undefined) {
       const groups = { ...merged.externals?.groups, ...config.externals.groups };
       merged.externals = {
@@ -214,16 +228,13 @@ function rejectKeys(entry: Record<string, unknown>, keys: string[], action: stri
   }
 }
 
-/** The contributor levels of config.schema.json. */
-const CONTRIBUTOR_LEVELS = ["off", "anonymous", "generated", "real"];
-
 /**
- * Checks the sections other tickets will read, so a wrong type is caught now and matches the schema
- * (schema/git-city.config.schema.json). Their values are not used yet.
+ * Checks the sections the config reads, so a wrong type is caught and matches the schema
+ * (schema/git-city.config.schema.json).
  */
 function checkSections(root: Record<string, unknown>, source: string): void {
   const level = root.contributors;
-  if (level !== undefined && !(typeof level === "string" && CONTRIBUTOR_LEVELS.includes(level))) {
+  if (level !== undefined && !(typeof level === "string" && (CONTRIBUTOR_LEVELS as readonly string[]).includes(level))) {
     throw new ConfigError(`${source}: "contributors" must be one of ${CONTRIBUTOR_LEVELS.join(", ")}`);
   }
   for (const key of ["commitMessages", "exactTimes"] as const) {

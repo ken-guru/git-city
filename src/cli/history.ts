@@ -2,6 +2,7 @@ import { SECONDS_PER_DAY } from "../shared/format.js";
 import { type FileFacts, resolveBlobFacts, SUBMODULE_FACTS } from "./facts.js";
 import { extractImports, extractorFor } from "./imports/extract.js";
 import { gitMaybe, gitStream } from "./git.js";
+import { isAutomation } from "./contributors.js";
 
 /** Commits parsed before their blobs are read. Bounds memory; the whole history is never held. */
 export const COMMITS_PER_BATCH = 1000;
@@ -37,6 +38,20 @@ export interface CommitRecord {
   lines?: Map<string, number>;
   /** Every file version this commit adds or rewrites, under its path after the commit. */
   writes: FileWrite[];
+  /**
+   * The author, from the mailmapped name and email. The email is only a key in the local cache: it never reaches the
+   * output. Absent in records cached before contributors were read.
+   */
+  author?: CommitAuthor;
+  /** The commit's subject line (its first line), for commit messages. */
+  subject?: string;
+}
+
+/** Who authored a commit (SPEC §8). `key` tells people apart; `name` is the mailmapped name; `bot` marks automation. */
+export interface CommitAuthor {
+  key: string;
+  name: string;
+  bot: boolean;
 }
 
 export class HistoryError extends Error {}
@@ -57,7 +72,16 @@ interface RawCommit {
   modified: string[];
   renamed: { from: string; to: string }[];
   writes: RawWrite[];
+  author: CommitAuthor;
+  subject: string;
 }
+
+/**
+ * The header git prints per commit, after the NUL that opens it: \x01, then the hash and the committer time, then
+ * the mailmapped author name and email and the subject, each after a \x02 separator.
+ */
+const HEADER_FORMAT = "--format=%x01%H %ct%x02%aN%x02%aE%x02%s";
+const FIELD_SEPARATOR = "\x02";
 
 export interface TimelineHead {
   /** The full hash of the Timeline's newest commit. */
@@ -88,6 +112,12 @@ export async function resolveTimelineHead(repoDir: string, branch?: string): Pro
   return { head, branch: name };
 }
 
+/** The author record of a commit. The key is the lower-cased email, which never leaves the local cache. */
+export function authorOf(name: string, email: string): CommitAuthor {
+  const key = email.trim().toLowerCase() || name.trim().toLowerCase();
+  return { key, name: name.trim(), bot: isAutomation(name, email) };
+}
+
 /** Mode git gives a submodule entry, whose "blob" is a commit. */
 const SUBMODULE_MODE = "160000";
 
@@ -104,9 +134,9 @@ export interface HistoryReport {
  */
 export async function* readHistory(repoDir: string, head: string, report: HistoryReport = { missingBlobs: 0 }): AsyncGenerator<CommitRecord> {
   const args = [
-    "log", "--first-parent", "--reverse", "--diff-merges=first-parent",
+    "log", "--first-parent", "--reverse", "--diff-merges=first-parent", "--use-mailmap",
     "-M", "--raw", "-z", "--no-abbrev", "--no-textconv", "--no-ext-diff", "--no-relative", "--no-color",
-    "--format=%x01%H %ct", head, "--",
+    HEADER_FORMAT, head, "--",
   ];
   const parser = new RawLogParser();
   const known = new Map<string, FileFacts>();
@@ -136,9 +166,9 @@ export async function readCommitBatch(
 ): Promise<{ hash: string; commit: CommitRecord }[]> {
   if (hashes.length === 0) return [];
   const args = [
-    "log", "--no-walk=unsorted", "--diff-merges=first-parent",
+    "log", "--no-walk=unsorted", "--diff-merges=first-parent", "--use-mailmap",
     "-M", "--raw", "-z", "--no-abbrev", "--no-textconv", "--no-ext-diff", "--no-relative", "--no-color",
-    "--format=%x01%H %ct", ...hashes, "--",
+    HEADER_FORMAT, ...hashes, "--",
   ];
   const parser = new RawLogParser();
   const raw: RawCommit[] = [];
@@ -189,6 +219,8 @@ async function completeBatch(
         blob: write.blob,
         facts: write.mode === SUBMODULE_MODE ? SUBMODULE_FACTS : known.get(write.blob)!,
       })),
+      author: commit.author,
+      subject: commit.subject,
       lines: new Map(
         commit.writes.map((write) => [
           write.path,
@@ -204,7 +236,7 @@ export async function isShallowRepository(repoDir: string): Promise<boolean> {
   return (await gitMaybe(repoDir, ["rev-parse", "--is-shallow-repository"])) === "true";
 }
 
-/** Incrementally parses `git log --raw -z --format=%x01%H %ct` output into commits. */
+/** Incrementally parses `git log --raw -z` output (with HEADER_FORMAT) into commits. */
 class RawLogParser {
   private rest: Buffer = Buffer.alloc(0);
   private commit: RawCommit | undefined;
@@ -239,12 +271,15 @@ class RawLogParser {
     }
     if (token.startsWith("\x01")) {
       if (this.commit) yield this.commit;
-      const [hash = "", time = ""] = token.slice(1).split(" ");
+      const [head = "", name = "", email = "", ...subjectParts] = token.slice(1).split(FIELD_SEPARATOR);
+      const [hash = "", time = ""] = head.split(" ");
       const seconds = Number(time);
       if (!/^[0-9a-f]+$/.test(hash) || !Number.isFinite(seconds)) {
         throw new HistoryError(`unexpected commit header from git log: ${JSON.stringify(token)}`);
       }
       this.commit = {
+        author: authorOf(name, email),
+        subject: subjectParts.join(FIELD_SEPARATOR),
         hash,
         day: Math.floor(seconds / SECONDS_PER_DAY),
         // Dates before 1970 are clamped: the output stores unsigned seconds.

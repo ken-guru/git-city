@@ -13,6 +13,8 @@ export interface Theme {
   name: string;
   display: { title: string; description: string };
   wordPieces: { prefixes: string[]; suffixes: string[] };
+  /** Given and family names for Contributors' Generated names (SPEC §8). */
+  personNames: { given: string[]; family: string[] };
   streetSuffixes: string[];
   roleNouns: Record<ThemeKey, string>;
   palette: Record<ThemeKey, { hue: number }>;
@@ -28,6 +30,12 @@ export const DEFAULT_PALETTE: Record<ThemeKey, { hue: number }> = {
   tests: { hue: 42 }, docs: { hue: 270 }, api: { hue: 28 }, ui: { hue: 340 }, auth: { hue: 355 }, data: { hue: 15 },
   cli: { hue: 245 }, infra: { hue: 205 }, utils: { hue: 38 }, core: { hue: 215 }, config: { hue: 180 }, build: { hue: 220 },
   fallback: { hue: 40 },
+};
+
+/** Person names for a Theme that omits its own: neutral given and family names. */
+export const DEFAULT_PERSON_NAMES = {
+  given: ["Ada", "Ravi", "Mina", "Theo", "Lena", "Omar", "Iris", "Noah"],
+  family: ["Nakamura", "Okafor", "Lindqvist", "Moreau", "Haddad", "Kowalski", "Brennan", "Osei"],
 };
 
 /** The Themes that ship with GitCity, in `themes/` at the package root. */
@@ -53,7 +61,7 @@ export function loadTheme(name: string): Theme {
 export function validateTheme(value: unknown): Theme {
   const where = "theme";
   if (!isObject(value)) throw new ThemeError(`${where} must be an object`);
-  const allowed = ["$schema", "name", "display", "wordPieces", "streetSuffixes", "roleNouns", "palette"];
+  const allowed = ["$schema", "name", "display", "wordPieces", "personNames", "streetSuffixes", "roleNouns", "palette"];
   for (const key of Object.keys(value)) {
     if (!allowed.includes(key)) throw new ThemeError(`${where}: unknown key "${key}"`);
   }
@@ -63,6 +71,8 @@ export function validateTheme(value: unknown): Theme {
 
   const display = object(value.display, "display");
   const wordPieces = object(value.wordPieces, "wordPieces");
+  // A Theme may leave its person names out: the built-in names then stand in, as the palette does.
+  const personNames = value.personNames === undefined ? DEFAULT_PERSON_NAMES : object(value.personNames, "personNames");
   const roleNouns = object(value.roleNouns, "roleNouns");
   // A Theme may leave its palette out: the built-in palette then gives every Role its hue.
   const palette = value.palette === undefined ? DEFAULT_PALETTE : object(value.palette, "palette");
@@ -91,6 +101,10 @@ export function validateTheme(value: unknown): Theme {
     wordPieces: {
       prefixes: strings(wordPieces.prefixes, "wordPieces.prefixes", /^[A-Za-z]+$/),
       suffixes: strings(wordPieces.suffixes, "wordPieces.suffixes", /^[a-z]+$/),
+    },
+    personNames: {
+      given: strings(personNames.given, "personNames.given", /^[A-Z][a-z]+$/),
+      family: strings(personNames.family, "personNames.family", /^[A-Z][a-z]+$/),
     },
     streetSuffixes: strings(value.streetSuffixes, "streetSuffixes", /^[A-Za-z ]+$/),
     roleNouns: roleNouns as Record<ThemeKey, string>,

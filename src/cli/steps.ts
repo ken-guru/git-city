@@ -145,10 +145,14 @@ export function groupTimeline(data: TimelineData, plan: StepPlan): TimelineData 
     }
   }
 
+  // A Step shows its newest commit's author and subject (SPEC §11: one caption per Step).
+  const newestOf = (step: number) => (step + 1 < plan.firstCommit.length ? plan.firstCommit[step + 1]! - 1 : data.commitDays.length - 1);
   return {
     ...data,
     commitDays: Int32Array.from(plan.firstCommit, (c) => data.commitDays[c]!),
     commitSeconds: Uint32Array.from(plan.firstCommit, (c) => data.commitSeconds[c]!),
+    commitAuthor: Int32Array.from(plan.firstCommit, (_, step) => data.commitAuthor[newestOf(step)]!),
+    subjects: Array.from(plan.firstCommit, (_, step) => data.subjects[newestOf(step)]!),
     stepCommits: Uint32Array.from(plan.stepCommits),
     eventCommit: Uint32Array.from(keep, (i) => stepOfEvent(i)),
     eventFile: Uint32Array.from(keep, (i) => data.eventFile[i]!),

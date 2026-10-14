@@ -27,15 +27,15 @@ A flag always beats the config for the same setting.
 | `rules[].path` | string | Target: a path glob, such as `src/**`. |
 | `rules[].module` | string | Target: a Module, by its name. |
 | `rules[].concept` | string | Target: a Concept, matched case-insensitively inside names. |
-| `rules[].contributor` | string | Target: a contributor. Only used when contributors are on. |
+| `rules[].contributor` | string | Target: a contributor, by its name (after `.mailmap`) or its email. Only used when contributors are on, and only `pseudonym` applies to it. |
 | `rules[].external` | string | Target: an External Dependency, by its package name. |
 | `rules[].action` | string | `pseudonym`, `reveal`, `allow` or `category`. |
 | `rules[].as` | string | The Pseudonym. Required with `pseudonym`, not allowed with other actions. |
 | `rules[].category` | string | The Category for matched Buildings. Required with `category`, not allowed with other actions. |
 | `naming` | object | Settings for Generated names. |
 | `naming.seed` | string | Overrides the seed for Generated names. The `--seed` flag wins over it. |
-| `contributors` | string | `off` (default), `anonymous`, `generated` or `real`. Checked, but not yet applied by this release. |
-| `commitMessages` | boolean | Whether commit messages appear. Default `false`. Checked, but not yet applied by this release. |
+| `contributors` | string | Who changed what: `off` (default, nothing shown), `anonymous` ("Contributor 9", numbered by first commit), `generated` (themed person names, unique and checked for leaks) or `real` (names after `.mailmap`). Bots are grouped as one "Automation" Contributor. Emails are never written. `--private` replaces real names with generated ones. |
+| `commitMessages` | boolean | Whether commit messages appear as captions, with the date and Contributor. Default `false`. Concept pseudonyms apply; a message with a hidden name in it, or with only an email address, is shown without its text. |
 | `exactTimes` | boolean | Whether the page shows each Step's time of day (UTC) instead of its day. Default `false`, which keeps dates to the day. |
 | `externals` | object | Settings for External Cities: how External Dependencies group on the horizon. |
 | `externals.threshold` | integer | The smallest group that gets its own External City, from 3 to 5. Default 3. |

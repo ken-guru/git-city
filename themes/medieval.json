@@ -9,6 +9,10 @@
     "prefixes": ["Ash", "Thorn", "Mill", "Brind", "Wyn", "Hart", "Stone", "Oak", "Fen", "Raven", "Elder", "Cold"],
     "suffixes": ["ford", "wick", "mere", "stead", "bury", "thorpe", "hollow", "cross", "field", "holt"]
   },
+  "personNames": {
+    "given": ["Elric", "Maud", "Aldric", "Bryony", "Cedric", "Ysolde", "Osric", "Wynne", "Godric", "Hilde", "Rowan", "Edith"],
+    "family": ["Thatcher", "Miller", "Fletcher", "Cooper", "Tanner", "Weaver", "Smith", "Reeve", "Harrow", "Wainwright"]
+  },
   "streetSuffixes": ["Lane", "Row", "Way", "Gate", "Walk"],
   "roleNouns": {
     "tests": "Tilt Yard",
