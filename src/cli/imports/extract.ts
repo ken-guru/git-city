@@ -1,5 +1,6 @@
-import { createRequire } from "node:module";
+import { existsSync } from "node:fs";
 import { extname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Language, Parser, type Node } from "web-tree-sitter";
 
 /**
@@ -30,12 +31,17 @@ export interface ImportExtractor {
   extract(path: string, source: string): Promise<RawImport[]>;
 }
 
-/** Version of the web-tree-sitter TS/JS extractor. */
-export const TS_JS_EXTRACTOR_VERSION = 1;
+/** Version of the web-tree-sitter TS/JS extractor. Bumped when the grammar source changed to the official packages. */
+export const TS_JS_EXTRACTOR_VERSION = 2;
 
-const requireFrom = createRequire(import.meta.url);
-/** Directory holding the grammar WASM files shipped by @vscode/tree-sitter-wasm. */
-const GRAMMAR_DIR = requireFrom.resolve("@vscode/tree-sitter-wasm/wasm/tree-sitter.js").replace(/tree-sitter\.js$/, "");
+/**
+ * The grammar WASM files that `scripts/copy-grammars.mjs` puts in `dist/grammars` (SPEC §12). A built CLI
+ * finds them beside its own `dist/cli`; a run from source (tests) finds the same folder in the repository's `dist`.
+ */
+const GRAMMAR_DIR =
+  [new URL("../../grammars/", import.meta.url), new URL("../../../dist/grammars/", import.meta.url)]
+    .map((url) => fileURLToPath(url))
+    .find((dir) => existsSync(dir)) ?? fileURLToPath(new URL("../../grammars/", import.meta.url));
 
 type GrammarName = "typescript" | "tsx" | "javascript";
 

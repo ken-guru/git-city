@@ -22,3 +22,35 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+
+  # Installs the packed tarball globally and runs `git city` from Git Bash, which is how Windows users run it.
+  windows-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # The grammar packages' native-build install scripts are not needed: only their .wasm files ship.
+      - run: npm ci --ignore-scripts
+      - name: Pack and install globally
+        shell: bash
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP/pack"
+          npm install -g --prefix "$RUNNER_TEMP/prefix" "$RUNNER_TEMP"/pack/git-city-*.tgz
+          # npm on Windows writes an extensionless sh shim next to git-city.cmd; git city needs it.
+          test -f "$RUNNER_TEMP/prefix/git-city"
+          echo "$RUNNER_TEMP/prefix" >> "$GITHUB_PATH"
+      - name: git city smoke test
+        shell: bash
+        run: |
+          git city --version
+          repo="$RUNNER_TEMP/smoke-repo"
+          mkdir -p "$repo" && cd "$repo"
+          git init -q
+          echo "hello" > README.md
+          git add README.md
+          git -c user.name=ci -c user.email=ci@example.com commit -q -m "init"
+          git city build --out "$RUNNER_TEMP/site"
+          test -f "$RUNNER_TEMP/site/index.html"
