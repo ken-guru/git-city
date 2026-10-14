@@ -62,11 +62,11 @@ describe("git-city build", () => {
 
     // The two side commits (4 and 5 January) are not on the Timeline; the merge is one commit.
     expect([...world.commitDays]).toEqual([dayOf(2024, 1, 2), dayOf(2024, 1, 3), dayOf(2024, 1, 5)]);
-    expect(world.fileCount).toBe(5);
+    // b.txt is renamed to c.txt in its own directory: same Building, same file id.
+    expect(world.fileCount).toBe(4);
     expect(lifetimes(chunks[0]!)).toEqual([
       [0, 1], // a.txt, deleted
-      [0, 1], // b.txt, renamed away
-      [1, null], // c.txt
+      [0, null], // b.txt, renamed to c.txt
       [2, null], // d.txt, via the merge
       [2, null], // e.txt, via the merge
     ]);
@@ -84,9 +84,8 @@ describe("git-city build", () => {
     const { chunks } = await buildSite(repo);
 
     expect(lifetimes(chunks[0]!)).toEqual([
-      [0, 1], // plain.txt, renamed away
       [0, null], // the unicode path, from the root commit
-      [1, null], // moved.txt
+      [0, null], // plain.txt, renamed to moved.txt in its own directory: same file
     ]);
   });
 
