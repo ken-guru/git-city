@@ -17,11 +17,22 @@ export const CACHE_FOLDER = "git-city";
  * Layer 1 feeds layer 2, and layer 2 feeds layer 3.
  */
 const LAYER_DEFINITIONS = {
-  facts: { sources: ["facts", "imports/extract"], dirs: ["facts"], dependents: ["commits"] },
-  commits: { sources: ["history", "git"], dirs: ["commits"], dependents: ["run"] },
+  // The facts depend on the parser runtime and the grammars, so their declared versions are part of the stamp.
+  facts: {
+    sources: ["facts", "imports/extract"],
+    packages: ["web-tree-sitter", "tree-sitter-typescript", "tree-sitter-javascript", "tree-sitter-python"],
+    dirs: ["facts"],
+    dependents: ["commits"],
+  },
+  commits: { sources: ["history", "git"], packages: [], dirs: ["commits"], dependents: ["run"] },
   // Shared modules the run state's contents come from are listed too, so changing their code clears the run layer.
-  run: { sources: ["timeline", "model", "layout", "resume", "../shared/buildings", "../shared/format"], dirs: ["runs", "states"], dependents: [] },
-} as const satisfies Record<string, { sources: readonly string[]; dirs: readonly string[]; dependents: readonly string[] }>;
+  run: {
+    sources: ["timeline", "model", "layout", "resume", "../shared/buildings", "../shared/format"],
+    packages: [],
+    dirs: ["runs", "states"],
+    dependents: [],
+  },
+} as const satisfies Record<string, { sources: readonly string[]; packages: readonly string[]; dirs: readonly string[]; dependents: readonly string[] }>;
 export type Layer = keyof typeof LAYER_DEFINITIONS;
 const LAYERS = Object.keys(LAYER_DEFINITIONS) as Layer[];
 
@@ -31,13 +42,25 @@ function sourceText(name: string): Buffer {
   return readFileSync(new URL(`./${name}${ext}`, import.meta.url));
 }
 
+/** The package manifest that ships with the CLI (the repository root, or the installed package root). */
+const MANIFEST = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")) as {
+  dependencies?: Record<string, string>;
+  devDependencies?: Record<string, string>;
+};
+
+/** The version range a package is declared with. A bump in the manifest changes the stamp. */
+function declaredVersion(name: string): string {
+  return MANIFEST.dependencies?.[name] ?? MANIFEST.devDependencies?.[name] ?? "undeclared";
+}
+
 /**
- * A layer's version stamp, derived from the code it is built from: a hash of its modules' source and this file's.
- * Changing that code changes the stamp, so no stamp is ever set by hand.
+ * A layer's version stamp, derived from the code it is built from: a hash of its modules' source, this file's, and
+ * the declared versions of the packages it depends on. Changing any of them changes the stamp, so no stamp is set by hand.
  */
 function stampOf(layer: Layer): string {
   const hash = createHash("sha256");
   for (const name of ["cache", ...LAYER_DEFINITIONS[layer].sources]) hash.update(name).update("\0").update(sourceText(name));
+  for (const name of LAYER_DEFINITIONS[layer].packages) hash.update(name).update("\0").update(declaredVersion(name)).update("\0");
   return `${layer}-${hash.digest("hex").slice(0, 12)}`;
 }
 
