@@ -60,6 +60,7 @@ async function main(argv: string[]): Promise<number> {
 
   if (command === "build" && rest.length === 0) {
     const summary = await build({ repoDir: cwd, outDir: resolve(cwd, values.out ?? DEFAULT_OUT), branch: values.branch });
+    for (const warning of summary.warnings) process.stderr.write(`git-city: warning: ${warning}\n`);
     process.stdout.write(
       `Built ${summary.commits} commits and ${summary.files} files from ${summary.branch} into ${summary.outDir}\n` +
         `Run "git-city serve" to watch it.\n`,
