@@ -1,4 +1,11 @@
-import { NAME_SOURCES, PLACES_FORMAT_VERSION, type DistrictPlace, type NeighbourhoodPlace, type PlacesFile } from "../shared/places.js";
+import {
+  NAME_SOURCES,
+  PLACES_FORMAT_VERSION,
+  type DistrictPlace,
+  type NeighbourhoodPlace,
+  type PavingColour,
+  type PlacesFile,
+} from "../shared/places.js";
 import type { Config } from "./config.js";
 import type { Role } from "./layout.js";
 import { ThemeNamer } from "./namer.js";
@@ -172,7 +179,7 @@ export interface PlaceInput {
   neighbourhoods: string[];
   /** Village anchor, in Block-grid cells. */
   anchor: { col: number; row: number };
-  colour: { hue: number; saturation: number; lightness: number };
+  colour: PavingColour;
 }
 
 export interface PlaceOptions extends NameOptions {

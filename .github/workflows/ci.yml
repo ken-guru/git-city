@@ -20,7 +20,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm run build
+      # npm test builds once itself (test/global-setup.ts) before any test file runs.
       - run: npm test
 
   # Installs the packed tarball globally and runs `git city` from Git Bash, which is how Windows users run it.

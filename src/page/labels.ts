@@ -17,13 +17,13 @@ export function isLabelVisible(distance: number, maxDistance: number): boolean {
 }
 
 /** The label of one District, placed at its village anchor. `spacing` is the world distance between Block-grid cells. */
-export function labelModel(place: DistrictPlace, spacing: number): LabelModel {
+export function labelModel(place: DistrictPlace, spacing: number, pageTheme: "light" | "dark" = "light"): LabelModel {
   const { hue, saturation, lightness } = place.colour;
   const subtitle = sourceName(place.source) === "generated" ? undefined : place.generated;
   return {
     name: place.name,
     subtitle,
-    colour: `hsl(${hue} ${Math.round(saturation * 100)}% ${Math.round(lightness * 100)}%)`,
+    colour: `hsl(${hue} ${Math.round(saturation * 100)}% ${Math.round(lightness[pageTheme] * 100)}%)`,
     x: place.anchor.col * spacing,
     z: place.anchor.row * spacing,
   };
@@ -53,12 +53,13 @@ export function createDistrictLabels(
   spacing: number,
   maxDistance: number,
   height: number,
+  pageTheme: "light" | "dark" = "light",
 ): DistrictLabels {
   const renderer = new CSS2DRenderer();
   renderer.domElement.classList.add("labels");
   const objects: { object: CSS2DObject; model: LabelModel }[] = [];
   for (const place of places.districts) {
-    const model = labelModel(place, spacing);
+    const model = labelModel(place, spacing, pageTheme);
     const element = document.createElement("div");
     element.className = "district-label";
     element.style.borderLeftColor = model.colour;

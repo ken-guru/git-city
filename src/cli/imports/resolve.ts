@@ -41,11 +41,35 @@ const TS_FOR_JS = [".ts", ".tsx", ".d.ts", ".mts", ".cts"];
 const BUILD_DIRS = new Set(["dist", "build", "lib", "out"]);
 const BUILTINS = new Set([...builtinModules, ...builtinModules.map((m) => m.replace(/^node:/, ""))]);
 
+/** The path a tsconfig's `extends` value names, relative to the tsconfig at `configPath`. */
+export function extendsTarget(configPath: string, value: string): string {
+  return normalize(join(dirname(configPath), value));
+}
+
 /** Resolves `specifier` as imported from the file at `fromPath`. */
 export function resolveImport(snapshot: Snapshot, fromPath: string, specifier: string): Resolved {
-  const r = new Resolver(snapshot);
-  const target = r.resolve(fromPath, specifier);
-  return { target, probes: r.probes };
+  return new ImportResolver(snapshot).resolve(fromPath, specifier);
+}
+
+/**
+ * A resolver for one snapshot that is kept across a run. Parsed manifests and the workspace map are built once
+ * and reused for every specifier. The owner calls `reset` when a config or manifest file changes.
+ */
+export class ImportResolver {
+  private readonly core: Resolver;
+
+  constructor(snapshot: Snapshot) {
+    this.core = new Resolver(snapshot);
+  }
+
+  resolve(fromPath: string, specifier: string): Resolved {
+    return this.core.resolveWithProbes(fromPath, specifier);
+  }
+
+  /** Forgets cached manifests and the workspace map. */
+  reset(): void {
+    this.core.reset();
+  }
 }
 
 /** The effective `paths` and `baseUrl` of a tsconfig, with each one's own base directory (inherited through extends). */
@@ -59,13 +83,26 @@ interface TsconfigView {
 }
 
 class Resolver {
-  readonly probes: string[] = [];
-  private readonly tsconfigCache = new Map<string, TsconfigView | null>();
-  private readonly workspaceCache = new Map<string, Map<string, string> | undefined>();
+  private probes: string[] = [];
+  /** Parsed manifests by path. Reset with the config files they come from. */
+  private readonly jsonCache = new Map<string, Record<string, any> | undefined>();
+  /** Workspace package names to directories. Built on first use, then shared by every specifier. */
+  private workspaceMap: Map<string, string> | undefined;
 
   constructor(private readonly snap: Snapshot) {}
 
-  resolve(fromPath: string, specifier: string): Resolution | undefined {
+  resolveWithProbes(fromPath: string, specifier: string): Resolved {
+    this.probes = [];
+    const target = this.resolve(fromPath, specifier);
+    return { target, probes: this.probes };
+  }
+
+  reset(): void {
+    this.jsonCache.clear();
+    this.workspaceMap = undefined;
+  }
+
+  private resolve(fromPath: string, specifier: string): Resolution | undefined {
     if (specifier === "" || specifier.startsWith("/")) return undefined;
     if (specifier === "." || specifier === ".." || specifier.startsWith("./") || specifier.startsWith("../")) {
       return this.file(this.stemOf(fromPath, specifier));
@@ -82,10 +119,8 @@ class Resolver {
     if (self && self.name === name) return this.packageEntry(self.dir, sub);
 
     const workspace = this.workspaces().get(name);
-    if (workspace !== undefined) {
-      const hit = this.packageEntry(workspace, sub);
-      if (hit) return hit;
-    }
+    // A workspace package lives in this repo, so an entry it does not export is not an external dependency.
+    if (workspace !== undefined) return this.packageEntry(workspace, sub);
     return { kind: "package", name };
   }
 
@@ -142,9 +177,16 @@ class Resolver {
   private packageImports(fromPath: string, specifier: string): Resolution | undefined {
     const pkg = this.nearestPackage(fromPath);
     if (!pkg) return undefined;
-    const target = matchPattern(pkg.json.imports, specifier);
-    if (target === undefined) return undefined;
-    return this.file(normalize(`${pkg.dir}/${target.replace(/^\.\//, "")}`));
+    return this.firstFile(pkg.dir, matchPattern(pkg.json.imports, specifier));
+  }
+
+  /** The first of `targets, relative to `dir`, that resolves to a file in the commit. */
+  private firstFile(dir: string, targets: readonly string[]): Resolution | undefined {
+    for (const target of targets) {
+      const hit = this.file(normalize(join(dir, target)));
+      if (hit) return hit;
+    }
+    return undefined;
   }
 
   /** Resolves a `paths` alias from the nearest tsconfig, with baseUrl as the fallback. */
@@ -170,17 +212,15 @@ class Resolver {
   /** Entry of a package at `dir` for subpath "." or "./sub", through exports, then main and types. */
   private packageEntry(dir: string, sub: string): Resolution | undefined {
     const json = this.readJson(join(dir, "package.json"));
-    const exported = exportTarget(json?.exports, sub);
+    const exported = exportTargets(json?.exports, sub);
     if (sub !== ".") {
-      return this.file(normalize(join(dir, exported ?? sub)));
+      // Once a package declares `exports`, only the subpaths it lists are importable.
+      if (json?.exports !== undefined) return this.firstFile(dir, exported);
+      return this.file(normalize(join(dir, sub)));
     }
     // Source-first: a built entry maps back to source, and an entry that fails falls through to the next.
-    const entries = [exported, json?.main, json?.module, json?.types].filter((e): e is string => typeof e === "string");
-    for (const entry of entries) {
-      const hit = this.file(normalize(join(dir, entry)));
-      if (hit) return hit;
-    }
-    return this.file(normalize(join(dir, "index")));
+    const legacy = [json?.main, json?.module, json?.types].filter((e): e is string => typeof e === "string");
+    return this.firstFile(dir, [...exported, ...legacy]) ?? this.file(normalize(join(dir, "index")));
   }
 
   private nearestPackage(fromPath: string): { dir: string; name?: string; json: Record<string, any> } | undefined {
@@ -195,8 +235,7 @@ class Resolver {
 
   /** Workspace package names to their directories, from the root package.json's `workspaces` globs. */
   private workspaces(): Map<string, string> {
-    const key = "";
-    if (this.workspaceCache.has(key)) return this.workspaceCache.get(key) ?? new Map();
+    if (this.workspaceMap !== undefined) return this.workspaceMap;
     const names = new Map<string, string>();
     const root = this.readJson("package.json");
     const globs = Array.isArray(root?.workspaces) ? (root!.workspaces as unknown[]).filter((g): g is string => typeof g === "string") : [];
@@ -207,7 +246,7 @@ class Resolver {
       const json = this.readJson(path);
       if (typeof json?.name === "string") names.set(json.name, dir);
     }
-    this.workspaceCache.set(key, names);
+    this.workspaceMap = names;
     return names;
   }
 
@@ -224,7 +263,6 @@ class Resolver {
   private loadTsconfig(path: string, depth: number): TsconfigView | undefined {
     this.probe(path);
     if (!this.snap.paths.has(path) || depth > 8) return undefined;
-    if (this.tsconfigCache.has(path)) return this.tsconfigCache.get(path) ?? undefined;
     const json = this.readJson(path);
     const dir = dirname(path);
     let view: TsconfigView | undefined;
@@ -241,7 +279,6 @@ class Resolver {
         };
       }
     }
-    this.tsconfigCache.set(path, view ?? null);
     return view;
   }
 
@@ -250,14 +287,19 @@ class Resolver {
   }
 
   private readJson(path: string): Record<string, any> | undefined {
+    if (this.jsonCache.has(path)) return this.jsonCache.get(path);
     const text = this.snap.paths.has(path) ? this.snap.read(path) : undefined;
-    if (!text) return undefined;
-    try {
-      const parsed = parseJsonc(text);
-      return typeof parsed === "object" && parsed !== null ? (parsed as Record<string, any>) : undefined;
-    } catch {
-      return undefined;
+    let json: Record<string, any> | undefined;
+    if (text) {
+      try {
+        const parsed = parseJsonc(text);
+        json = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, any>) : undefined;
+      } catch {
+        json = undefined;
+      }
     }
+    this.jsonCache.set(path, json);
+    return json;
   }
 }
 
@@ -269,41 +311,48 @@ function splitPackage(specifier: string): { name: string; sub: string } {
   return { name, sub: rest === "" ? "." : `./${rest}` };
 }
 
-/** The target of a conditional `exports`/`imports` value: a string, or the first usable condition. */
-function conditionalTarget(value: unknown): string | undefined {
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(conditionalTarget).find((t) => t !== undefined);
+/**
+ * Conditions a source resolution may take, as Node and TypeScript read them. Conditions are tried in the order
+ * the package lists them, nested ones included, and the first active one with a target wins.
+ */
+const ACTIVE_CONDITIONS = new Set(["types", "import", "require", "node", "module", "source", "default"]);
+
+/**
+ * Every target a conditional `exports`/`imports` value offers, in the order it lists them: a string, each
+ * alternative of an array, and the active conditions of an object, nested ones included. The caller takes the first
+ * that resolves to a file, so a target that is missing from the commit falls through to the next.
+ */
+function conditionalTargets(value: unknown): string[] {
+  if (typeof value === "string") return [value];
+  if (Array.isArray(value)) return value.flatMap(conditionalTargets);
   if (typeof value === "object" && value !== null) {
-    for (const condition of ["types", "import", "default", "require"]) {
-      const hit = conditionalTarget((value as Record<string, unknown>)[condition]);
-      if (hit !== undefined) return hit;
-    }
+    return Object.entries(value).flatMap(([condition, nested]) => (ACTIVE_CONDITIONS.has(condition) ? conditionalTargets(nested) : []));
   }
-  return undefined;
+  return [];
 }
 
 /**
- * The `exports` target for a subpath ("." or "./sub"). A map keyed by subpaths is looked up by key;
+ * The `exports` targets for a subpath ("." or "./sub"). A map keyed by subpaths is looked up by key;
  * anything else is a bare conditions object that applies to the "." entry only.
  */
-function exportTarget(exports: unknown, sub: string): string | undefined {
-  if (typeof exports !== "object" || exports === null) return typeof exports === "string" && sub === "." ? exports : undefined;
+function exportTargets(exports: unknown, sub: string): string[] {
+  if (typeof exports !== "object" || exports === null) return typeof exports === "string" && sub === "." ? [exports] : [];
   const keys = Object.keys(exports);
   if (keys.length > 0 && keys.every((k) => k.startsWith("."))) return matchPattern(exports as Record<string, unknown>, sub);
-  return sub === "." ? conditionalTarget(exports) : undefined;
+  return sub === "." ? conditionalTargets(exports) : [];
 }
 
-/** The target for `key` in a map that may hold exact keys and one "*" pattern. */
-function matchPattern(map: Record<string, unknown> | undefined, key: string): string | undefined {
-  if (!map || typeof map !== "object") return undefined;
-  if (key in map) return conditionalTarget(map[key]);
+/** The targets for `key` in a map that may hold exact keys and one "*" pattern. */
+function matchPattern(map: Record<string, unknown> | undefined, key: string): string[] {
+  if (!map || typeof map !== "object") return [];
+  if (key in map) return conditionalTargets(map[key]);
   for (const [pattern, value] of Object.entries(map)) {
     const star = matchStar(pattern, key);
     if (star === undefined) continue;
-    const target = conditionalTarget(value);
-    if (target !== undefined) return target.replace("*", star);
+    const targets = conditionalTargets(value);
+    if (targets.length > 0) return targets.map((target) => target.replace("*", star));
   }
-  return undefined;
+  return [];
 }
 
 /** The text a "*" in `pattern` matched in `key`, or undefined when they do not match. */

@@ -7,7 +7,7 @@ const place: DistrictPlace = {
   name: "Ashford Keep",
   source: NAME_SOURCES.indexOf("generated"),
   generated: "Ashford Keep",
-  colour: { hue: 355, saturation: 0.5, lightness: 0.5 },
+  colour: { hue: 355, saturation: 0.5, lightness: { light: 0.5, dark: 0.3 } },
   anchor: { col: 3, row: -2 },
   neighbourhoods: [],
 };
@@ -24,6 +24,10 @@ describe("labelModel", () => {
     const model = labelModel(place, 6);
     expect(model).toMatchObject({ name: "Ashford Keep", x: 18, z: -12 });
     expect(model.colour).toBe("hsl(355 50% 50%)");
+  });
+
+  it("takes the lightness of the page theme it is drawn on", () => {
+    expect(labelModel(place, 6, "dark").colour).toBe("hsl(355 50% 30%)");
   });
 
   it("shows no subtitle for a Generated name, and the Generated name beneath a revealed one", () => {

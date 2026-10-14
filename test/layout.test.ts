@@ -230,9 +230,29 @@ describe("Roles and paving", () => {
     expect(sets[0]).toEqual(layoutHistory(history.list, { seed: 1 }).districts.map((d) => d.paving));
     expect(sets[0]).not.toEqual(sets[1]);
     const sats = sets[0]!.map((p) => p.saturation);
-    const lights = sets[0]!.map((p) => p.lightness);
+    const lights = sets[0]!.map((p) => p.lightness.light);
     expect(Math.max(...sats) - Math.min(...sats)).toBeLessThanOrEqual(0.3);
     expect(Math.max(...lights) - Math.min(...lights)).toBeLessThanOrEqual(0.12);
+  });
+
+  it("fixes lightness per page theme, so the dark page paves darker than the light one", () => {
+    const { districts } = layoutHistory(new Changes().commit(["src/a.ts"]).list, { seed: 1 });
+    const [district] = districts;
+    expect(district!.paving.lightness.dark).toBeLessThan(district!.paving.lightness.light);
+  });
+
+  it("gives a District split off in place the opposite lightness offset from its parent's", () => {
+    const history = new Changes()
+      .commit(["packages/web/a.ts", "packages/x/b.ts"])
+      .commit(["packages/web/package.json", "packages/web/c.ts"]);
+    for (const seed of [1, 2, 3, 4, 5]) {
+      const { districts } = layoutHistory(history.list, { seed });
+      const parent = districts.find((d) => d.key === "packages");
+      const child = districts.find((d) => d.key === "packages/web");
+      expect(child, `seed ${seed}`).toBeDefined();
+      const offset = (d: typeof parent) => d!.paving.lightness.light - 0.55;
+      expect(Math.sign(offset(child)), `seed ${seed}`).toBe(-Math.sign(offset(parent)));
+    }
   });
 });
 

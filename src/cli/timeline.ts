@@ -12,7 +12,7 @@ import {
 } from "../shared/format.js";
 import type { CommitRecord } from "./history.js";
 import { ancestors, type PathMove, splitPath, wholeDirectoryMoves } from "./layout.js";
-import { buildingTypeOf, categoryOf, floorsFor, languageOf, seedFor, TUNING } from "./model.js";
+import { buildingTypeOf, categoryOf, floorsOf, languageOf, seedFor, TUNING } from "./model.js";
 
 /**
  * Turns commits into numbered files and events.
@@ -75,7 +75,7 @@ export class TimelineBuilder {
 
       const file = this.nextFile++;
       this.filePaths.push(path);
-      const floors = floorsFor(commit.lines?.get(path) ?? 0);
+      const floors = floorsOf(path, commit.lines?.get(path) ?? 0);
       this.standing.set(path, file);
       this.alive.push(true);
       this.floors.push(floors);
@@ -97,7 +97,7 @@ export class TimelineBuilder {
       touched.add(file);
       const lines = commit.lines?.get(path);
       if (lines === undefined) continue;
-      const floors = floorsFor(lines);
+      const floors = floorsOf(path, lines);
       if (floors !== this.floors[file]) {
         this.floors[file] = floors;
         this.event(seq, file, EVENT_FLOORS, floors);

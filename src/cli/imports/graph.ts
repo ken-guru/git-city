@@ -1,5 +1,6 @@
+import { parseJsonc } from "../jsonc.js";
 import { extractorFor, ImportCache, type RawImport } from "./extract.js";
-import { type Resolution, resolveImport, type Snapshot } from "./resolve.js";
+import { extendsTarget, ImportResolver, type Resolution, type Snapshot } from "./resolve.js";
 
 /**
  * The import graph (SPEC §4), fed one commit at a time in history order. It keeps, for the commit it is at:
@@ -31,6 +32,18 @@ export interface ImportGraphOptions {
 }
 
 const JSON_FILE = /\.jsonc?$/;
+/** How far a tsconfig `extends` chain is followed. Deeper chains are left unresolved. */
+const MAX_EXTENDS_DEPTH = 8;
+
+/** The `extends` value of a tsconfig text, or undefined when it has none or does not parse. */
+function extendsValue(text: string): string | undefined {
+  try {
+    const value = (parseJsonc(text) as { extends?: unknown } | null)?.extends;
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Config files whose content changes how any import resolves. */
 function isConfig(path: string): boolean {
@@ -61,9 +74,16 @@ export class ImportGraph {
     paths: this.paths,
     read: (path) => this.configText.get(path),
   };
+  /** Blob of every JSON file in the commit's tree, so an extended config can be read when it is needed. */
+  private readonly jsonBlobs = new Map<string, string>();
+  /** Paths some tsconfig extends: their text is kept, the rest of the JSON is not. */
+  private readonly extendedPaths = new Set<string>();
+  /** One resolver for the whole run, so manifests and the workspace map are not rebuilt per specifier. */
+  private readonly resolver: ImportResolver;
 
   constructor(private readonly options: ImportGraphOptions) {
     this.cache = options.cache ?? new ImportCache();
+    this.resolver = new ImportResolver(this.snapshot);
   }
 
   async apply(commit: GraphCommit): Promise<void> {
@@ -74,17 +94,20 @@ export class ImportGraph {
       this.clear(path);
       this.files.delete(path);
       this.configText.delete(path);
+      this.jsonBlobs.delete(path);
       changed.add(path);
       configChanged ||= isConfig(path);
     }
 
     const extracting: string[] = [];
+    const jsonWritten: string[] = [];
     for (const { path, blob } of commit.writes) {
       this.paths.add(path);
       changed.add(path);
-      // JSON files are read too, since a tsconfig may extend any of them. Only config changes re-resolve everything.
-      if (isConfig(path) || JSON_FILE.test(path)) {
-        this.configText.set(path, await this.options.readText(blob));
+      if (JSON_FILE.test(path)) {
+        // Only the manifests and tsconfigs (and the files they extend) keep their text; other JSON is never read.
+        this.jsonBlobs.set(path, blob);
+        jsonWritten.push(path);
         configChanged ||= isConfig(path);
       }
       if (extractorFor(path)) {
@@ -93,6 +116,9 @@ export class ImportGraph {
         this.files.set(path, { blob, specifiers });
         extracting.push(path);
       }
+    }
+    for (const path of jsonWritten) {
+      if (isConfig(path) || this.extendedPaths.has(path)) await this.loadConfigText(path, 0);
     }
 
     const affected = new Set<string>(extracting);
@@ -104,6 +130,8 @@ export class ImportGraph {
         if (this.files.has(importer)) affected.add(importer);
       }
     }
+    // Manifests and tsconfigs are read once and the workspace map built once; a config change rebuilds both.
+    if (configChanged) this.resolver.reset();
     for (const importer of affected) this.resolveFile(importer);
   }
 
@@ -141,13 +169,26 @@ export class ImportGraph {
     return [...sums.values()];
   }
 
+  /** Keeps the text of a config file, and of each file a tsconfig extends, following the chain up to a fixed depth. */
+  private async loadConfigText(path: string, depth: number): Promise<void> {
+    const blob = this.jsonBlobs.get(path);
+    if (blob === undefined || depth > MAX_EXTENDS_DEPTH) return;
+    const text = await this.options.readText(blob);
+    this.configText.set(path, text);
+    const value = extendsValue(text);
+    if (value === undefined) return;
+    const target = extendsTarget(path, value);
+    this.extendedPaths.add(target);
+    await this.loadConfigText(target, depth + 1);
+  }
+
   private resolveFile(importer: string): void {
     this.clear(importer);
     const record = this.files.get(importer);
     if (!record) return;
     const probes = new Set<string>();
     for (const { specifier } of record.specifiers) {
-      const resolved = resolveImport(this.snapshot, importer, specifier);
+      const resolved = this.resolver.resolve(importer, specifier);
       for (const probe of resolved.probes) probes.add(probe);
       this.record(importer, resolved.target);
     }

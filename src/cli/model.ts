@@ -23,7 +23,7 @@ export type Category = (typeof CATEGORIES)[number];
  * until then it is this typed default.
  */
 export const CATEGORY_RULES: readonly { pattern: RegExp; category: Category }[] = [
-  { pattern: /(^|\/)(dist|build|out|coverage|vendor|node_modules)\/|(^|\/)package-lock\.json$|\.lock$|\.min\.(js|css)$/, category: "generated" },
+  { pattern: /(^|\/)(dist|build|out|coverage|vendor|node_modules)\/|(^|\/)(package-lock\.json|pnpm-lock\.yaml|npm-shrinkwrap\.json)$|\.lock$|\.min\.(js|css)$/, category: "generated" },
   { pattern: /(^|\/)\.github\/|(^|\/)(Dockerfile|Makefile|Jenkinsfile)$|(^|\/)scripts\/|\.(sh|bash|ps1)$/, category: "build" },
   { pattern: /(^|\/)(tests?|__tests__|spec)\/|\.(test|spec)\.[^/]+$|_test\.[^/]+$/, category: "tests" },
   { pattern: /(^|\/)docs?\/|\.(md|mdx|rst|adoc|txt)$/i, category: "docs" },
@@ -51,6 +51,15 @@ const BUILDING_TYPE_OF_CATEGORY: Record<Category, BuildingType> = {
 
 export function buildingTypeOf(category: Category): BuildingType {
   return BUILDING_TYPE_OF_CATEGORY[category];
+}
+
+/** Floors of a Building in the rail-yard Category (generated, vendored, lockfiles): flat, height capped very low (SPEC §5). */
+export const RAIL_YARD_FLOOR_CAP = 1;
+
+/** Floors for the file at `path` with `lines` lines: its Category's cap applies. */
+export function floorsOf(path: string, lines: number): number {
+  const cap = categoryOf(path) === "generated" ? RAIL_YARD_FLOOR_CAP : TUNING.floorCap;
+  return floorsFor(lines, TUNING.floorK, cap);
 }
 
 /** Floors for a file of `lines` lines: ceil(sqrt(lines) / k), at least 1, capped. */

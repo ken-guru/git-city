@@ -1,19 +1,19 @@
-import { execSync, spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { type AddressInfo, createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { decodeWorld } from "../src/shared/format.js";
 import { FixtureRepo } from "./fixture.js";
 
-const CLI = new URL("../dist/cli/main.js", import.meta.url).pathname;
+// The CLI as shipped: compiled, with the pre-built page next to it. test/global-setup.ts builds it before any test.
+const CLI = fileURLToPath(new URL("../dist/cli/main.js", import.meta.url));
 let repo: FixtureRepo;
 const cleanupRepos: FixtureRepo[] = [];
 
 beforeAll(() => {
-  // Exercise the CLI as shipped: compiled, with the pre-built page next to it.
-  execSync("npm run build --silent", { cwd: new URL("..", import.meta.url).pathname, stdio: "pipe" });
   repo = new FixtureRepo().write("README.md").write("src/index.ts").commit("first");
   repo.git("rm", "-q", "README.md");
   repo.commit("second");

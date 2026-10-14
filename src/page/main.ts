@@ -137,7 +137,14 @@ function play(world: World, timelines: ReturnType<typeof buildTimelines>, places
   controls.enableDamping = true;
 
   const labels = places
-    ? createDistrictLabels(scene, places, TUNING.blockSpacing, extent * TUNING.labelDistance, TUNING.labelHeight)
+    ? createDistrictLabels(
+        scene,
+        places,
+        TUNING.blockSpacing,
+        extent * TUNING.labelDistance,
+        TUNING.labelHeight,
+        colours === PALETTE.dark ? "dark" : "light",
+      )
     : undefined;
   if (labels) document.body.append(labels.element);
   if (places) document.title = cityTitle(places);

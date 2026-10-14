@@ -5,7 +5,7 @@ import { loadTheme } from "../src/cli/theme.js";
 import { sourceName } from "../src/shared/places.js";
 
 const theme = loadTheme("modern");
-const colour = { hue: 300, saturation: 0.4, lightness: 0.55 };
+const colour = { hue: 300, saturation: 0.4, lightness: { light: 0.55, dark: 0.34 } };
 
 function district(key: string, role: PlaceInput["role"], neighbourhoods: string[] = []): PlaceInput {
   return { key, role, neighbourhoods, anchor: { col: 0, row: 0 }, colour };

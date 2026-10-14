@@ -85,6 +85,51 @@ describe("package.json imports, workspaces and exports", () => {
     expect(resolveImport(snap, "app/main.ts", "@acme/ui").target).toEqual({ kind: "file", path: "packages/ui/src/index.ts" });
   });
 
+  it("takes nested conditions in the order the package lists them, and the first one with a target", () => {
+    const snap = repo({
+      "app/main.ts": "",
+      "package.json": `{ "name": "root", "workspaces": ["packages/*"] }`,
+      "packages/lib/package.json": `{
+        "name": "@acme/lib",
+        "exports": {
+          ".": {
+            "development": "./src/dev.ts",
+            "node": { "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
+            "default": "./dist/browser.js"
+          }
+        }
+      }`,
+      "packages/lib/src/index.ts": "",
+      "packages/lib/src/dev.ts": "",
+    });
+
+    // "development" is not an active condition, so the nested "node" entry wins; its "types" key names the source.
+    expect(resolveImport(snap, "app/main.ts", "@acme/lib").target).toEqual({ kind: "file", path: "packages/lib/src/index.ts" });
+  });
+
+  it("takes the first alternative of an array target that resolves", () => {
+    const snap = repo({
+      "app/main.ts": "",
+      "package.json": `{ "name": "root", "workspaces": ["packages/*"] }`,
+      "packages/lib/package.json": `{ "name": "@acme/lib", "exports": { "./feature": ["./dist/missing.js", "./src/feature.ts"] } }`,
+      "packages/lib/src/feature.ts": "",
+    });
+
+    expect(resolveImport(snap, "app/main.ts", "@acme/lib/feature").target).toEqual({ kind: "file", path: "packages/lib/src/feature.ts" });
+  });
+
+  it("does not resolve a subpath that an exports map leaves out", () => {
+    const snap = repo({
+      "app/main.ts": "",
+      "package.json": `{ "name": "root", "workspaces": ["packages/*"] }`,
+      "packages/lib/package.json": `{ "name": "@acme/lib", "exports": { ".": "./src/index.ts" } }`,
+      "packages/lib/src/index.ts": "",
+      "packages/lib/src/internal.ts": "",
+    });
+
+    expect(resolveImport(snap, "app/main.ts", "@acme/lib/src/internal").target).toBeUndefined();
+  });
+
   it("reports a bare package name as a package and drops builtins", () => {
     const snap = repo({ "src/a.ts": "" });
 
