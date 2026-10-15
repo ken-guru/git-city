@@ -1,5 +1,6 @@
 import { BufferGeometry, Color, Float32BufferAttribute, Mesh, MeshLambertMaterial, type Scene } from "three";
 import { type Countryside, unit } from "../shared/countryside.js";
+import { groundHeightAt } from "./countryside.js";
 import { BLOCK_WORLD, blockSpot, type Spot } from "./lots.js";
 import { easeOutCubic, latestAt, type RoadSegments } from "./state.js";
 
@@ -20,9 +21,10 @@ const BOW_SHARE = 0.14;
 /** Amplitude of the noise wobble along a Road, in world units. */
 const WOBBLE = 0.35;
 /** Heights: a Road sits just above the fields, and a bridge clears the water. */
-const ROAD_LIFT = 0.07;
-const MARKING_LIFT = 0.02;
-const BRIDGE_HEIGHT = 0.45;
+/** How far above the drawn ground the road surface and its markings sit, and the height of a bridge deck. */
+export const ROAD_LIFT = 0.07;
+export const MARKING_LIFT = 0.02;
+export const BRIDGE_HEIGHT = 0.45;
 /** Half-width of the double centre line, and its line width, in world units. */
 const CENTRE_GAP = 0.03;
 const LINE_WIDTH = 0.04;
@@ -184,7 +186,7 @@ export function lanesAt(road: RoadSegments | undefined, t: number, duration: num
   };
 }
 
-interface Palette {
+export interface Palette {
   asphalt: number;
   marking: number;
   bridge: number;
@@ -197,13 +199,26 @@ const PALETTE: Record<"light" | "dark", Palette> = {
 };
 
 /** Accumulates quads, with their colours, into one geometry. */
-class Quads {
+export class Quads {
   readonly positions: number[] = [];
   readonly colors: number[] = [];
   readonly indices: number[] = [];
 
-  /** A strip between offsets `from` and `to` along each sample's normal, at each sample's height, for the segments `draw` accepts. */
-  strip(points: readonly Spot[], normal: readonly Spot[], heights: readonly number[], from: number, to: number, colour: Color, draw: (segment: number) => boolean = () => true) {
+  /**
+   * A strip between offsets `from` and `to` along each sample's normal, for the segments `draw` accepts. Every vertex
+   * sits on the drawn ground at its own position, lifted by `lift`; a bridge sample sits at the bridge height instead.
+   */
+  strip(
+    points: readonly Spot[],
+    normal: readonly Spot[],
+    bridges: readonly boolean[],
+    surface: (x: number, z: number) => number,
+    lift: number,
+    from: number,
+    to: number,
+    colour: Color,
+    draw: (segment: number) => boolean = () => true,
+  ) {
     for (let i = 0; i < points.length - 1; i++) {
       if (!draw(i)) continue;
       const base = this.positions.length / 3;
@@ -215,7 +230,10 @@ class Quads {
       ] as const) {
         const p = points[k]!;
         const n = normal[k]!;
-        this.positions.push(p.x + n.x * offset, heights[k]!, p.z + n.z * offset);
+        const x = p.x + n.x * offset;
+        const z = p.z + n.z * offset;
+        const y = bridges[k] ? BRIDGE_HEIGHT : surface(x, z) + lift;
+        this.positions.push(x, y, z);
         this.colors.push(colour.r, colour.g, colour.b);
       }
       this.indices.push(base, base + 1, base + 2, base + 1, base + 3, base + 2);
@@ -235,6 +253,51 @@ class Quads {
 /** Dashes: two segments drawn, two left out, along a Road. */
 function dashed(segment: number): boolean {
   return Math.floor(segment / 2) % 2 === 0;
+}
+
+/** The quads of one Road at its current Lanes, by kind: asphalt, markings, bridge decks and tracks. */
+export interface RoadParts {
+  asphalt: Quads;
+  marking: Quads;
+  bridge: Quads;
+  track: Quads;
+}
+
+/**
+ * The geometry of one Road: its centre line `points` (in world units), its Lanes each way, and the terrain it lies
+ * on. Each vertex is placed on the drawn ground at its own position (see `groundHeightAt`), lifted just clear of it;
+ * a bridge sample is at the bridge height. A Road with less than a Lane each way is a track.
+ */
+export function roadParts(points: readonly Spot[], lanes: { forward: number; backward: number }, land: Countryside, palette: Palette): RoadParts {
+  const bridges = bridgeSamples(points, (c, r) => land.levelAt(c, r) === "river");
+  const normal = normals(points);
+  const surface = (x: number, z: number) => groundHeightAt(land, x, z);
+  const onBridge = (segment: number) => bridges[segment]! && bridges[segment + 1]!;
+  const parts: RoadParts = { asphalt: new Quads(), marking: new Quads(), bridge: new Quads(), track: new Quads() };
+  const colour = (key: keyof Palette) => new Color(palette[key]);
+
+  if (lanes.forward < TRACK_LANES && lanes.backward < TRACK_LANES) {
+    parts.track.strip(points, normal, bridges, surface, ROAD_LIFT, -TRACK_HALF, TRACK_HALF, colour("track"), (s) => !onBridge(s));
+    return parts;
+  }
+  // Asymmetric halves: the forward half runs on the normal's side, the backward half on the other.
+  const forward = lanes.forward * LANE_WIDTH;
+  const backward = lanes.backward * LANE_WIDTH;
+  parts.asphalt.strip(points, normal, bridges, surface, ROAD_LIFT, -backward, forward, colour("asphalt"), (s) => !onBridge(s));
+  parts.bridge.strip(points, normal, bridges, surface, ROAD_LIFT, -backward, forward, colour("bridge"), onBridge);
+  const line = colour("marking");
+  const lift = MARKING_LIFT;
+  parts.marking.strip(points, normal, bridges, surface, lift, CENTRE_GAP, CENTRE_GAP + LINE_WIDTH, line);
+  parts.marking.strip(points, normal, bridges, surface, lift, -CENTRE_GAP - LINE_WIDTH, -CENTRE_GAP, line);
+  for (let k = 1; k < Math.floor(lanes.forward); k++) {
+    const at = k * LANE_WIDTH;
+    parts.marking.strip(points, normal, bridges, surface, lift, at, at + LINE_WIDTH, line, dashed);
+  }
+  for (let k = 1; k < Math.floor(lanes.backward); k++) {
+    const at = -k * LANE_WIDTH;
+    parts.marking.strip(points, normal, bridges, surface, lift, at - LINE_WIDTH, at, line, dashed);
+  }
+  return parts;
 }
 
 interface RoadMeshes {
@@ -306,45 +369,15 @@ export class RoadLayer {
       for (const mesh of Object.values(meshes)) mesh.geometry = new BufferGeometry();
       return;
     }
-    const bridges = bridgeSamples(points, (c, r) => this.land.levelAt(c, r) === "river");
-    const normal = normals(points);
-    const heights = points.map((p, i) => (bridges[i] ? BRIDGE_HEIGHT : this.land.heightAt(p.x / BLOCK_WORLD, p.z / BLOCK_WORLD) + ROAD_LIFT));
-    const onBridge = (segment: number) => bridges[segment]! && bridges[segment + 1]!;
-    const asphalt = new Quads();
-    const marking = new Quads();
-    const bridge = new Quads();
-    const track = new Quads();
-    const colour = (key: keyof Palette) => new Color(this.palette[key]);
-
-    if (lanes.forward < TRACK_LANES && lanes.backward < TRACK_LANES) {
-      track.strip(points, normal, heights, -TRACK_HALF, TRACK_HALF, colour("track"), (s) => !onBridge(s));
-    } else {
-      // Asymmetric halves: the forward half runs on the normal's side, the backward half on the other.
-      const forward = lanes.forward * LANE_WIDTH;
-      const backward = lanes.backward * LANE_WIDTH;
-      asphalt.strip(points, normal, heights, -backward, forward, colour("asphalt"), (s) => !onBridge(s));
-      bridge.strip(points, normal, heights, -backward, forward, colour("bridge"), onBridge);
-      const markingHeights = heights.map((h, i) => (bridges[i] ? h : h - ROAD_LIFT + MARKING_LIFT));
-      const line = colour("marking");
-      marking.strip(points, normal, markingHeights, CENTRE_GAP, CENTRE_GAP + LINE_WIDTH, line);
-      marking.strip(points, normal, markingHeights, -CENTRE_GAP - LINE_WIDTH, -CENTRE_GAP, line);
-      for (let k = 1; k < Math.floor(lanes.forward); k++) {
-        const at = k * LANE_WIDTH;
-        marking.strip(points, normal, markingHeights, at, at + LINE_WIDTH, line, dashed);
-      }
-      for (let k = 1; k < Math.floor(lanes.backward); k++) {
-        const at = -k * LANE_WIDTH;
-        marking.strip(points, normal, markingHeights, at - LINE_WIDTH, at, line, dashed);
-      }
-    }
+    const parts = roadParts(points, lanes, this.land, this.palette);
     meshes.asphalt.geometry.dispose();
-    meshes.asphalt.geometry = asphalt.geometry();
+    meshes.asphalt.geometry = parts.asphalt.geometry();
     meshes.marking.geometry.dispose();
-    meshes.marking.geometry = marking.geometry();
+    meshes.marking.geometry = parts.marking.geometry();
     meshes.bridge.geometry.dispose();
-    meshes.bridge.geometry = bridge.geometry();
+    meshes.bridge.geometry = parts.bridge.geometry();
     meshes.track.geometry.dispose();
-    meshes.track.geometry = track.geometry();
+    meshes.track.geometry = parts.track.geometry();
   }
 
   private roadCentre(village: number): Spot {

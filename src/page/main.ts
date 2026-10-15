@@ -24,10 +24,10 @@ import { type PlacesFile, parsePlaces } from "../shared/places.js";
 import { ExternalLayer } from "./externals.js";
 import { externalsGeometry, needsBridge } from "./externals-geometry.js";
 import { CityBuildings } from "./buildings.js";
-import { addCountryside, type CountrysideHandle } from "./countryside.js";
+import { addCountryside, type CountrysideHandle, groundHeightAt } from "./countryside.js";
 import { BlockLayer, blockPaving } from "./blocks.js";
 import { ChunkStream } from "./chunks.js";
-import { BLOCK_WORLD, cityExtent, lotBlock, placeLot } from "./lots.js";
+import { BLOCK_WORLD, blockSpot, cityExtent, placeLot } from "./lots.js";
 import { cityTitle, createDistrictLabels } from "./labels.js";
 import { LodController, type LodSettings, settingsFor } from "./lod.js";
 import { RibbonData } from "./ribbon-data.js";
@@ -201,7 +201,9 @@ function play(
     }
     return colour;
   };
-  const blockLayer = new BlockLayer(scene, blocks, countryside.land, timelines.owners, colourOf);
+  // The drawn ground: Blocks, roads and Buildings all stand on it, so they meet the terrain instead of floating or sinking.
+  const surface = (x: number, z: number) => groundHeightAt(countryside.land, x, z);
+  const blockLayer = new BlockLayer(scene, blocks, surface, timelines.owners, colourOf);
   const roadLayer = new RoadLayer(
     scene,
     roadInputs(world),
@@ -236,7 +238,10 @@ function play(
       scaffolds: timelines.scaffolds,
       languages: timelines.languages,
       place: (stint) => placeLot(world, world.stints.lot[stint]!),
-      block: (stint) => lotBlock(world, world.stints.lot[stint]!),
+      blockCount: world.blocks.x.length,
+      block: (stint) => world.lots.block[world.stints.lot[stint]!]!,
+      blockCentre: (block) => blockSpot(world.blocks.x[block]!, world.blocks.z[block]!),
+      surface,
     },
     theme,
   );
@@ -291,7 +296,7 @@ function play(
     const duration = durationFor(rate);
     city.update(t, rate, camera.position);
     externalLayer?.update(t);
-    blockLayer.update(t, duration, camera.position, detail.massFar);
+    blockLayer.update(t, duration, camera.position, detail.massFar, city.massBoxes());
     roadLayer.update(t, duration);
     const commit = Math.min(commitCount - 1, Math.max(0, Math.floor(t)));
     // Exact times are opt-in (SPEC §8): with them the label shows the time of day, in UTC, else the day.
