@@ -128,6 +128,32 @@ interface ThinningUniforms {
   uSceneryFloor: { value: number };
 }
 
+/** The height of the ground mesh at one of its grid corners (a cell of the Countryside grid), in world units. */
+export function groundY(land: Countryside, c: number, r: number): number {
+  return land.levelAt(c, r) === "river" ? RIVER_BED_Y : GROUND_Y + land.heightAt(c, r);
+}
+
+/**
+ * The height of the drawn ground at a point (x, z), in world units. The ground mesh is a grid of corners joined by
+ * triangles, split along the same diagonal in every cell; this interpolates within the triangle the point lies in.
+ * Anything placed on the ground (roads, Blocks, Buildings) samples this, so it sits on the surface that is drawn.
+ */
+export function groundHeightAt(land: Countryside, x: number, z: number): number {
+  const c = x / CELL;
+  const r = z / CELL;
+  const i = Math.floor(c);
+  const j = Math.floor(r);
+  const u = c - i;
+  const v = r - j;
+  const a = groundY(land, i, j);
+  const b = groundY(land, i + 1, j);
+  const cc = groundY(land, i, j + 1);
+  const d = groundY(land, i + 1, j + 1);
+  // Triangles (a, cc, b) and (b, cc, d): the first holds u + v <= 1.
+  if (u + v <= 1) return a + u * (b - a) + v * (cc - a);
+  return cc + b - d + (d - cc) * u + (d - b) * v;
+}
+
 function ground(land: Countryside, colours: StyleColours, inKeepOut: (c: number, r: number) => boolean): Mesh {
   const positions: number[] = [];
   const colors: number[] = [];
@@ -138,7 +164,7 @@ function ground(land: Countryside, colours: StyleColours, inKeepOut: (c: number,
       const c = i - RADIUS;
       const r = j - RADIUS;
       const height = land.heightAt(c, r);
-      const y = inKeepOut(c, r) ? 0 : land.levelAt(c, r) === "river" ? RIVER_BED_Y : GROUND_Y + height;
+      const y = inKeepOut(c, r) ? 0 : groundY(land, c, r);
       positions.push(c * CELL, y, r * CELL);
       const c3 = mixed(colours.field, colours.hill, Math.min(1, height / relief));
       colors.push(c3.r, c3.g, c3.b);
@@ -250,7 +276,7 @@ function trees(
  * distance from the camera. This is `sceneryKept` (lod.ts) evaluated per vertex, so it stays in step with it.
  */
 function thinningMaterial(thinning: ThinningUniforms): MeshLambertMaterial {
-  const m = material();
+  const m = instancedMaterial();
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, thinning);
     shader.vertexShader = shader.vertexShader
@@ -277,7 +303,7 @@ function mountains(land: Countryside, colours: StyleColours, seed: number): Inst
   }
   const cone = new ConeGeometry(1, 1, 6);
   cone.translate(0, 0.5, 0);
-  const mesh = new InstancedMesh(cone, material(), Math.max(1, cells.length));
+  const mesh = new InstancedMesh(cone, instancedMaterial(), Math.max(1, cells.length));
   const matrix = new Matrix4();
   const position = new Vector3();
   const scale = new Vector3();
@@ -343,6 +369,14 @@ function buildGeometry(positions: number[], colors: number[], indices: number[])
 
 function material(): MeshLambertMaterial {
   return new MeshLambertMaterial({ vertexColors: true, flatShading: true });
+}
+
+/**
+ * The material of instanced cones: their colour comes from each instance (`instanceColor`), and their geometry has no
+ * vertex colours. Reading vertex colours here would multiply by a missing attribute, which the GPU reads as black.
+ */
+function instancedMaterial(): MeshLambertMaterial {
+  return new MeshLambertMaterial({ flatShading: true });
 }
 
 function toColor(swatch: Swatch, lightnessShift = 0): Color {

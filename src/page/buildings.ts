@@ -16,6 +16,7 @@ import { type LodSettings, settingsFor } from "./lod.js";
 import {
   type BuildingSegment,
   buildingPose,
+  displayedFloors,
   durationFor,
   FOUNDATION_SHARE,
   KIND_CHANGE,
@@ -308,8 +309,29 @@ function rgb(hex: number): [number, number, number] {
   return [((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255];
 }
 
+/** The horizontal half-extents of a Building kit, from its centre (its Lot's centre). */
+export interface KitHalf {
+  x: number;
+  z: number;
+}
+
+/**
+ * A Block's simple mass at a time: the footprint that covers its standing Buildings, the lowest ground under them,
+ * and the top of the tallest one. Drawn in place of the Buildings beyond the mass distance (see `massBoxes`).
+ */
+export interface MassBox {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  baseY: number;
+  topY: number;
+}
+
 export interface CityData {
   stintCount: number;
+  /** How many Blocks there are; a Block is named by its index in the world file. */
+  blockCount: number;
   /** Per Stint: its Building type at creation, and the language its file had then. Changes come from the timelines. */
   buildingType: Uint8Array;
   language: Uint8Array;
@@ -319,8 +341,12 @@ export interface CityData {
   languages: LanguageSegment[][];
   /** Where a Stint stands on the ground, or undefined when it has no Lot (it is then never drawn). */
   place: (stint: number) => Spot | undefined;
-  /** The centre of the Block the Stint's Lot is in: beyond the mass distance, the Block draws as a mass instead. */
-  block: (stint: number) => Spot;
+  /** The Block (index in the world file) the Stint's Lot is in. */
+  block: (stint: number) => number;
+  /** The centre of a Block, in world units: beyond the mass distance, the Block draws as a mass instead. */
+  blockCentre: (block: number) => Spot;
+  /** The height of the drawn ground at a point, in world units: Buildings stand on it. */
+  surface: (x: number, z: number) => number;
 }
 
 interface TypeMesh {
@@ -344,6 +370,15 @@ export class CityBuildings {
   private readonly scaffold: InstancedMesh;
   private readonly scaffoldAttrs: { start: InstancedBufferAttribute; from: InstancedBufferAttribute; to: InstancedBufferAttribute; height: InstancedBufferAttribute };
   private readonly onScaffold: Uint8Array;
+  /** Per Stint, from the construction-time placement: its Lot's centre and the ground there (NaN when it has no Lot), and its Block. */
+  private readonly spotX: Float64Array;
+  private readonly spotY: Float64Array;
+  private readonly spotZ: Float64Array;
+  private readonly blockOf: Int32Array;
+  /** Per Block: the mass box of its standing Buildings, at the last update. */
+  private readonly boxes: (MassBox | undefined)[];
+  /** Per Building type: the half-extents of its kit, which a mass covers. */
+  private readonly kitHalf: KitHalf[];
   private readonly matrix = new Matrix4();
   private readonly uniforms: CityUniforms;
   private readonly place: CityData["place"];
@@ -373,6 +408,24 @@ export class CityBuildings {
     this.slot = new Int32Array(data.stintCount);
     this.onBuilding = new Uint8Array(data.stintCount);
     this.onScaffold = new Uint8Array(data.stintCount);
+    this.spotX = new Float64Array(data.stintCount);
+    this.spotY = new Float64Array(data.stintCount);
+    this.spotZ = new Float64Array(data.stintCount);
+    this.blockOf = new Int32Array(data.stintCount);
+    this.boxes = new Array<MassBox | undefined>(data.blockCount).fill(undefined);
+    this.kitHalf = BUILDING_TYPES.map((type) => {
+      const kit = buildingKit(type);
+      kit.computeBoundingBox();
+      const box = kit.boundingBox!;
+      return { x: Math.max(-box.min.x, box.max.x), z: Math.max(-box.min.z, box.max.z) };
+    });
+    for (let f = 0; f < data.stintCount; f++) {
+      const spot = this.place(f);
+      this.spotX[f] = spot?.x ?? Number.NaN;
+      this.spotZ[f] = spot?.z ?? Number.NaN;
+      this.spotY[f] = spot ? data.surface(spot.x, spot.z) : 0;
+      this.blockOf[f] = data.block(f);
+    }
 
     BUILDING_TYPES.forEach((type, typeIndex) => {
       const stints: number[] = [];
@@ -441,15 +494,46 @@ export class CityBuildings {
 
   /** Whether a Stint's Block is far enough from the camera to draw as a mass, which hides the Buildings inside it. */
   private inMass(stint: number, camera: { x: number; z: number }): boolean {
-    const block = this.data.block(stint);
-    return massShown(Math.hypot(block.x - camera.x, block.z - camera.z), this.massFar);
+    const centre = this.data.blockCentre(this.blockOf[stint]!);
+    return massShown(Math.hypot(centre.x - camera.x, centre.z - camera.z), this.massFar);
   }
 
-  /** Puts a Stint's instance on its Lot, or collapses it to nothing (also when the file has no Lot). */
+  /**
+   * The simple mass of every Block at the last update, by Block index: the footprint and height of the Buildings
+   * standing in it, or undefined when none stands. Beyond the mass distance the mass takes their place.
+   */
+  massBoxes(): readonly (MassBox | undefined)[] {
+    return this.boxes;
+  }
+
+  /** Grows a Block's mass box to cover one standing Building, of its kit's footprint and `floors` Floors. */
+  private extend(stint: number, floors: number): void {
+    const x = this.spotX[stint]!;
+    if (Number.isNaN(x)) return;
+    const z = this.spotZ[stint]!;
+    const y = this.spotY[stint]!;
+    const block = this.blockOf[stint]!;
+    const half = this.kitHalf[this.data.buildingType[stint]!]!;
+    const top = y + FOUNDATION_HEIGHT + floors * FLOOR_HEIGHT;
+    const box = this.boxes[block];
+    if (box === undefined) {
+      this.boxes[block] = { minX: x - half.x, maxX: x + half.x, minZ: z - half.z, maxZ: z + half.z, baseY: y, topY: top };
+      return;
+    }
+    box.minX = Math.min(box.minX, x - half.x);
+    box.maxX = Math.max(box.maxX, x + half.x);
+    box.minZ = Math.min(box.minZ, z - half.z);
+    box.maxZ = Math.max(box.maxZ, z + half.z);
+    box.baseY = Math.min(box.baseY, y);
+    box.topY = Math.max(box.topY, top);
+  }
+
+  /** Puts a Stint's instance on its Lot, on the ground there, or collapses it to nothing (also when the file has no Lot). */
   private setPlacement(mesh: InstancedMesh, instance: number, stint: number, visible: boolean) {
     const spot = this.place(stint);
     const scale = visible && spot ? 1 : 0;
-    this.matrix.makeScale(scale, scale, scale).setPosition(spot?.x ?? 0, 0, spot?.z ?? 0);
+    const y = spot ? this.data.surface(spot.x, spot.z) : 0;
+    this.matrix.makeScale(scale, scale, scale).setPosition(spot?.x ?? 0, y, spot?.z ?? 0);
     mesh.setMatrixAt(instance, this.matrix);
   }
 
@@ -476,6 +560,7 @@ export class CityBuildings {
     const duration = durationFor(commitsPerSecond);
     this.uniforms.uTime.value = t;
     this.uniforms.uDuration.value = duration;
+    this.boxes.fill(undefined);
 
     for (const type of this.types) {
       const { stints, start, kind, from, to } = type;
@@ -487,6 +572,7 @@ export class CityBuildings {
         kind.setX(i, pose.kind === KIND_NONE ? KIND_CHANGE : pose.kind);
         from.setX(i, pose.from);
         to.setX(i, pose.to);
+        if (pose.visible) this.extend(f, displayedFloors({ start: pose.start, kind: pose.kind, from: pose.from, to: pose.to }, t, duration));
         const shown = pose.visible && !this.inMass(f, camera);
         if (shown !== Boolean(this.onBuilding[f])) {
           this.onBuilding[f] = shown ? 1 : 0;

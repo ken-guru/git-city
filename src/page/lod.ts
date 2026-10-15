@@ -44,6 +44,28 @@ export function settingsFor(level: number): LodSettings {
 }
 
 /**
+ * The scale the distances of a level are multiplied by, so that the City's detail is in proportion to the distance it
+ * opens from. The settings were tuned for the level-0 mass distance: a City framed from farther away scales them up,
+ * so its centre Blocks open as Buildings rather than masses. Never below one.
+ */
+export function detailScaleFor(startDistance: number): number {
+  return Math.max(1, startDistance / settingsFor(0).massFar);
+}
+
+/** A level with its distances scaled (see `detailScaleFor`). The floors and the render resolution are unchanged. */
+export function scaledSettings(settings: LodSettings, scale: number): LodSettings {
+  return {
+    ...settings,
+    windowNear: settings.windowNear * scale,
+    windowFar: settings.windowFar * scale,
+    propFar: settings.propFar * scale,
+    sceneryFar: settings.sceneryFar * scale,
+    massFar: settings.massFar * scale,
+    labelFar: settings.labelFar * scale,
+  };
+}
+
+/**
  * Whether one scenery item is drawn. `roll` is a fixed value in [0, 1) per item, so the same items
  * stay (or go) as the camera moves, and only the share of items kept changes with distance.
  */

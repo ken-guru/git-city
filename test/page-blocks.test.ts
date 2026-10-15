@@ -2,9 +2,8 @@ import { Color, Scene, Vector3 } from "three";
 import { describe, expect, it } from "vitest";
 import { BlockLayer, blockCorners, blockPaving, massShown, pavingAt, pavingColour, STREET_HALF } from "../src/page/blocks.js";
 import { BLOCK_WORLD } from "../src/page/lots.js";
-import { mixColour } from "../src/page/buildings.js";
+import { mixColour, type MassBox } from "../src/page/buildings.js";
 import type { OwnerSegment } from "../src/page/state.js";
-import { countryside } from "../src/shared/countryside.js";
 import { type DistrictPlace, NAME_SOURCES } from "../src/shared/places.js";
 
 const district = (hue: number): DistrictPlace => ({
@@ -105,17 +104,19 @@ describe("BlockLayer", () => {
     [2, [{ start: 50, owner: 0, from: -1 }]],
   ]);
   const colourOf = (d: number) => (d < 0 ? new Color(0.5, 0.5, 0.5) : new Color(d === 0 ? 1 : 0, 0, d === 1 ? 1 : 0));
+  const flat = () => 0;
+  const box: MassBox = { minX: -1, maxX: 1, minZ: -2, maxZ: 2, baseY: 0.5, topY: 6 };
 
   it("draws every Block's paving in one mesh, four corners and two triangles each", () => {
     const scene = new Scene();
-    const layer = new BlockLayer(scene, blocks, countryside(3), owners, colourOf);
+    const layer = new BlockLayer(scene, blocks, flat, owners, colourOf);
     expect(layer.paving.geometry.getAttribute("position").count).toBe(blocks.length * 4);
     expect(layer.paving.geometry.getIndex()!.count).toBe(blocks.length * 6);
     expect(scene.children).toContain(layer.paving);
   });
 
   it("hides a Block before its claim, and paves it from the claim on", () => {
-    const layer = new BlockLayer(new Scene(), blocks, countryside(3), owners, colourOf);
+    const layer = new BlockLayer(new Scene(), blocks, flat, owners, colourOf);
     const corner = () => layer.paving.geometry.getAttribute("position").getX(2 * 4);
     layer.update(10, 4, new Vector3(0, 0, 0), 1000);
     expect(corner()).toBeCloseTo(0); // the third Block is collapsed onto its centre
@@ -123,17 +124,45 @@ describe("BlockLayer", () => {
     expect(corner()).not.toBeCloseTo(0);
   });
 
-  it("shows far Blocks as masses, and hides them again when the camera comes near", () => {
-    const layer = new BlockLayer(new Scene(), blocks, countryside(3), owners, colourOf);
+  it("lays each paving corner on the ground under it", () => {
+    const slope = (x: number) => 0.25 * x;
+    const layer = new BlockLayer(new Scene(), [blocks[0]!], slope, owners, colourOf);
+    layer.update(10, 4, new Vector3(0, 0, 0), 1000);
+    const position = layer.paving.geometry.getAttribute("position");
+    for (let k = 0; k < 4; k++) {
+      const x = position.getX(k);
+      expect(position.getY(k)).toBeCloseTo(slope(x) + 0.05);
+    }
+  });
+
+  it("draws a far Block as the mass of its standing Buildings, and hides it when the camera comes near", () => {
+    const layer = new BlockLayer(new Scene(), blocks, flat, owners, colourOf);
     const scale = (i: number) => {
       const m = layer.masses.instanceMatrix.array;
       return Math.hypot(m[i * 16]!, m[i * 16 + 1]!, m[i * 16 + 2]!);
     };
-    layer.update(100, 4, new Vector3(0, 0, 0), 100);
+    const boxes = [box, undefined, undefined];
+    layer.update(100, 4, new Vector3(0, 0, 0), 100, boxes);
     expect(scale(0)).toBe(0);
-    layer.update(100, 4, new Vector3(500, 0, 0), 100);
+    layer.update(100, 4, new Vector3(500, 0, 0), 100, boxes);
     expect(scale(0)).toBeGreaterThan(0);
-    layer.update(100, 4, new Vector3(0, 0, 0), 100);
+    layer.update(100, 4, new Vector3(0, 0, 0), 100, boxes);
     expect(scale(0)).toBe(0);
+  });
+
+  it("stretches the mass to the box exactly: its footprint, its base and its top", () => {
+    const layer = new BlockLayer(new Scene(), blocks, flat, owners, colourOf);
+    layer.update(100, 4, new Vector3(500, 0, 0), 100, [box, undefined, undefined]);
+    const m = layer.masses.instanceMatrix.array;
+    // Columns of the instance matrix: scale on the diagonal, translation in the fourth column.
+    const sx = m[0]!;
+    const sy = m[5]!;
+    const sz = m[10]!;
+    expect(sx).toBeCloseTo(box.maxX - box.minX);
+    expect(sz).toBeCloseTo(box.maxZ - box.minZ);
+    expect(sy).toBeCloseTo(box.topY - box.baseY);
+    expect(m[12]).toBeCloseTo((box.minX + box.maxX) / 2);
+    expect(m[13]).toBeCloseTo(box.baseY);
+    expect(m[14]).toBeCloseTo((box.minZ + box.maxZ) / 2);
   });
 });
