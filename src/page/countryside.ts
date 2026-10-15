@@ -250,7 +250,7 @@ function trees(
  * distance from the camera. This is `sceneryKept` (lod.ts) evaluated per vertex, so it stays in step with it.
  */
 function thinningMaterial(thinning: ThinningUniforms): MeshLambertMaterial {
-  const m = material();
+  const m = instancedMaterial();
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, thinning);
     shader.vertexShader = shader.vertexShader
@@ -277,7 +277,7 @@ function mountains(land: Countryside, colours: StyleColours, seed: number): Inst
   }
   const cone = new ConeGeometry(1, 1, 6);
   cone.translate(0, 0.5, 0);
-  const mesh = new InstancedMesh(cone, material(), Math.max(1, cells.length));
+  const mesh = new InstancedMesh(cone, instancedMaterial(), Math.max(1, cells.length));
   const matrix = new Matrix4();
   const position = new Vector3();
   const scale = new Vector3();
@@ -343,6 +343,14 @@ function buildGeometry(positions: number[], colors: number[], indices: number[])
 
 function material(): MeshLambertMaterial {
   return new MeshLambertMaterial({ vertexColors: true, flatShading: true });
+}
+
+/**
+ * The material of instanced cones: their colour comes from each instance (`instanceColor`), and their geometry has no
+ * vertex colours. Reading vertex colours here would multiply by a missing attribute, which the GPU reads as black.
+ */
+function instancedMaterial(): MeshLambertMaterial {
+  return new MeshLambertMaterial({ flatShading: true });
 }
 
 function toColor(swatch: Swatch, lightnessShift = 0): Color {
