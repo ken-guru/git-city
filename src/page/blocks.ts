@@ -11,7 +11,7 @@ import {
   type Scene,
   Vector3,
 } from "three";
-import type { Countryside } from "../shared/countryside.js";
+import type { MassBox } from "./buildings.js";
 import type { DistrictPlace, PavingColour } from "../shared/places.js";
 import { BLOCK_WORLD, blockSpot, type Spot } from "./lots.js";
 import { type OwnerSegment, latestAt, easeOutCubic } from "./state.js";
@@ -77,27 +77,30 @@ export interface BlockInput {
 /**
  * The Blocks on the page: one merged mesh for all the paving (one draw call), and one instanced mesh for the far
  * masses. A Block appears at its claim, its paving eases when its owner changes (a District split or merge), and it
- * draws as a mass beyond `massFar`. The owners are read from the timeline, which fills in as chunks load.
+ * draws as a mass beyond `massFar`. The mass is the box the Block's standing Buildings give (see `MassBox`), so it
+ * takes over from them without a pop. The paving sits on the drawn ground at each corner.
  */
 export class BlockLayer {
   readonly paving: Mesh;
   readonly masses: InstancedMesh;
   private readonly centres: Spot[];
-  private readonly heights: number[];
+  /** Per Block: the paving's height at each corner, and at its centre (where unclaimed corners collapse). */
+  private readonly cornerY: Float64Array;
+  private readonly centreY: Float64Array;
   private readonly positions: Float32BufferAttribute;
   private readonly colours: Float32BufferAttribute;
   private readonly shown: Uint8Array;
   private readonly massVisible: Uint8Array;
   private readonly lastHex: Int32Array;
+  private readonly matrix = new Matrix4();
   private readonly position = new Vector3();
   private readonly rotation = new Quaternion();
   private readonly scale = new Vector3();
-  private readonly matrix = new Matrix4();
 
   constructor(
     scene: Scene,
     private readonly blocks: readonly BlockInput[],
-    land: Countryside,
+    surface: (x: number, z: number) => number,
     private readonly owners: Map<number, OwnerSegment[]>,
     private readonly colourOf: (district: number) => Color | undefined,
   ) {
@@ -105,11 +108,15 @@ export class BlockLayer {
     const colors: number[] = [];
     const indices: number[] = [];
     this.centres = blocks.map((b) => blockSpot(b.x, b.z));
-    this.heights = blocks.map((b) => land.heightAt(Math.round(b.x), Math.round(b.z)) + PAVING_LIFT);
+    this.centreY = Float64Array.from(this.centres, (c) => surface(c.x, c.z) + PAVING_LIFT);
+    this.cornerY = new Float64Array(blocks.length * 4);
     blocks.forEach((block, i) => {
-      const y = this.heights[i]!;
       const base = positions.length / 3;
-      for (const corner of blockCorners(block.x, block.z)) positions.push(corner.x, y, corner.z);
+      blockCorners(block.x, block.z).forEach((corner, k) => {
+        const y = surface(corner.x, corner.z) + PAVING_LIFT;
+        this.cornerY[i * 4 + k] = y;
+        positions.push(corner.x, y, corner.z);
+      });
       for (let k = 0; k < 4; k++) colors.push(0, 0, 0);
       indices.push(base, base + 2, base + 1, base + 1, base + 2, base + 3);
     });
@@ -122,15 +129,15 @@ export class BlockLayer {
     this.paving = new Mesh(geometry, new MeshLambertMaterial({ vertexColors: true, flatShading: true }));
     this.paving.frustumCulled = false;
 
-    const size = BLOCK_WORLD - 2 * STREET_HALF;
-    const mass = new BoxGeometry(size, MASS_HEIGHT, size).translate(0, MASS_HEIGHT / 2, 0);
+    // A unit box standing on its base; each Block's instance is stretched to its mass box.
+    const mass = new BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
     this.masses = new InstancedMesh(mass, new MeshLambertMaterial({ flatShading: true }), Math.max(1, blocks.length));
     this.masses.frustumCulled = false;
     this.shown = new Uint8Array(blocks.length);
     this.massVisible = new Uint8Array(blocks.length);
     this.lastHex = new Int32Array(blocks.length).fill(-1);
     this.masses.count = blocks.length;
-    blocks.forEach((_, i) => this.placeMass(i, 0));
+    blocks.forEach((_, i) => this.placeMass(i, undefined));
     this.masses.instanceMatrix.needsUpdate = true;
     scene.add(this.paving, this.masses);
     this.applyPositions(new Array(blocks.length).fill(false));
@@ -138,9 +145,10 @@ export class BlockLayer {
 
   /**
    * Shows every Block at time `t` (in commits) for a camera at `camera`: claimed Blocks are drawn with their paving
-   * at the colour of their owner, and the far ones as masses. `duration` is the transition length in commits.
+   * at the colour of their owner, and the far ones as their masses, from `boxes` (the Buildings' boxes, by Block).
+   * `duration` is the transition length in commits.
    */
-  update(t: number, duration: number, camera: Vector3, massFar: number): void {
+  update(t: number, duration: number, camera: Vector3, massFar: number, boxes: readonly (MassBox | undefined)[] = []): void {
     const claimed: boolean[] = [];
     let colourChanged = false;
     let massChanged = false;
@@ -151,14 +159,15 @@ export class BlockLayer {
         this.shown[i] = isClaimed ? 1 : 0;
         this.applyPositions(claimed, i);
       }
-      if (!isClaimed) {
-        if (this.massVisible[i]) {
-          this.massVisible[i] = 0;
-          this.placeMass(i, 0);
-          massChanged = true;
-        }
-        return;
+      const c = this.centres[i]!;
+      const far = isClaimed && massShown(Math.hypot(c.x - camera.x, c.z - camera.z), massFar);
+      const box = far ? boxes[i] : undefined;
+      if (box !== undefined || this.massVisible[i]) {
+        this.massVisible[i] = box !== undefined ? 1 : 0;
+        this.placeMass(i, box);
+        massChanged = true;
       }
+      if (!isClaimed) return;
       const colour = pavingAt(this.owners.get(i), t, duration, this.colourOf);
       const hex = colour.getHex();
       if (hex !== this.lastHex[i]) {
@@ -166,13 +175,6 @@ export class BlockLayer {
         this.writeColour(i, colour);
         this.masses.setColorAt(i, colour.clone().multiplyScalar(0.9));
         colourChanged = true;
-      }
-      const c = this.centres[i]!;
-      const far = massShown(Math.hypot(c.x - camera.x, c.z - camera.z), massFar) ? 1 : 0;
-      if (far !== this.massVisible[i]) {
-        this.massVisible[i] = far;
-        this.placeMass(i, far);
-        massChanged = true;
       }
     });
     if (colourChanged) {
@@ -194,7 +196,7 @@ export class BlockLayer {
       for (let k = 0; k < 4; k++) {
         const at = (i * 4 + k) * 3;
         array[at] = shown ? corners[k]!.x : c.x;
-        array[at + 1] = this.heights[i]!;
+        array[at + 1] = shown ? this.cornerY[i * 4 + k]! : this.centreY[i]!;
         array[at + 2] = shown ? corners[k]!.z : c.z;
       }
     }
@@ -211,10 +213,15 @@ export class BlockLayer {
     }
   }
 
-  private placeMass(i: number, shown: number) {
-    const c = this.centres[i]!;
-    this.position.set(c.x, this.heights[i]!, c.z);
-    this.scale.setScalar(shown);
+  /** Stretches a Block's mass to its box, or hides it (scale zero) when there is no box to show. */
+  private placeMass(i: number, box: MassBox | undefined) {
+    if (box === undefined) {
+      this.matrix.makeScale(0, 0, 0);
+      this.masses.setMatrixAt(i, this.matrix);
+      return;
+    }
+    this.position.set((box.minX + box.maxX) / 2, box.baseY, (box.minZ + box.maxZ) / 2);
+    this.scale.set(box.maxX - box.minX, box.topY - box.baseY, box.maxZ - box.minZ);
     this.matrix.compose(this.position, this.rotation, this.scale);
     this.masses.setMatrixAt(i, this.matrix);
   }

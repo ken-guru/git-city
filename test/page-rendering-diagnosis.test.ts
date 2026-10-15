@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { BlockLayer } from "../src/page/blocks.js";
 import { CityBuildings, type CityData } from "../src/page/buildings.js";
 import { addCountryside } from "../src/page/countryside.js";
-import { settingsFor } from "../src/page/lod.js";
+import { detailScaleFor, scaledSettings, settingsFor } from "../src/page/lod.js";
 import { RoadLayer } from "../src/page/roads.js";
 import { KIND_BUILD } from "../src/page/state.js";
 import { countryside } from "../src/shared/countryside.js";
@@ -39,13 +39,16 @@ describe("2. A far Block shows the height of its Buildings, not a fixed flat sla
       scaffolds: [[]],
       languages: [[]],
       place: () => ({ x: 0, z: 0 }),
-      block: () => ({ x: 0, z: 0 }),
+      blockCount: 1,
+      block: () => 0,
+      blockCentre: () => ({ x: 0, z: 0 }),
+      surface: () => 0,
     };
     const city = new CityBuildings(new Scene(), data, "light");
     city.setDetail(settingsFor(0));
     city.update(100, 2, { x: 500, z: 0 });
-    const layer = new BlockLayer(new Scene(), [{ x: 0, z: 0, claimed: 0 }], countryside(3), new Map(), () => undefined);
-    layer.update(100, 4, new Vector3(500, 0, 0), 50);
+    const layer = new BlockLayer(new Scene(), [{ x: 0, z: 0, claimed: 0 }], () => 0, new Map(), () => undefined);
+    layer.update(100, 4, new Vector3(500, 0, 0), 50, city.massBoxes());
     // The mass as drawn: its geometry's height times its instance's scale. The Building's top is its foundation plus
     // its 7 Floors (0.2 + 7), and the mass should rise to it.
     const geometry = layer.masses.geometry;
@@ -56,12 +59,14 @@ describe("2. A far Block shows the height of its Buildings, not a fixed flat sla
 });
 
 describe("2b. A City opens with its centre Block inside its own level-of-detail mass distance", () => {
-  it("places the starting camera within massFar of the centre of a City of three villages", () => {
-    // The starting camera of main.ts: its offset is a multiple of the City's extent, from the centre.
+  it("scales the level-0 mass distance so the starting view of a three-village City is not all masses", () => {
+    // main.ts frames the City from its starting camera: 0.9 × extent + 4 across, 0.8 × extent + 4 up, 1.1 × extent + 6
+    // deep, for the City's extent (252 for three villages). The centre of the City is that far away.
     const extent = 252;
-    const camera = { x: 0.9 * extent + 4, y: 0.8 * extent + 4, z: 1.1 * extent + 6 };
-    const distance = Math.hypot(camera.x, camera.y, camera.z);
-    expect(distance).toBeLessThan(settingsFor(0).massFar);
+    const startDistance = Math.hypot(0.9 * extent + 4, 0.8 * extent + 4, 1.1 * extent + 6);
+    const detail = scaledSettings(settingsFor(0), detailScaleFor(startDistance));
+    // A Block is a mass only beyond massFar, so the centre at exactly massFar still draws its Buildings.
+    expect(startDistance).toBeLessThanOrEqual(detail.massFar);
   });
 });
 
