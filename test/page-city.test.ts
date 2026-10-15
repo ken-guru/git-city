@@ -36,7 +36,10 @@ function syntheticCity(fileCount: number): CityData {
     languages: Array.from({ length: fileCount }, (_, f) => (f % 3 === 0 ? [{ start: 300, from: 0, to: 2 }] : [])),
     // A synthetic grid of spots: one per Stint.
     place: (stint) => ({ x: (stint % columns) * 1.5, z: Math.floor(stint / columns) * 1.5 }),
-    block: (stint) => ({ x: Math.floor(stint / 4) * 6, z: 0 }),
+    blockCount: Math.ceil(fileCount / 4),
+    block: (stint) => Math.floor(stint / 4),
+    blockCentre: (block) => ({ x: block * 6, z: 0 }),
+    surface: () => 0,
   };
 }
 
